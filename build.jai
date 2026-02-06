@@ -280,14 +280,25 @@ get_dynamic_library_paths :: () -> []string /* temp allocated */ {
         //"im3d/lib",
     ];
 
+    mac_specific_dylib_paths :: string.[
+        "sgpu_metal/modules/slang/mac",
+    ];
+
     results: [..]string;
     results.allocator = temp;
 
     platform_name := get_shortened_platform_name_for_filesystem(OS);
 
-    for local_module_dll_paths {
-        path := local_module(String.path_join(it, platform_name));
-        //if !file_exists(path)  exit_with_error("Expected dynamic library path to exist: '%'\ncurrent working directory: %", path, get_working_directory());
+    all_paths: [..]string;
+    array_add(*all_paths, ..local_module_dll_paths);
+    #if OS == .MACOS array_add(*all_paths, ..mac_specific_dylib_paths);
+
+    for all_paths {
+        path: string = local_module(it);
+        if !String.ends_with(path, "mac") { // HACK
+            path = String.path_join(path, platform_name);
+        }
+        if !file_exists(path)  exit_with_error("Error: expected dll path to exist: '%' (current working directory: '%')", path, get_working_directory());
 
         path_relative_to_dist_dir := String.path_join("..", path);
         array_add(*results, path_relative_to_dist_dir);

@@ -1,3 +1,6 @@
 [submodule "modules/sgpu"]
 	path = modules/sgpu
 	url = git@github.com:roeyb1/sgpu.git
+[submodule "modules/sgpu_metal"]
+	path = modules/sgpu_metal
+	url = git@github.com:kevinw/sgpu_metal.git

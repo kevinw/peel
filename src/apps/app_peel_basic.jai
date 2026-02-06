@@ -28,4 +28,6 @@ tick :: () {
 
 #scope_file
 #import "Window_Creation";
-#import "sgpu";
+
+#if OS == .MACOS #import "sgpu";
+else #import "sgpu_metal";
