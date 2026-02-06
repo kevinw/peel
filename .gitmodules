@@ -1,0 +1,3 @@
+[submodule "modules/sgpu"]
+	path = modules/sgpu
+	url = git@github.com:roeyb1/sgpu.git

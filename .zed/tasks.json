@@ -1,0 +1,6 @@
+[
+  {
+    "label": "Build and run",
+    "command": "jai build.jai",
+  },
+]

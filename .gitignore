@@ -1,0 +1,6 @@
+﻿.build
+*.dll.temp.*
+dist/*.pdb
+*.srcdeps
+*.exp
+modules/Game_Sound/lib/win/Game_Sound.dll
