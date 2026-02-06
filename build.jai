@@ -13,7 +13,8 @@ HOST_OUTPUT_EXECUTABLE_NAME :: "peel";      // The name of the host executable.
 BUILD_IS_FOR_IDE            :: #exists(JAILS_DIAGNOSTICS_BUILD); // Whether the build is for the IDE's error display. (Jails language server runs the build to check for errors.)
 VERBOSE                     :: false;       // Whether to print verbose output for the build process.
 #if OS == .MACOS {
-    MACOS_MAJOR_VERSION_FOR_DEBUG_BUILD :: #run determine_current_macos_major_version();
+    MACOS_MAJOR_VERSION_FOR_RELEASE_BUILD :: 15;
+    MACOS_MAJOR_VERSION_FOR_DEBUG_BUILD :: 36;
     entitlements_file :: #run String.path_join(OUTPUT_PATH, "debug-entitlements.plist");
 }
 PLATFORM_DIR :: #run get_platform_dir(OS); // win, macos, linux
@@ -95,7 +96,7 @@ END;
 
     // Build shaders.
     #if !BUILD_IS_FOR_IDE {
-        #if OS == .MACOS {
+        #if OS == .MACOS && 0 {
             shader_input_files  :: string.[
                 "dist/shaders/metal/triangle.metal",
                 "modules/im3d/shaders/Im3d.metal"
@@ -229,27 +230,23 @@ common_options :: (workspace: Workspace, result_output_type: type_of(Build_Optio
     else output_type = result_output_type;
 
     if 0 {
-        if result_output_type == .DYNAMIC_LIBRARY {
-            text_output_flags = .OUTPUT_TIMING_INFO;
-        } else {
-            text_output_flags = 0;
-        }
+        if result_output_type == .DYNAMIC_LIBRARY text_output_flags = .OUTPUT_TIMING_INFO;
+        else text_output_flags = 0;
     } else {
         text_output_flags = 0;
     }
 
     #if OS != .MACOS {
-        backend     = .X64;
+        if !script_opts.release backend = .X64;
     }
-    #if OS == .MACOS {
-        macos_version_major: u8;
-        if script_opts.release {
-            macos_version_major = 15;
-        } else {
-            macos_version_major = MACOS_MAJOR_VERSION_FOR_DEBUG_BUILD;
-        }
 
-        minimum_os_version=.{major=macos_version_major, minor=0};
+    #if OS == .MACOS {
+        //macos_version_major: u8;
+        //if script_opts.release macos_version_major = MACOS_MAJOR_VERSION_FOR_RELEASE_BUILD;
+        //else                   macos_version_major = MACOS_MAJOR_VERSION_FOR_DEBUG_BUILD;
+
+        //minimum_os_version=.{major=macos_version_major, minor=0};
+        //log("Minimum OS version set to macOS %", macos_version_major);
 
         if result_output_type == .EXECUTABLE {
             // Patch the output binary's rpaths so that it can find the dylibs we link to.
@@ -273,14 +270,14 @@ get_dynamic_library_paths :: () -> []string /* temp allocated */ {
 
     // cross platform--needs a "win" or "linux" or "macos" directory on the end of these. see platform_dir below.
     local_module_dll_paths :: string.[
-        "ImGui",
-        "SDL3/lib",
-        "assimp/lib",
-        "JoltC/lib",
-        "SDL_gpu_ext/lib",
-        "ImGuizmo/lib",
+        //"ImGui",
+        //"SDL3/lib",
+        //"assimp/lib",
+        //"JoltC/lib",
+        //"SDL_gpu_ext/lib",
+        //"ImGuizmo/lib",
         "Game_Sound/lib",
-        "im3d/lib",
+        //"im3d/lib",
     ];
 
     results: [..]string;
@@ -290,7 +287,7 @@ get_dynamic_library_paths :: () -> []string /* temp allocated */ {
 
     for local_module_dll_paths {
         path := local_module(String.path_join(it, platform_name));
-        if !file_exists(path)  exit_with_error("Expected dynamic library path to exist: '%'\ncurrent working directory: %", path, get_working_directory());
+        //if !file_exists(path)  exit_with_error("Expected dynamic library path to exist: '%'\ncurrent working directory: %", path, get_working_directory());
 
         path_relative_to_dist_dir := String.path_join("..", path);
         array_add(*results, path_relative_to_dist_dir);
@@ -302,7 +299,7 @@ get_dynamic_library_paths :: () -> []string /* temp allocated */ {
         ];
         for jai_stdlib_dll_paths {
             path := jai_module(it);
-            if !file_exists(path) exit_with_error("Expected dynamic library path to exist: '%'", path);
+            //if !file_exists(path) exit_with_error("Expected dynamic library path to exist: '%'", path);
             array_add(*results, path);
         }
     }
@@ -415,14 +412,14 @@ host_build_manifest_event :: (p: *Build_Manifest.Build_Manifest_Metaprogram_Plug
             }
 
             script_opts := cast(*Build_Script_Opts)userdata;
-            if script_opts.release {
+            if !script_opts.release {
                 return;
             }
 
             log("Codesigning host executable for get-tasks...");
             output_exe := String.path_join(OUTPUT_PATH, HOST_OUTPUT_EXECUTABLE_NAME);
             abs_entitlements_file := get_absolute_path(entitlements_file);
-            assert(abs_entitlements_file != "");
+            assert(abs_entitlements_file != "", tprint("Could not resolve absolute path for entitlements file: %", entitlements_file));
             res := run_command("codesign", "--force", "--sign", "-", "--entitlements", abs_entitlements_file, "--timestamp=none", output_exe);
             if res.type != .EXITED || res.exit_code != 0 {
                 exit_with_error("codesign failed");

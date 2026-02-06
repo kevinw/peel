@@ -1,4 +1,3 @@
-
 app_needs_recompile: string;
 app_quit_requested := false;
 did_init := false;
@@ -76,8 +75,39 @@ host_init :: (init_ctx: Init_Ctx) -> bool {
     return true;
 }
 
+dummy_on_resize :: () {  } @on_window_resize
+
 #scope_file
 #if OS == .WINDOWS  #import "Windows_Utils";
 else #if OS == .MACOS #import "MacOS_Tools";
 #import "General_Utils";
 Input :: #import "Input";
+#if OS == .MACOS {
+    #import "Objective_C";
+    #import "Objective_C/AppKit";
+    #import "Metal";
+    #import "Objective_C_Tools";
+    init_all_objective_c_selector_structs :: () {
+        init_objective_c();
+        init_app_kit();
+        init_metal();
+        init_objective_c_tools();
+    }
+    set_window_title :: NSWindow.setTitle;
+
+    backend_metal_window_did_resize :: (window: *NSWindow, width: s32, height: s32) {
+        r := NSRect.{ .{0, 0}, .{ xx width, xx height }};
+        r = window.convertRectToBacking(window, .{.{0, 0}, .{xx width, xx height}});
+        layer := metal_layer(window);
+        layer.setDrawableSize(layer, r.size);
+        window.display(window);
+        call_event_functions(.window_resize);
+    }
+
+
+    metal_layer :: (window: *NSWindow) -> *CAMetalLayer {
+        content_view := NSWindow.contentView(window);
+        // TODO: on debug builds, check that it's actually an instance of CAMetalLayer.
+        return cast(*CAMetalLayer)content_view.layer(content_view);
+    }
+}

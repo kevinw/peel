@@ -59,5 +59,5 @@ build_metal :: (input_files: []string, output_library_path: string,
 #import "File_Utilities";
 #import "File";
 #if OS == .MACOS {
-    #import "Metal_Reflection";
+    //#import "Metal_Reflection";
 }

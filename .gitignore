@@ -1,4 +1,4 @@
-﻿.build
+.build
 *.dll.temp.*
 dist/*.pdb
 *.srcdeps
@@ -9,3 +9,7 @@ modules/Game_Sound/lib/win/Game_Sound.pdb
 dist/app_peel_basic.dll
 dist/app_peel_basic.lib
 dist/peel.exe
+*.dSYM
+dist/app_peel_basic.dylib
+dist/peel
+modules/Game_Sound/lib/macos/Game_Sound.dylib
