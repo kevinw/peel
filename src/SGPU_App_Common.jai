@@ -53,7 +53,7 @@ app_update :: (update_ctx: *App_Update_Ctx) {
         return;
     }
     call_event_functions(.tick);
-    reset_temporary_storage();
+    reset_temporary_storage(); // TODO: push/pop temp storage mark instead!
 }
 
 host_quit :: (quit_ctx: Quit_Ctx) {
