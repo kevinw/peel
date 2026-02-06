@@ -1,33 +1,109 @@
-// todo
+WRITE_SHADER_OUTPUT :: true;
 
 #load "../App_Common.jai";
 #load "../SGPU_App_Common.jai";
 
+Vertex2D :: struct {
+    x: float;
+    y: float;
+}
+
+Draw_Data :: struct {
+    vertex_params_gpu: Gpu_Ptr;
+    pixel_gpu: Gpu_Ptr;
+    index_gpu: Gpu_Ptr;
+    num_vertices: u32;
+    num_instances: u32;
+}
+
+graphics_pipeline: Gpu_Pipeline;
+gpu_arena: Gpu_Arena;
+draw_data: Draw_Data;
+
 on_dll_init :: () {
-    log("peel dll init");
+    log("DLL init!");
+    success, vertex_spv := compile_shader("shaders/hello_square_vs.slang", write_output = WRITE_SHADER_OUTPUT); assert(success);
+    defer array_free(vertex_spv);
+    success=, pixel_spv := compile_shader("shaders/hello_square_ps.slang", write_output = WRITE_SHADER_OUTPUT); assert(success);
+    defer array_free(pixel_spv);
 
-    if window == null {
-        window = create_window(800, 600, "hello peel");
-        result := gpu_init();
-        assert(result == .SUCCESS);
+    blend_state: Gpu_Blend_Desc;
 
-        window_type: Native_Window_Type;
-        #if      OS == .WINDOWS then window_type = .WIN32;
-        else #if OS == .LINUX   then window_type = .X11;
-        else #if OS == .MACOS   then window_type = .COCOA;
-        else assert(false, "Unsupported OS");
+    graphics_pipeline = gpu_create_graphics_pipeline(vertex_spv, pixel_spv, {
+        cull = .CW,
+        color_targets = .[
+            .{format = .B8G8R8A8_UNORM}
+        ],
+        blend_state = *blend_state,
+    });
 
-        gpu_init_swapchain(cast(u64)window, window_type);
-    }
+    gpu_arena = gpu_make_arena(1024 * 5, label = "main arena");
+    vertex_buffer, vertex_gpu := gpu_arena_alloc(*gpu_arena, [4] Vertex2D);
+    vertex_buffer.* = .[
+        .{ 0.5,   0.5 },
+        .{ 0.5,  -0.5 },
+        .{ -0.5, -0.5 },
+        .{ -0.5, +0.5 },
+    ];
 
+    vertex_colors, colors_gpu := gpu_arena_alloc(*gpu_arena, [4] Vector4);
+    vertex_colors.* = .[
+        {1, 0, 0, 1},
+        {0, 1, 0, 1},
+        {0, 0, 1, 1},
+        {1, 1, 1, 1},
+    ];
+
+    param_block, vertex_params_gpu := gpu_arena_alloc(*gpu_arena, [2] Gpu_Ptr);
+    param_block.* = .[vertex_gpu, colors_gpu];
+
+    index_buffer, index_gpu := gpu_arena_alloc(*gpu_arena, [6] u32);
+    index_buffer.* = .[
+        0, 3, 1,
+        1, 3, 2,
+    ];
+
+    pixel_data, pixel_gpu := gpu_arena_alloc(*gpu_arena, [3] float);
+    pixel_data.* = .[1., 0., 1.];
+
+    draw_data = {
+        vertex_params_gpu = vertex_params_gpu,
+        pixel_gpu = pixel_gpu,
+        index_gpu = index_gpu,
+        num_vertices = 6,
+        num_instances = 1,
+    };
 } @on_dll_init
 
 tick :: () {
+    result, swapchain_image := gpu_swapchain_acquire();
+    assert(result == .SUCCESS);
+    if !swapchain_image return;
+
+    main_queue := gpu_get_queue(.MAIN, 0);
+    result=, cmd_buff := gpu_start_command_recording(main_queue);
+    assert(result == .SUCCESS);
+    defer gpu_submit_and_present(cmd_buff);
+
+    gpu_begin_scoped_render_pass(cmd_buff, {
+        color_targets = .[
+            .{
+                view = swapchain_image,
+                load_op = .CLEAR,
+                store_op = .STORE,
+                clear_color._float = .[0, 0, 0, 1],
+            }
+        ]
+    });
+
+    gpu_set_depth_stencil_state(cmd_buff, { depth_test = .ALWAYS, depth_mode = .NONE, });
+    gpu_set_pipeline(cmd_buff, graphics_pipeline);
+
+    using draw_data;
+    gpu_draw_indexed_instanced(cmd_buff, vertex_params_gpu, pixel_gpu, index_gpu, num_vertices, num_instances);
 
 } @on_tick
 
 #scope_file
 #import "Window_Creation";
-
-#if OS == .MACOS #import "sgpu";
-else #import "sgpu_metal";
+#import "Math";

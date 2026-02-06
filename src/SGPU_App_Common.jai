@@ -10,6 +10,13 @@ frame_count: int;
 last_window_size: V2(u32);
 window: *void; // TODO
 
+#import "sgpu_metal";
+
+gpu_begin_scoped_render_pass :: (cmd_buf: Gpu_Command_Buffer, desc: Gpu_Render_Pass_Desc) #expand {
+    gpu_begin_render_pass(cmd_buf, desc);
+    `defer gpu_end_render_pass(cmd_buf);
+}
+
 app_update :: (update_ctx: *App_Update_Ctx) {
     #if OS == .MACOS {
         pool := objc_init(objc_alloc(NSAutoreleasePool));
@@ -32,9 +39,7 @@ app_update :: (update_ctx: *App_Update_Ctx) {
     Input.update_window_events();
     for Input.get_window_resizes() {
         if it.window == window {
-            #if OS == .MACOS {
-                backend_metal_window_did_resize(window, it.width, it.height);
-            }
+            gpu_swapchain_resize();
         }
     }
     for Input.events_this_frame {
@@ -55,8 +60,27 @@ app_update :: (update_ctx: *App_Update_Ctx) {
     reset_temporary_storage(); // TODO: push/pop temp storage mark instead!
 }
 
+create_window_and_init_sgpu :: () {
+    window = create_window(1200, 800, "hello peel");
+
+    result := gpu_init();
+    assert(result == .SUCCESS);
+
+    window_type: Native_Window_Type;
+    #if      OS == .WINDOWS then window_type = .WIN32;
+    else #if OS == .LINUX   then window_type = .X11;
+    else #if OS == .MACOS   then window_type = .COCOA;
+    else assert(false, "Unsupported OS");
+
+    gpu_init_swapchain(cast(u64)window, window_type);
+}
+
 host_quit :: (quit_ctx: Quit_Ctx) {
     log("host_quit!");
+
+    // @Perf probably not necessary in release builds.
+    gpu_destroy_swapchain();
+    gpu_shutdown();
 }
 
 host_init :: (init_ctx: Init_Ctx) -> bool {
@@ -71,7 +95,10 @@ host_init :: (init_ctx: Init_Ctx) -> bool {
     }
 
     last_time = seconds_since_init();
+
+    create_window_and_init_sgpu();
     call_event_functions(.dll_init);
+
     return true;
 }
 
@@ -103,7 +130,6 @@ Input :: #import "Input";
         window.display(window);
         call_event_functions(.window_resize);
     }
-
 
     metal_layer :: (window: *NSWindow) -> *CAMetalLayer {
         content_view := NSWindow.contentView(window);

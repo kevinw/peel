@@ -223,6 +223,14 @@ determine_current_macos_major_version :: () -> u8 {
 common_options :: (workspace: Workspace, result_output_type: type_of(Build_Options.output_type), output_dir: string = OUTPUT_PATH, script_opts: Build_Script_Opts) -> Build_Options {
     using options := get_build_options(workspace);
     copy_commonly_propagated_fields(get_build_options(), *options);
+
+    #if OS == .MACOS {
+        modules_paths: [..]string;
+        array_add(*modules_paths, "modules/sgpu_metal/modules");
+        array_add(*modules_paths, ..import_path);
+        import_path = modules_paths;
+    }
+
     output_path = output_dir;
     os_target   = OS;
     cpu_target  = CPU;
@@ -280,7 +288,7 @@ get_dynamic_library_paths :: () -> []string /* temp allocated */ {
         //"im3d/lib",
     ];
 
-    mac_specific_dylib_paths :: string.[
+    #if OS == .MACOS mac_specific_dylib_paths :: string.[
         "sgpu_metal/modules/slang/mac",
     ];
 
@@ -290,9 +298,13 @@ get_dynamic_library_paths :: () -> []string /* temp allocated */ {
     platform_name := get_shortened_platform_name_for_filesystem(OS);
 
     all_paths: [..]string;
+    all_paths.allocator = temp;
     array_add(*all_paths, ..local_module_dll_paths);
     #if OS == .MACOS array_add(*all_paths, ..mac_specific_dylib_paths);
 
+    //
+    // TODO: for actual release builds, we're going to have to copy dlls/dylibs. or build static!
+    //
     for all_paths {
         path: string = local_module(it);
         if !String.ends_with(path, "mac") { // HACK
