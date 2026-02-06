@@ -13,8 +13,6 @@ Note: this host doesn't even open a window, or initialize a graphics API.
 
 */
 
-HOST_EXECUTABLE_NAME :: "peel";
-
 main :: () {
     start := seconds_since_init();
 
@@ -51,7 +49,7 @@ main :: () {
         }
     }
 
-    USAGE_MESSAGE :: #run sprint("usage: % --app app_name", HOST_EXECUTABLE_NAME);
+    USAGE_MESSAGE :: #run sprint("usage: % --app app_name", HOST_OUTPUT_EXECUTABLE_NAME);
 
     screenshot_filename := "";
     library_filename := "";

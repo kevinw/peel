@@ -9,7 +9,7 @@ THIS_SCRIPT_PATH :: #run String.path_join(#filepath, "build.jai");
 HOST_JAI_ROOT :: "src/host.jai";
 
 OUTPUT_PATH                 :: "dist";      // The directory where the program binary goes.
-HOST_OUTPUT_EXECUTABLE_NAME :: "ghost";     // The name of the host executable.
+HOST_OUTPUT_EXECUTABLE_NAME :: "peel";      // The name of the host executable.
 BUILD_IS_FOR_IDE            :: #exists(JAILS_DIAGNOSTICS_BUILD); // Whether the build is for the IDE's error display. (Jails language server runs the build to check for errors.)
 VERBOSE                     :: false;       // Whether to print verbose output for the build process.
 #if OS == .MACOS {
@@ -478,7 +478,11 @@ build_host :: (script_opts: Build_Script_Opts, include_app_plugins_for_app_filen
 
     result := build_artifact("Build host",
         .EXECUTABLE, HOST_OUTPUT_EXECUTABLE_NAME, plugins, HOST_JAI_ROOT, OUTPUT_PATH, script_opts,
-        check_for_unnecessary_build=true);
+        check_for_unnecessary_build=true,
+        build_strings=.[
+            {"HOST_OUTPUT_EXECUTABLE_NAME", HOST_OUTPUT_EXECUTABLE_NAME}
+        ]
+    );
 
     ok := result != Build_Artifact_Result.failed;
 
@@ -522,6 +526,11 @@ build_app :: (script_opts: Build_Script_Opts, app_filename: string) -> bool {
 
 Build_Artifact_Result :: enum { success; skipped; failed; }
 
+Build_String :: struct {
+    name: string;
+    value: string;
+}
+
 build_artifact :: (workspace_name: string,
                    output_type: type_of(Build_Options.output_type),
                    output_filename: string,
@@ -529,7 +538,9 @@ build_artifact :: (workspace_name: string,
                    source_filename: string,
                    output_dir: string = OUTPUT_PATH,
                    script_opts: Build_Script_Opts,
-                   check_for_unnecessary_build := false)
+                   check_for_unnecessary_build := false,
+                   build_strings: []Build_String = .[],
+)
 -> Build_Artifact_Result {
     workspace := compiler_create_workspace(workspace_name);
     defer compiler_destroy_workspace(workspace);
@@ -568,6 +579,9 @@ build_artifact :: (workspace_name: string,
     for plugins      if it.add_source it.add_source(it);
     add_build_string(tprint("SINGLE_BINARY :: %;\n", script_opts.single_binary), workspace);
     add_build_string(tprint("RELEASE :: %;\n", script_opts.release), workspace);
+    for build_strings {
+        add_build_string(tprint("% :: \"%\";\n", it.name, it.value), workspace);
+    }
     if script_opts.single_binary
         add_build_string(tprint("#load \"%/%\";\n", PATH_TO_APP_FILES, APP_FILES[0]), workspace);
     add_build_file(source_filename, workspace);

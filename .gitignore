@@ -4,3 +4,8 @@ dist/*.pdb
 *.srcdeps
 *.exp
 modules/Game_Sound/lib/win/Game_Sound.dll
+modules/Game_Sound/lib/win/Game_Sound.lib
+modules/Game_Sound/lib/win/Game_Sound.pdb
+dist/app_peel_basic.dll
+dist/app_peel_basic.lib
+dist/peel.exe
