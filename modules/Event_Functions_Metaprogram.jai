@@ -77,8 +77,8 @@ on_compiler_message :: (_p: *Metaprogram_Plugin, msg: *Message) {
                 append(*sb, "};\n\n");
 
                 append(*sb, #string END
-call_event_functions :: (event_function_type: Event_Function_Type) {
-    if event_function_type == {
+call_event_functions :: ($event_function_type: Event_Function_Type) {
+    #if event_function_type == {
 END);
                 for event_name: event_names {
                     append(*sb, tprint(#string END
