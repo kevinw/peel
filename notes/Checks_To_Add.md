@@ -1,0 +1,1 @@
+- check for antipattern assert(condition, tprint("foo %", 5)) and use assert(condition, "foo %", 5) instead.

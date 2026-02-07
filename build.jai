@@ -1,6 +1,6 @@
 /*
 
-Builds and runs the host and the app.
+Builds and runs the host and the "app" dll.
 
 */
 
@@ -435,9 +435,7 @@ host_build_manifest_event :: (p: *Build_Manifest.Build_Manifest_Metaprogram_Plug
             }
 
             script_opts := cast(*Build_Script_Opts)userdata;
-            if !script_opts.release {
-                return;
-            }
+            if script_opts.release return;
 
             log("Codesigning host executable for get-tasks...");
             output_exe := String.path_join(OUTPUT_PATH, HOST_OUTPUT_EXECUTABLE_NAME);

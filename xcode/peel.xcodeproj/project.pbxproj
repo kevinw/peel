@@ -18,7 +18,7 @@
 /* Begin PBXLegacyTarget section */
 		DEF6A2CD2F365CF50054AB71 /* peel */ = {
 			isa = PBXLegacyTarget;
-			buildArgumentsString = "$(SRCROOT)/../build.jai";
+			buildArgumentsString = "$(SRCROOT)/../build.jai - -norun";
 			buildConfigurationList = DEF6A2D02F365CF50054AB71 /* Build configuration list for PBXLegacyTarget "peel" */;
 			buildPhases = (
 			);
