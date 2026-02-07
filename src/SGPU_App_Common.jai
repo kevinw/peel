@@ -77,7 +77,6 @@ create_window_and_init_sgpu :: () {
     else #if OS == .MACOS   then window_type = .COCOA;
     else assert(false, "Unsupported OS");
 
-    backend_metal_window_did_resize(window, width, height);
     gpu_init_swapchain(cast(u64)window, window_type);
 }
 
