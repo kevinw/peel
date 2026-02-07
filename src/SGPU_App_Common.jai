@@ -18,6 +18,8 @@ gpu_begin_scoped_render_pass :: (cmd_buf: Gpu_Command_Buffer, desc: Gpu_Render_P
 }
 
 app_update :: (update_ctx: *App_Update_Ctx) {
+    auto_release_temp();
+
     #if OS == .MACOS {
         pool := objc_init(objc_alloc(NSAutoreleasePool));
         defer release(pool);
@@ -56,12 +58,15 @@ app_update :: (update_ctx: *App_Update_Ctx) {
         update_ctx.app_return_flags |= .Quit;
         return;
     }
+
     call_event_functions(.tick);
-    reset_temporary_storage(); // TODO: push/pop temp storage mark instead!
 }
 
 create_window_and_init_sgpu :: () {
-    window = create_window(1200, 800, "hello peel");
+    width :s32 = 1200;
+    height :s32 = 800;
+
+    window = create_window(width, height, "hello peel");
 
     result := gpu_init();
     assert(result == .SUCCESS);
@@ -72,6 +77,7 @@ create_window_and_init_sgpu :: () {
     else #if OS == .MACOS   then window_type = .COCOA;
     else assert(false, "Unsupported OS");
 
+    backend_metal_window_did_resize(window, width, height);
     gpu_init_swapchain(cast(u64)window, window_type);
 }
 
