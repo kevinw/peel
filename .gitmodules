@@ -1,6 +1,6 @@
 [submodule "modules/sgpu"]
 	path = modules/sgpu
-	url = git@github.com:roeyb1/sgpu.git
+	url = git@github.com:kevinw/sgpu.git
 [submodule "modules/Jai-Shader-Transpiler"]
 	path = modules/Jai-Shader-Transpiler
 	url = git@github.com:kevinw/Jai-Shader-Transpiler.git
