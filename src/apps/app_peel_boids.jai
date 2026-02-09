@@ -2,10 +2,7 @@ WRITE_SHADER_OUTPUT :: true;
 
 #load "../SGPU_App_Common.jai";
 
-Vertex2D :: struct {
-    x: float;
-    y: float;
-}
+Vertex2D :: Vector2;
 
 Draw_Data :: struct {
     vertex_params_gpu: Gpu_Ptr;
@@ -21,14 +18,12 @@ draw_data: Draw_Data;
 
 on_dll_init :: () {
     log("DLL init!");
-    success, vertex_spv := compile_shader("shaders/hello_square_vs.slang", write_output = WRITE_SHADER_OUTPUT); assert(success);
-    defer array_free(vertex_spv);
-    success=, pixel_spv := compile_shader("shaders/hello_square_ps.slang", write_output = WRITE_SHADER_OUTPUT); assert(success);
-    defer array_free(pixel_spv);
+    success, spv := compile_shader("shaders/boids.slang", entry_points=.["vertexMain", "fragmentMain"], write_output = WRITE_SHADER_OUTPUT); assert(success);
+    defer array_free(spv);
 
     blend_state: Gpu_Blend_Desc;
 
-    graphics_pipeline = gpu_create_graphics_pipeline(vertex_spv, pixel_spv, {
+    graphics_pipeline = gpu_create_graphics_pipeline(spv, {
         cull = .CW,
         color_targets = .[
             .{format = .B8G8R8A8_UNORM}
@@ -37,30 +32,26 @@ on_dll_init :: () {
     });
 
     gpu_arena = gpu_make_arena(1024 * 5, label = "main arena");
-    vertex_buffer, vertex_gpu := gpu_arena_alloc(*gpu_arena, [4] Vertex2D);
+    vertex_buffer, vertex_gpu := gpu_arena_alloc(*gpu_arena, [3] Vertex2D);
     vertex_buffer.* = .[
-        .{ 0.5,   0.5 },
-        .{ 0.5,  -0.5 },
-        .{ -0.5, -0.5 },
-        .{ -0.5, +0.5 },
+        .{ 0.5,   0.5 } * 0.2,
+        .{ 0.5,  -0.5 } * 0.2,
+        .{ -0.5, -0.5 } * 0.2,
     ];
 
-    vertex_colors, colors_gpu := gpu_arena_alloc(*gpu_arena, [4] Vector4);
+    vertex_colors, colors_gpu := gpu_arena_alloc(*gpu_arena, [3] Vector4);
     vertex_colors.* = .[
         {1, 0, 0, 1},
         {0, 1, 0, 1},
         {0, 0, 1, 1},
-        {1, 1, 1, 1},
     ];
 
     param_block, vertex_params_gpu := gpu_arena_alloc(*gpu_arena, [2] Gpu_Ptr);
     param_block.* = .[vertex_gpu, colors_gpu];
 
-    index_buffer, index_gpu := gpu_arena_alloc(*gpu_arena, [6] u32);
-    index_buffer.* = .[
-        0, 3, 1,
-        1, 3, 2,
-    ];
+    indices := u32.[ 0, 2, 1 ];
+    index_buffer, index_gpu := gpu_arena_alloc(*gpu_arena, [3] u32);
+    index_buffer.* = indices;
 
     pixel_data, pixel_gpu := gpu_arena_alloc(*gpu_arena, [3] float);
     pixel_data.* = .[1., 0., 1.];
@@ -69,8 +60,8 @@ on_dll_init :: () {
         vertex_params_gpu = vertex_params_gpu,
         pixel_gpu = pixel_gpu,
         index_gpu = index_gpu,
-        num_vertices = 6,
-        num_instances = 1,
+        num_vertices = indices.count,
+        num_instances = 100,
     };
 } @on_dll_init
 
@@ -82,7 +73,6 @@ tick :: () {
     main_queue := gpu_get_queue(.MAIN, 0);
     result=, cmd_buff := gpu_start_command_recording(main_queue);
     assert(result == .SUCCESS);
-    defer gpu_submit_and_present(cmd_buff);
 
     gpu_begin_scoped_render_pass(cmd_buff, {
         color_targets = .[
@@ -100,6 +90,8 @@ tick :: () {
 
     using draw_data;
     gpu_draw_indexed_instanced(cmd_buff, vertex_params_gpu, pixel_gpu, index_gpu, num_vertices, num_instances);
+
+    defer gpu_submit_and_present(cmd_buff);
 
 } @on_tick
 

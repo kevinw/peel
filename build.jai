@@ -226,7 +226,7 @@ common_options :: (workspace: Workspace, result_output_type: type_of(Build_Optio
 
     #if OS == .MACOS {
         modules_paths: [..]string;
-        array_add(*modules_paths, "modules/sgpu_metal/modules");
+        array_add(*modules_paths, "modules/sgpu/modules");
         array_add(*modules_paths, ..import_path);
         import_path = modules_paths;
     }
@@ -289,7 +289,7 @@ get_dynamic_library_paths :: () -> []string /* temp allocated */ {
     ];
 
     #if OS == .MACOS mac_specific_dylib_paths :: string.[
-        "sgpu_metal/modules/slang/mac",
+        "sgpu/modules/slang/mac",
     ];
 
     results: [..]string;

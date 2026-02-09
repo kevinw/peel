@@ -1,3 +1,5 @@
+#load "App_Common.jai";
+
 app_needs_recompile: string;
 app_quit_requested := false;
 did_init := false;
@@ -10,7 +12,7 @@ frame_count: int;
 last_window_size: V2(u32);
 window: *void; // TODO
 
-#import "sgpu_metal";
+#import "sgpu";
 
 gpu_begin_scoped_render_pass :: (cmd_buf: Gpu_Command_Buffer, desc: Gpu_Render_Pass_Desc) #expand {
     gpu_begin_render_pass(cmd_buf, desc);
