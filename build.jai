@@ -172,7 +172,7 @@ END;
         if !script_opts.run_program_after_build {
             #if VERBOSE log("Not running the app, because -norun was passed.");
         } else if host_was_running {
-            #if VERBOSE log("Not running the app, because the host is already running.");
+            log("Not running the app, because the host is already running.");
         } else {
             #if VERBOSE log("Running the app...");
             abs_output_path := get_absolute_path(OUTPUT_PATH);
@@ -383,7 +383,7 @@ get_output_dll_filename_for_main_app_source_file :: (source_file: string) -> str
 
 check_if_host_is_running :: () -> bool {
     #if OS == .MACOS {
-        res, stdout, stderr, timeout := run_command("pgrep", "-f", HOST_OUTPUT_EXECUTABLE_NAME, capture_and_return_output = true);
+        res, stdout, stderr, timeout := run_command("./tools/check_if_running.sh", HOST_OUTPUT_EXECUTABLE_NAME, capture_and_return_output = true);
         if timeout exit_with_error("Timeout reached while checking if host is running");
         if stderr print("stderr: %\n", stderr);
         //if stdout print("stdout: %", stdout);
