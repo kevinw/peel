@@ -359,7 +359,7 @@ compare_fieldwise :: (a: $T, b: T) -> bool {
         assert(bytes_a.count > 0);
 
         if memcmp(bytes_a.data, bytes_b.data, bytes_a.count) != 0 {
-            log("field % differs", member.name);
+            // log("field % differs", member.name);
             return false;
         } else {
             // log("field % is equal", member.name);
