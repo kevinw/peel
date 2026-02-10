@@ -6,6 +6,7 @@ Vertex2D :: Vector2;
 
 Draw_Data :: struct {
     vertex_params_gpu: Gpu_Ptr;
+    instance_data_gpu: Gpu_Ptr;
     pixel_gpu: Gpu_Ptr;
     index_gpu: Gpu_Ptr;
     num_vertices: u32;
@@ -16,8 +17,9 @@ graphics_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
 
+NUM_INSTANCES :: 200;
+
 on_dll_init :: () {
-    log("DLL init!");
     success, spv := compile_shader("shaders/boids.slang", entry_points=.["vertexMain", "fragmentMain"], write_output = WRITE_SHADER_OUTPUT); assert(success);
     defer array_free(spv);
 
@@ -34,9 +36,9 @@ on_dll_init :: () {
     gpu_arena = gpu_make_arena(1024 * 5, label = "main arena");
     vertex_buffer, vertex_gpu := gpu_arena_alloc(*gpu_arena, [3] Vertex2D);
     vertex_buffer.* = .[
-        .{ 0.5,   0.5 } * 0.2,
-        .{ 0.5,  -0.5 } * 0.2,
-        .{ -0.5, -0.5 } * 0.2,
+        .{ 0.5,   0.5 } * 0.1,
+        .{ 0.5,  -0.5 } * 0.1,
+        .{ -0.5, -0.5 } * 0.1,
     ];
 
     vertex_colors, colors_gpu := gpu_arena_alloc(*gpu_arena, [3] Vector4);
@@ -46,8 +48,13 @@ on_dll_init :: () {
         {0, 0, 1, 1},
     ];
 
-    param_block, vertex_params_gpu := gpu_arena_alloc(*gpu_arena, [2] Gpu_Ptr);
-    param_block.* = .[vertex_gpu, colors_gpu];
+    instance_data, instance_data_gpu := gpu_arena_alloc(*gpu_arena, [NUM_INSTANCES]Vector2);
+    for 0..NUM_INSTANCES-1 {
+        instance_data.*[it] = {random_get_within_range(-0.5, 0.5), random_get_within_range(-0.5, 0.5)};
+    }
+
+    param_block, vertex_params_gpu := gpu_arena_alloc(*gpu_arena, [3] Gpu_Ptr);
+    param_block.* = .[vertex_gpu, colors_gpu, instance_data_gpu];
 
     indices := u32.[ 0, 2, 1 ];
     index_buffer, index_gpu := gpu_arena_alloc(*gpu_arena, [3] u32);
@@ -56,12 +63,14 @@ on_dll_init :: () {
     pixel_data, pixel_gpu := gpu_arena_alloc(*gpu_arena, [3] float);
     pixel_data.* = .[1., 0., 1.];
 
+
     draw_data = {
         vertex_params_gpu = vertex_params_gpu,
+        instance_data_gpu = instance_data_gpu,
         pixel_gpu = pixel_gpu,
         index_gpu = index_gpu,
         num_vertices = indices.count,
-        num_instances = 100,
+        num_instances = NUM_INSTANCES,
     };
 } @on_dll_init
 
@@ -76,7 +85,7 @@ tick :: () {
 
     gpu_begin_scoped_render_pass(cmd_buff, {
         color_targets = .[
-            .{
+            {
                 view = swapchain_image,
                 load_op = .CLEAR,
                 store_op = .STORE,
@@ -98,3 +107,4 @@ tick :: () {
 #scope_file
 #import "Window_Creation";
 #import "Math";
+#import "Random";

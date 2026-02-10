@@ -83,8 +83,6 @@ create_window_and_init_sgpu :: () {
 }
 
 host_quit :: (quit_ctx: Quit_Ctx) {
-    log("host_quit!");
-
     // @Perf probably not necessary in release builds.
     gpu_destroy_swapchain();
     gpu_shutdown();

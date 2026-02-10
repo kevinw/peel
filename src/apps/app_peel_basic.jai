@@ -20,7 +20,6 @@ gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
 
 on_dll_init :: () {
-    log("DLL init!");
     success, vertex_spv := compile_shader("shaders/hello_square_vs.slang", write_output = WRITE_SHADER_OUTPUT); assert(success);
     defer array_free(vertex_spv);
     success=, pixel_spv := compile_shader("shaders/hello_square_ps.slang", write_output = WRITE_SHADER_OUTPUT); assert(success);
