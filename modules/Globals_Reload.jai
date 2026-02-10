@@ -314,6 +314,7 @@ END, reload_common_module);
         }
 
         it.module_name_id = String.replace(it.import.module_name, "/", "__",, temp);
+        it.module_name_id = String.replace(it.module_name_id, "-", "_",, temp);
     }
 
     // Now we have a global ordering of decls.
