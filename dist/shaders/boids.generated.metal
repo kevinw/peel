@@ -63,20 +63,19 @@ struct VS_Output_0
 [[vertex]] vertexMain_Result_0 vertexMain(uint vertex_id_0 [[vertex_id]], uint instance_id_0 [[instance_id]], VertexParams_0 constant* sp_1 [[buffer(0)]])
 {
 
-#line 19
-    thread VS_Output_0 output_1;
-
-    (&output_1)->position_1 = float4(*((*sp_1).data_0->positions_0 + vertex_id_0) + *((*sp_1).data_0->instances_0 + instance_id_0), 0.0, 1.0);
-    (&output_1)->color_2 = (*((*sp_1).data_0->colors_0 + vertex_id_0)).xyz;
+#line 20
+    thread VS_Output_0 out_0;
+    (&out_0)->position_1 = float4(*((*sp_1).data_0->positions_0 + vertex_id_0) + *((*sp_1).data_0->instances_0 + instance_id_0), 0.0, 1.0);
+    (&out_0)->color_2 = (*((*sp_1).data_0->colors_0 + vertex_id_0)).xyz;
 
 #line 22
     thread vertexMain_Result_0 _S3;
 
 #line 22
-    (&_S3)->position_0 = output_1.position_1;
+    (&_S3)->position_0 = out_0.position_1;
 
 #line 22
-    (&_S3)->color_1 = output_1.color_2;
+    (&_S3)->color_1 = out_0.color_2;
 
 #line 22
     return _S3;

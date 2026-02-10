@@ -2,7 +2,11 @@ WRITE_SHADER_OUTPUT :: true;
 
 #load "../SGPU_App_Common.jai";
 
-Vertex2D :: Vector2;
+#import "Jai-Shader-Transpiler";
+#load "../boids_shader.jai";
+
+vmain :: boids_vertex_main; @shader_to_metal
+fmain :: boids_frag_main; @shader_to_metal
 
 Draw_Data :: struct {
     vertex_params_gpu: Gpu_Ptr;
@@ -33,7 +37,7 @@ on_dll_init :: () {
     });
 
     gpu_arena = gpu_make_arena(1024 * 5, label = "main arena");
-    vertex_buffer, vertex_gpu := gpu_arena_alloc(*gpu_arena, [3] Vertex2D);
+    vertex_buffer, vertex_gpu := gpu_arena_alloc(*gpu_arena, [3] Vector2);
     vertex_buffer.* = .[
         .{ 0.5,   0.5 } * 0.1,
         .{ 0.5,  -0.5 } * 0.1,
@@ -61,7 +65,6 @@ on_dll_init :: () {
 
     pixel_data, pixel_gpu := gpu_arena_alloc(*gpu_arena, [3] float);
     pixel_data.* = .[1., 0., 1.];
-
 
     draw_data = {
         vertex_params_gpu = vertex_params_gpu,

@@ -410,17 +410,19 @@ check_if_host_is_running :: () -> bool {
 
 
 add_host_plugins :: (plugins: *[..]*Metaprogram_Plugin, script_opts: Build_Script_Opts) {
-    #if !BUILD_IS_FOR_IDE {
-        build_manifest_plugin := Build_Manifest.get_plugin();
-        Build_Manifest.mark_dependency(build_manifest_plugin, THIS_SCRIPT_PATH);
-        build_manifest_plugin.on_event = host_build_manifest_event;
-
-        userdata := New(Build_Script_Opts);
-        userdata.* = script_opts;
-        build_manifest_plugin.on_event_userdata = userdata;
-
-        array_add(plugins, build_manifest_plugin);
+    #if BUILD_IS_FOR_IDE {
+        return;
     }
+
+    build_manifest_plugin := Build_Manifest.get_plugin();
+    Build_Manifest.mark_dependency(build_manifest_plugin, THIS_SCRIPT_PATH);
+    build_manifest_plugin.on_event = host_build_manifest_event;
+
+    userdata := New(Build_Script_Opts);
+    userdata.* = script_opts;
+    build_manifest_plugin.on_event_userdata = userdata;
+
+    array_add(plugins, build_manifest_plugin);
 }
 
 host_build_manifest_event :: (p: *Build_Manifest.Build_Manifest_Metaprogram_Plugin, evt: Build_Manifest.Build_Manifest_Event, userdata: *void) {
@@ -469,6 +471,15 @@ add_app_plugins :: (plugins: *[..] *Metaprogram_Plugin, script_opts: Build_Scrip
         shader_metaprogram_plugin.output_filename = tprint("%/shaders/shader_types{SUFFIX}.generated.hlsl", OUTPUT_PATH);
         shader_metaprogram_plugin.empty_suffix = copy_string(String.path_strip_extension(app_filename));
         array_add(plugins, shader_metaprogram_plugin);
+
+
+    }
+    // Jai-Shader-Transpiler
+    {
+        JSL :: #import "Jai-Shader-Transpiler";
+        plugin := JSL.get_plugin();
+        plugin.output_shaders = true;
+        array_add(plugins, plugin);
     }
 
     if script_opts.codex {
