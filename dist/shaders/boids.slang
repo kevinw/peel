@@ -16,11 +16,11 @@ VertexParams<Vertex_Buffers> sp;
 
 [shader("vertex")]
 VS_Output vertexMain(uint vertex_id: SV_VertexID, uint instance_id: SV_InstanceID) {
-    VS_Output output;
     float2 instance_position = sp.get().instances[instance_id];
-    output.position = float4(sp.get().positions[vertex_id] + instance_position, 0., 1.);
-    output.color = sp.get().colors[vertex_id].xyz;
-    return output;
+    VS_Output out;
+    out.position = float4(sp.get().positions[vertex_id] + instance_position, 0., 1.);
+    out.color = sp.get().colors[vertex_id].xyz;
+    return out;
 }
 
 //
