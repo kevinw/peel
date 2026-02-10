@@ -7,6 +7,7 @@ WRITE_SHADER_OUTPUT :: true;
 
 vmain :: boids_vertex_main; @shader_to_metal
 fmain :: boids_frag_main; @shader_to_metal
+boids_pair :: boids_vertex_main; @shader_pair_to_metal(boids_frag_main)
 
 Draw_Data :: struct {
     vertex_params_gpu: Gpu_Ptr;
