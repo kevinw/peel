@@ -6,7 +6,6 @@ Vertex2D :: Vector2;
 
 Draw_Data :: struct {
     vertex_params_gpu: Gpu_Ptr;
-    instance_data_gpu: Gpu_Ptr;
     pixel_gpu: Gpu_Ptr;
     index_gpu: Gpu_Ptr;
     num_vertices: u32;
@@ -66,7 +65,6 @@ on_dll_init :: () {
 
     draw_data = {
         vertex_params_gpu = vertex_params_gpu,
-        instance_data_gpu = instance_data_gpu,
         pixel_gpu = pixel_gpu,
         index_gpu = index_gpu,
         num_vertices = indices.count,
