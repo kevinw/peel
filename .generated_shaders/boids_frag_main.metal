@@ -4,7 +4,8 @@ using namespace metal;
 struct Vertex_Out {
 };
 
-struct UnnamedStruct2 {
+struct Pixel_Params {
+    float device* color;
 };
 
 struct UnnamedStruct1 {
@@ -12,7 +13,8 @@ struct UnnamedStruct1 {
 };
 
 
-fragment UnnamedStruct1 FragmentMain(Vertex_Out in [[stage_in]], constant UnnamedStruct2& un [[buffer(0)]]) {
+fragment UnnamedStruct1 FragmentMain(Vertex_Out in [[stage_in]], constant Pixel_Params* params_ptr [[buffer(0)]]) {
+     Pixel_Params params = *params_ptr;
      float4 out_color;
 
      UnnamedStruct1 out;
