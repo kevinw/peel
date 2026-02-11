@@ -16,3 +16,5 @@ modules/Game_Sound/lib/macos/Game_Sound.dylib
 .DS_Store
 *.xcuserdatad/
 dist/app_*.dylib
+dist/*.dylib.temp.*
+*.air

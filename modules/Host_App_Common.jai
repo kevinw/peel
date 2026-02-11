@@ -53,6 +53,7 @@ Quit_Ctx :: struct {
 
 Init_Ctx :: struct {
   keep_window_device_and_sdl: bool;
+  max_frames: int;
 }
 
 App_Return_Message :: struct {

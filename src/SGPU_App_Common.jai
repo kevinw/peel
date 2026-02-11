@@ -62,6 +62,12 @@ app_update :: (update_ctx: *App_Update_Ctx) {
     }
 
     call_event_functions(.tick);
+
+    if max_frames > 0 && frame_count > max_frames {
+        log("Hit max frame count (%), exiting.", max_frames);
+        update_ctx.app_return_flags |= .Quit;
+        return;
+    }
 }
 
 create_window_and_init_sgpu :: () {
@@ -88,7 +94,12 @@ host_quit :: (quit_ctx: Quit_Ctx) {
     gpu_shutdown();
 }
 
+max_frames: int = 0;
+
 host_init :: (init_ctx: Init_Ctx) -> bool {
+    max_frames = init_ctx.max_frames;
+    log("got max_frames % from host");
+
     #if OS == {
         case .WINDOWS;
             #if !RELEASE {

@@ -42,6 +42,7 @@ Options:
     -skiphost      Skip building the host.
     -codex         Add the Codex metaprogram plugin.
     -iprof         Add the IProf metaprogram plugin.
+    -slang_emit_line_directives Keep Slang `#line` directives in generated Metal/GLSL output.
     -norun         Don't run the program after building it.
     -help          Show this help message.
 END;
@@ -69,6 +70,8 @@ END;
         case "-iprof";
             script_opts.iprof = true;
             script_opts.single_binary = true;
+        case "-slang_emit_line_directives"; #through;
+            // Consumed by Jai-Shader-Transpiler plugin in compile-time code.
         case;
             log(USAGE_MESSAGE);
             log_error("Unknown argument #%: %\n", it_index, it);
@@ -479,6 +482,7 @@ add_app_plugins :: (plugins: *[..] *Metaprogram_Plugin, script_opts: Build_Scrip
         JSL :: #import "Jai-Shader-Transpiler";
         plugin := JSL.get_plugin();
         plugin.output_shaders = true;
+        log("Using Jai-Shader-Transpiler plugin with output_shaders=%", plugin.output_shaders);
         array_add(plugins, plugin);
     }
 

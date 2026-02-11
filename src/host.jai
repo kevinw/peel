@@ -53,11 +53,13 @@ main :: () {
 
     screenshot_filename := "";
     library_filename := "";
+    max_frames: int = 0;
 
     // parse args
     {
         next_is_app_dll := false;
         next_is_screenshot_filename := false;
+        next_is_max_frames := false;
         for args {
             if next_is_app_dll {
                 library_filename = copy_string(it);
@@ -65,6 +67,8 @@ main :: () {
             } else if next_is_screenshot_filename {
                 screenshot_filename = it;
                 next_is_screenshot_filename = false;
+            } else if next_is_max_frames {
+                max_frames = String.string_to_int(it);
             } else if it == {
                 case "--app";
                     #if SINGLE_BINARY {
@@ -78,6 +82,12 @@ main :: () {
                     next_is_app_dll = true;
                 case "--screenshot";
                     next_is_screenshot_filename = true;
+                case "--max-frames";
+                    next_is_max_frames = true;
+                case;
+                    if it_index > 0 { // zero is the host exe itself
+                        log_error("Unhandled argument: %", it);
+                    }
             }
         }
     }
@@ -110,7 +120,7 @@ main :: () {
         app := Single_Binary_App.{};
     }
 
-    init_res := app.on_host_message(.{type = .Init});
+    init_res := app.on_host_message(.{type = .Init, init_ctx = {max_frames = max_frames}});
     if !init_res.success {
         log_error("App not initialized correctly, abort!");
         exit(1);
@@ -145,8 +155,9 @@ main :: () {
             log("First frame rendered in % seconds", duration);
         }
 
-        #if !SINGLE_BINARY
+        #if !SINGLE_BINARY {
             handle_app_live_reload(*app, *ctx, *library_filename, verbose=VERBOSE);
+        }
     }
 
     if library_filename {
