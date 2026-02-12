@@ -1,17 +1,19 @@
 #import "Jai-Shader-Transpiler";
 #import "Math";
 
-boids_vertex_main :: (using in: Vertex_In, vertex_data: *Vertex_Params) -> Vertex_Out {
+boids_vertex_main :: (using in: Vertex_In, data: *All_Params) -> Vertex_Out {
+    //using data.v;
     using out: Vertex_Out;
-    instance_position := vertex_data.instances[instance_id];
-    pos := vertex_data.positions[vertex_id] + instance_position;
+    instance_position := data.v.instances[instance_id];
+    pos := data.v.positions[vertex_id] + instance_position;
     gl_Position = { pos.x, pos.y, 0, 1 };
     return out;
 } @vertex_shader
 
-boids_frag_main :: (using in: Vertex_Out, fragment_data: *Pixel_Params) -> struct { out_color: Vector4; } {
+boids_frag_main :: (using in: Vertex_Out, data: *All_Params) -> struct { out_color: Vector4; } {
     return {
-        out_color = { fragment_data.color[0], fragment_data.color[1], fragment_data.color[2], 1 }
+        //out_color = { data.p.color[0], data.p.color[1], data.p.color[2], 1 }
+        out_color = { 1, 0, 1, 1 }
     };
 } @fragment_shader
 
@@ -23,6 +25,11 @@ Vertex_Params :: struct {
 
 Pixel_Params :: struct {
     color: *float;
+}
+
+All_Params :: struct {
+    v: *Vertex_Params;
+    p: *Pixel_Params;
 }
 
 #scope_file

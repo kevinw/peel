@@ -98,8 +98,6 @@ max_frames: int = 0;
 
 host_init :: (init_ctx: Init_Ctx) -> bool {
     max_frames = init_ctx.max_frames;
-    log("got max_frames % from host");
-
     #if OS == {
         case .WINDOWS;
             #if !RELEASE {

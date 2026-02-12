@@ -482,7 +482,6 @@ add_app_plugins :: (plugins: *[..] *Metaprogram_Plugin, script_opts: Build_Scrip
         JSL :: #import "Jai-Shader-Transpiler";
         plugin := JSL.get_plugin();
         plugin.output_shaders = true;
-        log("Using Jai-Shader-Transpiler plugin with output_shaders=%", plugin.output_shaders);
         array_add(plugins, plugin);
     }
 
