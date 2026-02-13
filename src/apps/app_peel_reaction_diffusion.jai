@@ -18,9 +18,10 @@ graphics_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
 
+compute_params_cpu: *RD_Compute_Params;
+compute_params_gpu: Gpu_Ptr;
 vertex_params_cpu: *RD_Vertex_Params;
 vertex_params_gpu: Gpu_Ptr;
-state_gpu: Gpu_Ptr;
 
 rd_init_state :: (state: *[RD_CELL_COUNT] Vector2) {
     cx := cast(s64) RD_WIDTH / 2;
@@ -61,9 +62,18 @@ on_dll_init :: () {
 
     gpu_arena = gpu_make_arena(1024 * 1024 * 8, label = "reaction diffusion arena");
 
-    state_cpu, sim_state_gpu := gpu_arena_alloc(*gpu_arena, [RD_CELL_COUNT] Vector2);
-    rd_init_state(state_cpu);
-    state_gpu = sim_state_gpu;
+    state_a_cpu, state_a_gpu := gpu_arena_alloc(*gpu_arena, [RD_CELL_COUNT] Vector2);
+    state_b_cpu, state_b_gpu := gpu_arena_alloc(*gpu_arena, [RD_CELL_COUNT] Vector2);
+    rd_init_state(state_a_cpu);
+    state_b_cpu.* = state_a_cpu.*;
+
+    params_cpu, params_gpu := gpu_arena_alloc(*gpu_arena, RD_Compute_Params);
+    params_cpu.* = .{
+        src = cast(*Vector2) state_a_gpu,
+        dst = cast(*Vector2) state_b_gpu,
+    };
+    compute_params_cpu = params_cpu;
+    compute_params_gpu = params_gpu;
 
     quad_positions_cpu, quad_positions_gpu := gpu_arena_alloc(*gpu_arena, [6] Vector2);
     quad_positions_cpu.* = .[
@@ -78,7 +88,7 @@ on_dll_init :: () {
     vert_params_cpu, vert_params_gpu := gpu_arena_alloc(*gpu_arena, RD_Vertex_Params);
     vert_params_cpu.* = .{
         positions = cast(*Vector2) quad_positions_gpu,
-        state = cast(*Vector2) state_gpu,
+        state = cast(*Vector2) state_a_gpu,
     };
     vertex_params_cpu = vert_params_cpu;
     vertex_params_gpu = vert_params_gpu;
@@ -106,7 +116,8 @@ tick :: () {
 
     gpu_set_pipeline(cmd_buff, compute_pipeline);
     groups_x := cast(u32) ((RD_CELL_COUNT + 63) / 64);
-    gpu_dispatch(cmd_buff, state_gpu, .[groups_x, 1, 1]);
+    gpu_dispatch(cmd_buff, compute_params_gpu, .[groups_x, 1, 1]);
+    vertex_params_cpu.state = compute_params_cpu.dst;
 
     gpu_begin_scoped_render_pass(cmd_buff, {
         color_targets = .[
@@ -126,6 +137,10 @@ tick :: () {
     gpu_draw_indexed_instanced(cmd_buff, vertex_params_gpu, pixel_gpu, index_gpu, num_vertices, num_instances);
 
     gpu_submit_and_present(cmd_buff);
+    gpu_wait_idle();
+    tmp := compute_params_cpu.src;
+    compute_params_cpu.src = compute_params_cpu.dst;
+    compute_params_cpu.dst = tmp;
 } @on_tick
 
 #scope_file

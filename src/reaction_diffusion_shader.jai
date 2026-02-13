@@ -19,6 +19,11 @@ UVector3 :: struct {
     x, y, z: u32;
 }
 
+RD_Compute_Params :: struct {
+    src: *Vector2;
+    dst: *Vector2;
+}
+
 RD_Vertex_In :: struct {
     vertex_id: u32; @SV_VertexID
     instance_id: u32; @SV_InstanceID
@@ -69,7 +74,7 @@ rd_clamp01 :: (v: float) -> float {
     return v;
 }
 
-rd_step_compute :: (using in: RD_Compute_In, state: *Vector2) {
+rd_step_compute :: (using in: RD_Compute_In, data: *RD_Compute_Params) {
     if thread_id.x >= 16384 return;
 
     i := thread_id.x;
@@ -87,18 +92,18 @@ rd_step_compute :: (using in: RD_Compute_In, state: *Vector2) {
     down := i + 128;
     if i >= 16256 down = i - 16256;
 
-    s := state[i];
+    s := data.src[i];
     a := s.x;
     b := s.y;
 
-    lap_a := state[left].x + state[right].x + state[up].x + state[down].x - 4.0 * a;
-    lap_b := state[left].y + state[right].y + state[up].y + state[down].y - 4.0 * b;
+    lap_a := data.src[left].x + data.src[right].x + data.src[up].x + data.src[down].x - 4.0 * a;
+    lap_b := data.src[left].y + data.src[right].y + data.src[up].y + data.src[down].y - 4.0 * b;
 
     reaction := a * b * b;
     next_a := a + (1.0 * lap_a - reaction + 0.055 * (1.0 - a)) * 1.0;
     next_b := b + (0.5 * lap_b + reaction - (0.062 + 0.055) * b) * 1.0;
 
-    state[i] = .{
+    data.dst[i] = .{
         rd_clamp01(next_a),
         rd_clamp01(next_b),
     };
