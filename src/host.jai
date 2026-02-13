@@ -69,6 +69,7 @@ main :: () {
                 next_is_screenshot_filename = false;
             } else if next_is_max_frames {
                 max_frames = String.string_to_int(it);
+                next_is_max_frames = false;
             } else if it == {
                 case "--app";
                     #if SINGLE_BINARY {
@@ -131,7 +132,9 @@ main :: () {
             app.on_host_message(.{type = .Quit});
             app.on_host_message(.{type = .Unload});
             reset_temporary_storage();
-            app_library_unload(*app, verbose=VERBOSE);
+            #if !SINGLE_BINARY {
+                app_library_unload(*app, verbose=VERBOSE);
+            }
         }
     }
 

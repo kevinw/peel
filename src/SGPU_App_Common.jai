@@ -71,8 +71,8 @@ app_update :: (update_ctx: *App_Update_Ctx) {
 }
 
 create_window_and_init_sgpu :: () {
-    width :s32 = 1200;
-    height :s32 = 800;
+    width :s32 = 1600;
+    height :s32 = 1000;
 
     window = create_window(width, height, "hello peel");
 

@@ -18,3 +18,4 @@ modules/Game_Sound/lib/macos/Game_Sound.dylib
 dist/app_*.dylib
 dist/*.dylib.temp.*
 *.air
+.generated_shaders

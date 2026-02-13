@@ -42,6 +42,7 @@ Options:
     -skiphost      Skip building the host.
     -codex         Add the Codex metaprogram plugin.
     -iprof         Add the IProf metaprogram plugin.
+    -run-single-binary-app Build and run host+app in debug SINGLE_BINARY mode (no DLL hot reload).
     -slang_emit_line_directives Keep Slang `#line` directives in generated Metal/GLSL output.
     -norun         Don't run the program after building it.
     -help          Show this help message.
@@ -70,6 +71,8 @@ END;
         case "-iprof";
             script_opts.iprof = true;
             script_opts.single_binary = true;
+        case "-run-single-binary-app";
+            script_opts.single_binary = true;
         case "-slang_emit_line_directives"; #through;
             // Consumed by Jai-Shader-Transpiler plugin in compile-time code.
         case;
@@ -95,6 +98,8 @@ END;
 
     if script_opts.single_binary {
         assert(!script_opts.build_all_dlls);
+        assert(script_opts.build_host);
+        assert(!script_opts.skip_host_build);
     }
 
     // Build shaders.
@@ -133,7 +138,9 @@ END;
     host_was_running := false;
     if script_opts.build_host {
         #if !BUILD_IS_FOR_IDE {
-            host_was_running = check_if_host_is_running();
+            if !script_opts.single_binary {
+                host_was_running = check_if_host_is_running();
+            }
         }
 
         if !host_was_running && !script_opts.skip_host_build {
