@@ -4,15 +4,13 @@ Build_Script_Opts :: struct {
     run                     : bool;         @"?Run after building"
     run_args                : string;       @"?Args to pass to app run after building (in quotes)"
     dll                     : bool;         @"?Build app code as a split binary live reload DLL"
-    build_host              : bool = true;  @"?Build the host executable (default true)"
     release                 : bool;         @"?Build in release mode with optimizations"
-    skip_host_build         : bool;         @"?Skip building the host executable"
     codex                   : bool;         @"?Add the Codex metaprogram plugin"
     iprof                   : bool;         @"?Add the IProf metaprogram plugin"
+    verbose                 : bool;         @"?Print verbose output for the build process"
     output_exe              : string;
 }
 
-VERBOSE                     :: false;       // Whether to print verbose output for the build process.
 THIS_SCRIPT_PATH            :: #run String.path_join(#filepath, "build.jai");
 HOST_JAI_ROOT               :: "src/host.jai";
 OUTPUT_PATH                 :: "dist";      // The directory where the program binary goes.
@@ -40,8 +38,6 @@ PLATFORM_DIR :: #run get_platform_dir(OS); // win, macos, linux
         exit_with_error("Failed to parse command line arguments");
     }
 
-    log("INITIAL PARSE %", FormatStruct.{value=script_opts});
-
     script_opts.run = is_set.run;
 
     apps_to_build: [..]string;
@@ -54,23 +50,13 @@ PLATFORM_DIR :: #run get_platform_dir(OS); // win, macos, linux
             }
         }
     }
+    if is_set.dll && apps_to_build.count > 1 {
+        exit_with_error("Error: Cannot build multiple apps as a DLL");
+    }
 
     if script_opts.release || environment_specifies_release_build() set_release_build(*script_opts);
 
     make_directory_if_it_does_not_exist(OUTPUT_PATH, recursive = true); // Create the output dir.
-
-    {
-        using script_opts;
-        if !dll {
-            assert(build_host);
-            assert(!skip_host_build);
-            assert(apps_to_build.count == 1, "Expected exactly one app to build when not using -dll");
-            app_filename := apps_to_build[0];
-            output_exe = String.path_strip_extension(String.path_filename(app_filename));
-        } else {
-            output_exe = LIVE_RELOAD_HOST_EXE_NAME;
-        }
-    }
 
     // Build shaders.
     #if !BUILD_IS_FOR_IDE {
@@ -100,28 +86,18 @@ PLATFORM_DIR :: #run get_platform_dir(OS); // win, macos, linux
     // All builds will depend on the contents of this build.jai file, as well as all their source files.
     #if !BUILD_IS_FOR_IDE Build_Manifest.mark_meta_dependency(THIS_SCRIPT_PATH);
 
-    // Build the host if it's not already running.
-    host_was_running := false;
-    if script_opts.build_host {
-        #if !BUILD_IS_FOR_IDE {
-            if script_opts.dll {
-                host_was_running = check_if_host_is_running(script_opts);
-            }
+    dll_host_was_running := !BUILD_IS_FOR_IDE && script_opts.dll && check_if_host_is_running(script_opts, LIVE_RELOAD_HOST_EXE_NAME);
+
+    for app_to_build: apps_to_build {
+        host_build_strings: [..]string;
+        if !script_opts.dll {
+            array_add(*host_build_strings, tprint("#load \"%\";\n", app_to_build));
         }
 
-        if !host_was_running && !script_opts.skip_host_build {
-            // When building a single binary app, we need to load the app's source file, since we're not dynamically loading it as a DLL.
-            host_build_strings: [..]string;
-            if !script_opts.dll {
-                assert(apps_to_build.count == 1);
-                array_add(*host_build_strings, tprint("#load \"%\";\n", apps_to_build[0]));
-            }
+        script_opts.output_exe = String.path_strip_extension(String.path_filename(app_to_build));
 
-            if !build_host(script_opts, include_app_plugins=!script_opts.dll, build_strings=host_build_strings) {
-                exit_with_error("Failed to build the host");
-            }
-        } else {
-            log("Skipping host build.");
+        if !build_host(script_opts, include_app_plugins=!script_opts.dll, build_strings=host_build_strings) {
+            exit_with_error("Failed to build the host");
         }
     }
 
@@ -140,11 +116,11 @@ PLATFORM_DIR :: #run get_platform_dir(OS); // win, macos, linux
     // Start the host if it's not already running.
     #if !BUILD_IS_FOR_IDE {
         if !script_opts.run {
-            #if VERBOSE log("Not running the app, because script_opts.run was false.");
-        } else if host_was_running {
+            if script_opts.verbose log("Not running the app, because script_opts.run was false.");
+        } else if dll_host_was_running {
             log("Not running the app, because the host is already running.");
         } else {
-            #if VERBOSE log("Running the app...");
+            if script_opts.verbose log("Running the app...");
             abs_output_path := get_absolute_path(OUTPUT_PATH);
             if !abs_output_path exit_with_error("Failed to get absolute path of output path: '%'", OUTPUT_PATH);
             set_working_directory(abs_output_path);
@@ -163,13 +139,14 @@ PLATFORM_DIR :: #run get_platform_dir(OS); // win, macos, linux
                 args_splitted_by_space := String.split(script_opts.run_args, #char " ");
                 array_add(*host_args, ..args_splitted_by_space);
             }
+            if script_opts.verbose log("RUNNING in %: %", abs_output_path, String.join(..host_args, separator=" "));
             res, stdout, stderr := run_command(..host_args);
-            #if VERBOSE log("App exited.");
+            if script_opts.verbose log("App exited.");
             if stderr log("Stderr: %", stderr);
             if stdout log("Stdout: %", stdout);
         }
     } else {
-        #if VERBOSE log("Not running the app, because we're building for the IDE.");
+        if script_opts.verbose log("Not running the app, because we're building for the IDE.");
     }
 }
 
@@ -355,9 +332,9 @@ get_output_dll_filename_for_main_app_source_file :: (source_file: string) -> str
     return tprint("%.%", String.path_strip_extension(String.path_filename(source_file)), DLL_EXTENSION);
 }
 
-check_if_host_is_running :: (script_opts: Build_Script_Opts) -> bool {
+check_if_host_is_running :: (script_opts: Build_Script_Opts, output_exe: string) -> bool {
     #if OS == .MACOS {
-        res, stdout, stderr, timeout := run_command("./tools/check_if_running.sh", script_opts.output_exe, capture_and_return_output = true);
+        res, stdout, stderr, timeout := run_command("./tools/check_if_running.sh", output_exe, capture_and_return_output = true);
         if timeout exit_with_error("Timeout reached while checking if host is running");
         if stderr print("stderr: %\n", stderr);
         //if stdout print("stdout: %", stdout);
@@ -365,12 +342,12 @@ check_if_host_is_running :: (script_opts: Build_Script_Opts) -> bool {
         return res.exit_code == 0;
     } else #if OS == .WINDOWS {
         // @Perf - this is slow because of tasklist.exe. Maybe we should have the host grab a file lock.
-        res, stdout, stderr, timeout := run_command("tasklist", "/fi", tprint("IMAGENAME eq %", script_opts.output_exe), capture_and_return_output = true);
+        res, stdout, stderr, timeout := run_command("tasklist", "/fi", tprint("IMAGENAME eq %", output_exe), capture_and_return_output = true);
         if timeout exit_with_error("Timeout reached while checking if host is running");
         if stderr print("stderr: %\n", stderr);
         if String.find_index_from_left(stdout, "No tasks are running") != -1
             return false;
-        if String.find_index_from_left(stdout, script_opts.output_exe) == -1
+        if String.find_index_from_left(stdout, output_exe) == -1
             return true;
         if stdout print("stdout:\n%\n", stdout);
         if res.type != .EXITED exit_with_error("tasklist did not exit");
@@ -410,8 +387,8 @@ host_build_manifest_event :: (p: *Build_Manifest.Build_Manifest_Metaprogram_Plug
             script_opts := cast(*Build_Script_Opts)userdata;
             if script_opts.release return; // Codesigning as of now is for debug entitlements.
 
-            #if VERBOSE log("Codesigning host executable for get-tasks...");
             output_exe := String.path_join(OUTPUT_PATH, script_opts.output_exe);
+            if script_opts.verbose log("Codesigning host executable for get-tasks: %", output_exe);
             abs_entitlements_file := get_absolute_path(entitlements_file);
             assert(abs_entitlements_file != "", tprint("Could not resolve absolute path for entitlements file: %", entitlements_file));
             res, stdout, stderr := run_command("codesign", "--force", "--sign", "-", "--entitlements", abs_entitlements_file, "--timestamp=none", output_exe, capture_and_return_output=true);

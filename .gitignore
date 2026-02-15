@@ -21,3 +21,6 @@ dist/*.dylib.temp.*
 .generated_shaders
 dist/app_peel_surprise
 dist/app_peel_boids
+dist/boids
+dist/boids.dylib
+dist/particles
