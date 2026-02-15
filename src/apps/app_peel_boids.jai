@@ -16,12 +16,11 @@ Draw_Data :: struct {
 }
 
 graphics_pipeline: Gpu_Pipeline;
-compute_pipeline_ab: Gpu_Pipeline;
-compute_pipeline_ba: Gpu_Pipeline;
+compute_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
 
-boid_state_storage_cpu: *[NUM_INSTANCES * 2] Boid_State;
+boid_state_storage_cpu: *[NUM_INSTANCES * 2 + 1] Boid_State;
 boid_state_storage_gpu: Gpu_Ptr;
 boid_state_a_cpu: *[NUM_INSTANCES] Boid_State;
 boid_state_b_cpu: *[NUM_INSTANCES] Boid_State;
@@ -79,10 +78,8 @@ on_dll_init :: () {
 
     graphics_source := cast([]u8) get_transpiled(.METAL, boids_vertex_main, boids_frag_main);
     assert(graphics_source.count > 0);
-    compute_source_ab := cast([]u8) get_transpiled(.METAL, boids_step_compute_ab);
-    compute_source_ba := cast([]u8) get_transpiled(.METAL, boids_step_compute_ba);
-    assert(compute_source_ab.count > 0);
-    assert(compute_source_ba.count > 0);
+    compute_source := cast([]u8) get_transpiled(.METAL, boids_step_compute);
+    assert(compute_source.count > 0);
 
     blend_state: Gpu_Blend_Desc;
     graphics_pipeline = gpu_create_graphics_pipeline(graphics_source, {
@@ -94,10 +91,8 @@ on_dll_init :: () {
     });
     assert(graphics_pipeline != 0, "Pipeline creation failed.");
 
-    compute_pipeline_ab = gpu_create_compute_pipeline(compute_source_ab);
-    compute_pipeline_ba = gpu_create_compute_pipeline(compute_source_ba);
-    assert(compute_pipeline_ab != 0, "Compute pipeline AB creation failed.");
-    assert(compute_pipeline_ba != 0, "Compute pipeline BA creation failed.");
+    compute_pipeline = gpu_create_compute_pipeline(compute_source);
+    assert(compute_pipeline != 0, "Compute pipeline creation failed.");
 
     gpu_arena = gpu_make_arena(1024 * 1024, label = "boids arena");
 
@@ -108,7 +103,7 @@ on_dll_init :: () {
         .{-0.014, -0.011},
     ];
 
-    state_storage, state_storage_gpu := gpu_arena_alloc(*gpu_arena, [NUM_INSTANCES * 2] Boid_State);
+    state_storage, state_storage_gpu := gpu_arena_alloc(*gpu_arena, [NUM_INSTANCES * 2 + 1] Boid_State);
     boid_state_storage_cpu = state_storage;
     boid_state_storage_gpu = state_storage_gpu;
     boid_state_a_cpu = cast(*[NUM_INSTANCES] Boid_State) boid_state_storage_cpu;
@@ -138,6 +133,10 @@ on_dll_init :: () {
         boid_tints_cpu.*[it] = palette[palette_idx];
     }
     boid_state_b_cpu.* = boid_state_a_cpu.*;
+    boid_state_storage_cpu.*[BOIDS_CTRL_INDEX].pos.x = 0.0;
+    boid_state_storage_cpu.*[BOIDS_CTRL_INDEX].pos.y = 0.0;
+    boid_state_storage_cpu.*[BOIDS_CTRL_INDEX].vel.x = 0.0;
+    boid_state_storage_cpu.*[BOIDS_CTRL_INDEX].vel.y = 0.0;
 
     bytes_per_state := NUM_INSTANCES * size_of(Boid_State);
     boid_state_a_gpu = boid_state_storage_gpu;
@@ -179,9 +178,7 @@ tick :: () {
     result=, cmd_buff := gpu_start_command_recording(main_queue);
     assert(result == .SUCCESS);
 
-    sim_pipeline := compute_pipeline_ab;
-    if !src_is_a sim_pipeline = compute_pipeline_ba;
-    result = gpu_set_pipeline(cmd_buff, sim_pipeline);
+    result = gpu_set_pipeline(cmd_buff, compute_pipeline);
     assert(result == .SUCCESS, tprint("Boids compute set pipeline failed: %", result));
     gpu_dispatch(cmd_buff, boid_state_storage_gpu, .[(NUM_INSTANCES + 63) / 64, 1, 1]);
 

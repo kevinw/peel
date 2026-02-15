@@ -7,7 +7,9 @@ rd_parse_env_int :: (name: string, default: s64 = 0) -> s64 {
 }
 
 rd_collect_swapchain_framebuffer_stats :: (view: Gpu_Texture_View) -> (RD_Framebuffer_Stats, bool) {
-    return fb_collect_swapchain_framebuffer_stats(view);
+    stats, ok := fb_collect_swapchain_framebuffer_stats(view);
+    out: RD_Framebuffer_Stats = stats;
+    return out, ok;
 }
 
 rd_validate_swapchain_readback_non_black :: (view: Gpu_Texture_View) -> bool {

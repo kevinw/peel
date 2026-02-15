@@ -349,7 +349,7 @@ build_jdll :: (output_name: string, source_file: string, script_opts: Build_Scri
     if BUILD_IS_FOR_IDE {
         check_for_unnecessary_build = false;
     } else {
-        check_for_unnecessary_build = true;
+        check_for_unnecessary_build = !script_opts.single_binary;
 
         {
             p := Build_Manifest.get_plugin();
@@ -368,7 +368,7 @@ build_jdll :: (output_name: string, source_file: string, script_opts: Build_Scri
         source_file,
         tprint("modules/%/%", output_name, PLATFORM_DIR),
         script_opts,
-        check_for_unnecessary_build=true
+        check_for_unnecessary_build=check_for_unnecessary_build
     );
 
     ok := result != Build_Artifact_Result.failed;
@@ -517,7 +517,7 @@ build_host :: (script_opts: Build_Script_Opts, include_app_plugins_for_app_filen
 
     result := build_artifact("Build host",
         .EXECUTABLE, HOST_OUTPUT_EXECUTABLE_NAME, plugins, HOST_JAI_ROOT, OUTPUT_PATH, script_opts,
-        check_for_unnecessary_build=true,
+        check_for_unnecessary_build=!script_opts.single_binary,
         build_strings=.[
             {"HOST_OUTPUT_EXECUTABLE_NAME", HOST_OUTPUT_EXECUTABLE_NAME}
         ]
