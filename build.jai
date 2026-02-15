@@ -1,4 +1,4 @@
-// Builds and runs a peel "app".
+// Builds and optionally runs a peel "app".
 
 Build_Script_Opts :: struct {
     run                     : bool;         @"?Run after building"
@@ -13,7 +13,7 @@ Build_Script_Opts :: struct {
 
 THIS_SCRIPT_PATH            :: #run String.path_join(#filepath, "build.jai");
 HOST_JAI_ROOT               :: "src/host.jai";
-OUTPUT_PATH                 :: "dist";      // The directory where the program binary goes.
+OUTPUT_PATH                 :: "dist";        // The directory where the program binary goes.
 LIVE_RELOAD_HOST_EXE_NAME   :: "peel";        // The name of the live reload host executable.
 BUILD_IS_FOR_IDE            :: #exists(JAILS_DIAGNOSTICS_BUILD); // Whether the build is for the IDE's error display. (Jails language server runs the build to check for errors.)
 
@@ -90,15 +90,20 @@ PLATFORM_DIR :: #run get_platform_dir(OS); // win, macos, linux
 
     for app_to_build: apps_to_build {
         host_build_strings: [..]string;
-        if !script_opts.dll {
-            array_add(*host_build_strings, tprint("#load \"%\";\n", app_to_build));
-        }
 
-        script_opts.output_exe = String.path_strip_extension(String.path_filename(app_to_build));
+        if !script_opts.dll  {
+            array_add(*host_build_strings, tprint("#load \"%\";\n", app_to_build));
+            script_opts.output_exe = String.path_strip_extension(String.path_filename(app_to_build));
+        } else {
+            script_opts.output_exe = LIVE_RELOAD_HOST_EXE_NAME;
+        }
+        defer script_opts.output_exe = "";
 
         if !build_host(script_opts, include_app_plugins=!script_opts.dll, build_strings=host_build_strings) {
             exit_with_error("Failed to build the host");
         }
+
+        if script_opts.dll break; // We only need one host when we're building dll.
     }
 
     // Build the DLL(s).
@@ -124,7 +129,12 @@ PLATFORM_DIR :: #run get_platform_dir(OS); // win, macos, linux
             abs_output_path := get_absolute_path(OUTPUT_PATH);
             if !abs_output_path exit_with_error("Failed to get absolute path of output path: '%'", OUTPUT_PATH);
             set_working_directory(abs_output_path);
-            path_to_host_exe := tprint("./%", script_opts.output_exe);
+
+            output_exe: string;
+            if script_opts.dll output_exe = LIVE_RELOAD_HOST_EXE_NAME;
+            else output_exe = String.path_strip_extension(String.path_filename(apps_to_build[0]));
+
+            path_to_host_exe := tprint("./%", output_exe);
             host_args: [..]string;
             array_add(*host_args, path_to_host_exe);
             if OS == .WINDOWS && module_paths_already_set_in_environment {
@@ -282,7 +292,6 @@ get_dynamic_library_paths :: () -> []string /* temp allocated */ {
 }
 
 build_jdll :: (output_name: string, source_file: string, script_opts: Build_Script_Opts) -> (success: bool) {
-    begin := seconds_since_init();
 
     plugins: [..]*Metaprogram_Plugin;
     check_for_unnecessary_build: bool;
@@ -305,19 +314,28 @@ build_jdll :: (output_name: string, source_file: string, script_opts: Build_Scri
         script_opts,
         check_for_unnecessary_build=check_for_unnecessary_build
     );
-
-    log_build_result(output_name, begin, result);
     return result != .failed;
 }
 
-log_build_result :: (output_name: string, start_time: float64, result: Build_Artifact_Result) {
+log_build_result :: (output_name: string, output_type: type_of(Build_Options.output_type), start_time: float64, result: Build_Artifact_Result) {
     duration := seconds_since_init() - start_time;
-    tab := ifx output_name.count < 6 "\t\t" else "\t";;
     duration_formatter := FormatFloat.{trailing_width = 3, value = duration};
+
+    ext := "";
+    if output_type == {
+    case .EXECUTABLE;
+        #if OS == .WINDOWS ext = ".exe";
+    case .DYNAMIC_LIBRARY;
+        ext = tprint(".%", DLL_EXTENSION);
+    case;
+        exit_with_error(tprint("TODO: implement extension string for %", output_type));
+    }
+    filename_on_disk := tprint("%/%%", OUTPUT_PATH, output_name, ext);
+
     if #complete result == {
-    case .skipped; log("No build required for %", output_name);
-    case .failed;  log_error("Build failed for % \t% seconds", output_name, duration_formatter);
-    case .success; log("Built %%% seconds", output_name, tab, duration_formatter);
+    case .skipped; log      ("No build required for %", filename_on_disk);
+    case .failed;  log_error("Build FAILED for %", filename_on_disk);
+    case .success; log      ("Built %%% seconds", filename_on_disk, "\t", duration_formatter);
     }
 }
 
@@ -430,14 +448,8 @@ add_app_plugins :: (plugins: *[..] *Metaprogram_Plugin, script_opts: Build_Scrip
 }
 
 build_host :: (script_opts: Build_Script_Opts, include_app_plugins: bool = false, build_strings: []string = .[]) -> bool {
-    begin := seconds_since_init();
-
     plugins: [..] *Metaprogram_Plugin;
-
-    if include_app_plugins {
-        add_app_plugins(*plugins, script_opts);
-    }
-
+    if include_app_plugins add_app_plugins(*plugins, script_opts);
     add_host_plugins(*plugins, script_opts);
 
     local_build_strings: [..]string;
@@ -449,14 +461,10 @@ build_host :: (script_opts: Build_Script_Opts, include_app_plugins: bool = false
         check_for_unnecessary_build=script_opts.dll,
         build_strings=local_build_strings);
 
-    ok := result != Build_Artifact_Result.failed;
-    log_build_result(script_opts.output_exe, begin, result);
-    return ok;
+    return result != Build_Artifact_Result.failed;
 }
 
 build_app :: (script_opts: Build_Script_Opts, app_filename: string) -> bool {
-    begin := seconds_since_init();
-
     // Since the build can generate a lot debug and temporary files if you use it a lot,
     // we do some clean up to not keep too much garbage.
     visit_files(OUTPUT_PATH, recursive = false, null, delete_app_files_visitor, visit_files = true, visit_directories = true);
@@ -470,8 +478,6 @@ build_app :: (script_opts: Build_Script_Opts, app_filename: string) -> bool {
     result := build_artifact(
         workspace_name = tprint("Build app %", app_output_executable_name),
         .DYNAMIC_LIBRARY, app_output_executable_name, plugins, app_filename, OUTPUT_PATH, script_opts);
-
-    log_build_result(app_output_executable_name, begin, result);
 
     return result != .failed;
 };
@@ -492,6 +498,9 @@ build_artifact :: (workspace_name: string,
     assert(output_filename != "");
     result: Build_Artifact_Result = .failed;
 
+    begin := seconds_since_init();
+    defer log_build_result(output_filename, output_type, begin, result);
+
     workspace := compiler_create_workspace(workspace_name);
     defer compiler_destroy_workspace(workspace);
     //log("% - %", workspace_name, workspace);
@@ -499,8 +508,7 @@ build_artifact :: (workspace_name: string,
     make_directory_if_it_does_not_exist(output_dir, recursive=true);
 
     {
-        options: Build_Options;
-        options = common_options(workspace, output_type, output_dir, script_opts);
+        options: Build_Options = common_options(workspace, output_type, output_dir, script_opts);
         options.output_executable_name = output_filename;
         if script_opts.release {
             set_optimization(*options, .VERY_OPTIMIZED);
@@ -510,7 +518,11 @@ build_artifact :: (workspace_name: string,
             set_optimization(*options, .DEBUG);
         }
         set_build_options(options, workspace);
-        if !BUILD_IS_FOR_IDE && check_for_unnecessary_build && Build_Manifest.can_skip_build(options) {
+
+        // Now that we have the actual build options setup for the compiler, we
+        // can use them to ask Build_Manifest if we can skip the build.
+        if !BUILD_IS_FOR_IDE && check_for_unnecessary_build &&
+        Build_Manifest.can_skip_build(options) {
             result = .skipped;
             return result;
         }

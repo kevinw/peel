@@ -95,7 +95,7 @@ main :: () {
         // Decide which app DLL to load.
         if !library_filename {
             first_app_jai := active_app_filename();
-            log("Because no --app was specified, using the first app in APP_LIST: %", first_app_jai);
+            log("Warning: because no --app was specified, using the first app in APP_LIST: %", first_app_jai);
             library_filename = tprint("%.%", String.path_filename(first_app_jai), DLL_EXTENSION);
         }
 
