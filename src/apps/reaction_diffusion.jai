@@ -3,6 +3,7 @@ WRITE_SHADER_OUTPUT :: true;
 #load "../SGPU_App_Common.jai";
 
 #import "Jai-Shader-Transpiler";
+SHR :: #import,file "../shader_hot_reload.jai";
 #load "../reaction_diffusion_shader.jai";
 #load "../readback_stats.jai";
 
@@ -20,6 +21,9 @@ gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
 rd_readback: Readback_Stats;
 window_snapshot_mode := false;
+rd_shader_reload: SHR.Shader_Hot_Reload;
+RD_GRAPHICS_ENTRY_ID :: "pair|METAL|rd_vertex_main|rd_fragment_main";
+RD_COMPUTE_ENTRY_ID  :: "single|METAL|compute|rd_step_compute";
 
 state_storage_gpu: Gpu_Ptr;
 state_storage_cpu: *[RD_CELL_COUNT * 2] Vector2;
@@ -118,6 +122,17 @@ on_dll_init :: () {
         ],
     });
     assert(graphics_pipeline != 0, "Graphics pipeline creation failed.");
+
+    hot_reload_enabled_by_default := true;
+    #if RELEASE hot_reload_enabled_by_default = false;
+    _ = SHR.shader_hot_reload_init_auto(*rd_shader_reload, "src/apps/reaction_diffusion.jai", poll_every_frames = 15, log_prefix = "RD_SHADER_RELOAD", enabled_by_default = hot_reload_enabled_by_default);
+    SHR.shader_hot_reload_register_graphics_pipeline(*rd_shader_reload, RD_GRAPHICS_ENTRY_ID, *graphics_pipeline, {
+        cull = .CW,
+        color_targets = .[
+            .{format = .B8G8R8A8_UNORM}
+        ],
+    });
+    SHR.shader_hot_reload_register_compute_pipeline(*rd_shader_reload, RD_COMPUTE_ENTRY_ID, *compute_pipeline);
 
     gpu_arena = gpu_make_arena(1024 * 1024 * 8, label = "reaction diffusion arena");
 
@@ -221,6 +236,14 @@ tick :: () {
     gpu_wait_idle();
 
     frame_num := cast(s64) frame_count;
+    did_rebuild, swapped_all, rebuild_ok := SHR.shader_hot_reload_tick(*rd_shader_reload, frame_num);
+    sgpu_set_debug_status(SHR.shader_hot_reload_status_line(*rd_shader_reload));
+    if did_rebuild && !rebuild_ok {
+        log_error("RD_SHADER_RELOAD build failed; keeping current runtime shaders.");
+    } else if did_rebuild && !swapped_all {
+        log_error("RD_SHADER_RELOAD build succeeded but pipeline swap was partial.");
+    }
+
     if readback_stats_should_sample(*rd_readback, frame_num) {
         stats, stats_ok := fb_collect_swapchain_framebuffer_stats(swapchain_image);
         if stats_ok {

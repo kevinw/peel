@@ -4,10 +4,15 @@ Build_Script_Opts :: struct {
     run                     : bool;         @"?Run after building"
     run_args                : string;       @"?Args to pass to app run after building (in quotes)"
     dll                     : bool;         @"?Build app code as a split binary live reload DLL"
+    shader_only             : bool;         @"?Typecheck + transpile shaders only (no binary output)"
+    shader_entry_ids        : string;       @"?Comma-separated manifest entry ids to transpile (use with -shader_only)"
     release                 : bool;         @"?Build in release mode with optimizations"
     codex                   : bool;         @"?Add the Codex metaprogram plugin"
     iprof                   : bool;         @"?Add the IProf metaprogram plugin"
     verbose                 : bool;         @"?Print verbose output for the build process"
+    perf                    : bool;         @"?Show a compiler performance report"
+
+    // used internally (todo: move elsewhere)
     output_exe              : string;
 }
 
@@ -58,6 +63,9 @@ PLATFORM_DIR :: #run get_platform_dir(OS); // win, macos, linux
     if is_set.dll && apps_to_build.count > 1 {
         exit_with_error("Error: Cannot build multiple apps as a DLL");
     }
+    if is_set.shader_entry_ids && !is_set.shader_only {
+        exit_with_error("Error: -shader_entry_ids requires -shader_only.");
+    }
 
     if script_opts.release || environment_specifies_release_build() set_release_build(*script_opts);
 
@@ -90,6 +98,15 @@ PLATFORM_DIR :: #run get_platform_dir(OS); // win, macos, linux
 
     // All builds will depend on the contents of this build.jai file, as well as all their source files.
     #if !BUILD_IS_FOR_IDE Build_Manifest.mark_meta_dependency(THIS_SCRIPT_PATH);
+
+    if script_opts.shader_only {
+        for apps_to_build {
+            if !build_shader_only(script_opts, it) {
+                exit_with_error("Failed to shader-only build app '%'.", it);
+            }
+        }
+        return;
+    }
 
     dll_host_was_running := !BUILD_IS_FOR_IDE && script_opts.dll && check_if_host_is_running(script_opts, LIVE_RELOAD_HOST_EXE_NAME);
 
@@ -299,6 +316,7 @@ get_dynamic_library_paths :: () -> []string /* temp allocated */ {
 build_jdll :: (output_name: string, source_file: string, script_opts: Build_Script_Opts) -> (success: bool) {
 
     plugins: [..]*Metaprogram_Plugin;
+    add_common_plugins(*plugins, script_opts);
     check_for_unnecessary_build: bool;
 
     if BUILD_IS_FOR_IDE {
@@ -332,10 +350,12 @@ log_build_result :: (output_name: string, output_type: type_of(Build_Options.out
         #if OS == .WINDOWS ext = ".exe";
     case .DYNAMIC_LIBRARY;
         ext = tprint(".%", DLL_EXTENSION);
+    case .NO_OUTPUT;
+        ext = "";
     case;
         exit_with_error(tprint("TODO: implement extension string for %", output_type));
     }
-    filename_on_disk := tprint("%/%%", OUTPUT_PATH, output_name, ext);
+    filename_on_disk := ifx output_type == .NO_OUTPUT then tprint("% (shader-only)", output_name) else tprint("%/%%", OUTPUT_PATH, output_name, ext);
 
     if #complete result == {
     case .skipped; log      ("No build required for %", filename_on_disk);
@@ -425,7 +445,14 @@ host_build_manifest_event :: (p: *Build_Manifest.Build_Manifest_Metaprogram_Plug
     }
 }
 
-add_app_plugins :: (plugins: *[..] *Metaprogram_Plugin, script_opts: Build_Script_Opts) {
+add_common_plugins :: (plugins: *[..] *Metaprogram_Plugin, script_opts: Build_Script_Opts) {
+    if script_opts.perf {
+        PR :: #import "Performance_Report";
+        array_add(plugins, PR.get_plugin());
+    }
+}
+
+add_app_plugins :: (plugins: *[..] *Metaprogram_Plugin, script_opts: Build_Script_Opts, shader_entry_ids_filter: string = "") {
     {
         // Notes globals in the game's dll so that we can reload them automatically when the dll is recompiled.
         Globals_Reload :: #import "Globals_Reload";
@@ -440,6 +467,7 @@ add_app_plugins :: (plugins: *[..] *Metaprogram_Plugin, script_opts: Build_Scrip
         JSL :: #import "Jai-Shader-Transpiler";
         plugin := JSL.get_plugin();
         plugin.output_shaders = true;
+        plugin.shader_entry_ids_filter = shader_entry_ids_filter;
         array_add(plugins, plugin);
     }
     if script_opts.codex {
@@ -454,6 +482,7 @@ add_app_plugins :: (plugins: *[..] *Metaprogram_Plugin, script_opts: Build_Scrip
 
 build_host :: (script_opts: Build_Script_Opts, include_app_plugins: bool = false, build_strings: []string = .[]) -> bool {
     plugins: [..] *Metaprogram_Plugin;
+    add_common_plugins(*plugins, script_opts);
     if include_app_plugins add_app_plugins(*plugins, script_opts);
     add_host_plugins(*plugins, script_opts);
 
@@ -476,6 +505,7 @@ build_app :: (script_opts: Build_Script_Opts, app_filename: string) -> bool {
 
     plugins: [..] *Metaprogram_Plugin;
     plugins.allocator = temp;
+    add_common_plugins(*plugins, script_opts);
     add_app_plugins(*plugins, script_opts);
 
     app_output_executable_name := String.path_strip_extension(String.path_filename(app_filename));
@@ -486,6 +516,20 @@ build_app :: (script_opts: Build_Script_Opts, app_filename: string) -> bool {
 
     return result != .failed;
 };
+
+build_shader_only :: (script_opts: Build_Script_Opts, app_filename: string) -> bool {
+    plugins: [..] *Metaprogram_Plugin;
+    plugins.allocator = temp;
+    add_common_plugins(*plugins, script_opts);
+    add_app_plugins(*plugins, script_opts, shader_entry_ids_filter=script_opts.shader_entry_ids);
+
+    app_name := String.path_strip_extension(String.path_filename(app_filename));
+    result := build_artifact(
+        workspace_name = tprint("Build shaders %", app_name),
+        .NO_OUTPUT, app_name, plugins, app_filename, OUTPUT_PATH, script_opts);
+
+    return result != .failed;
+}
 
 Build_Artifact_Result :: enum { success; skipped; failed; }
 

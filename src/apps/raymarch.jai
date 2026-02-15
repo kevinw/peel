@@ -3,6 +3,7 @@ WRITE_SHADER_OUTPUT :: true;
 #load "../SGPU_App_Common.jai";
 
 #import "Jai-Shader-Transpiler";
+SHR :: #import,file "../shader_hot_reload.jai";
 #load "../raymarch_shader.jai";
 #load "../readback_stats.jai";
 
@@ -11,12 +12,23 @@ gpu_arena: Gpu_Arena;
 raymarch_params_cpu: *Raymarch_Params;
 raymarch_params_gpu: Gpu_Ptr;
 raymarch_readback: Readback_Stats;
+raymarch_shader_reload: SHR.Shader_Hot_Reload;
+RAYMARCH_ENTRY_ID :: "pair|METAL|raymarch_vertex_main|raymarch_fragment_main";
 
 on_dll_init :: () {
     readback_stats_init(*raymarch_readback, "RAYMARCH", snapshot_default_w = 128, snapshot_default_h = 128);
     if readback_stats_needs_swapchain_readback(*raymarch_readback) {
         gpu_set_swapchain_framebuffer_only(false);
     }
+    hot_reload_enabled_by_default := true;
+    #if RELEASE hot_reload_enabled_by_default = false;
+    _ = SHR.shader_hot_reload_init_auto(*raymarch_shader_reload, "src/apps/raymarch.jai", poll_every_frames = 15, log_prefix = "RAYMARCH_SHADER_RELOAD", enabled_by_default = hot_reload_enabled_by_default);
+    SHR.shader_hot_reload_register_graphics_pipeline(*raymarch_shader_reload, RAYMARCH_ENTRY_ID, *graphics_pipeline, {
+        cull = .CW,
+        color_targets = .[
+            .{format = .B8G8R8A8_UNORM}
+        ],
+    });
 
     graphics_source := cast([]u8) get_transpiled(.METAL, raymarch_vertex_main, raymarch_fragment_main);
     assert(graphics_source.count > 0, "Transpilation failed for raymarch graphics shaders.");
@@ -85,6 +97,14 @@ tick :: () {
     gpu_submit_and_present(cmd_buff);
 
     frame_num := cast(s64) frame_count;
+    did_rebuild, swapped_all, rebuild_ok := SHR.shader_hot_reload_tick(*raymarch_shader_reload, frame_num);
+    sgpu_set_debug_status(SHR.shader_hot_reload_status_line(*raymarch_shader_reload));
+    if did_rebuild && !rebuild_ok {
+        log_error("RAYMARCH_SHADER_RELOAD build failed; keeping current runtime shaders.");
+    } else if did_rebuild && !swapped_all {
+        log_error("RAYMARCH_SHADER_RELOAD build succeeded but pipeline swap was partial; keeping remaining old pipelines.");
+    }
+
     if readback_stats_should_sample(*raymarch_readback, frame_num) {
         stats, ok := fb_collect_swapchain_framebuffer_stats(swapchain_image);
         if ok {

@@ -11,6 +11,7 @@ time: float64;
 frame_count: int;
 last_window_size: V2(u32);
 window: *void; // TODO
+sgpu_debug_status: string;
 
 #import "sgpu"()(SLANG_COMPILER=false);
 
@@ -75,6 +76,15 @@ gpu_begin_scoped_render_pass :: (cmd_buf: Gpu_Command_Buffer, desc: Gpu_Render_P
     `defer gpu_end_render_pass(cmd_buf);
 }
 
+sgpu_set_debug_status :: (status: string) {
+    if sgpu_debug_status == status return;
+    if sgpu_debug_status.count != 0 {
+        free(sgpu_debug_status);
+        sgpu_debug_status = "";
+    }
+    if status.count != 0 sgpu_debug_status = copy_string(status);
+}
+
 app_update :: (update_ctx: *App_Update_Ctx) {
     auto_release_temp();
 
@@ -88,8 +98,12 @@ app_update :: (update_ctx: *App_Update_Ctx) {
     last_time = time;
 
     #if !RELEASE {
-        if window && frame_count % (60 * 3) == 0 {
-            title := human_readable_bytes(current_memory_usage_bytes(),, temp);
+        if window && frame_count % 10 == 0 {
+            mem_text := human_readable_bytes(current_memory_usage_bytes(),, temp);
+            title := mem_text;
+            if sgpu_debug_status.count != 0 {
+                title = tprint("% | %", mem_text, sgpu_debug_status);
+            }
             set_window_title(window, title);
         }
     }
@@ -148,6 +162,10 @@ host_quit :: (quit_ctx: Quit_Ctx) {
     // @Perf probably not necessary in release builds.
     gpu_destroy_swapchain();
     gpu_shutdown();
+    if sgpu_debug_status.count != 0 {
+        free(sgpu_debug_status);
+        sgpu_debug_status = "";
+    }
 }
 
 max_frames: int = 0;

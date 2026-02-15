@@ -33,7 +33,7 @@ rm_plane_dist :: (p: Vector3) -> float {
 
 rm_scene_dist :: (p: Vector3, time: float) -> float {
     center := Vector3.{sin(time * 0.8) * 0.65, 0.22 + sin(time * 1.3) * 0.07, cos(time * 0.7) * 0.22};
-    sphere := rm_sphere_dist(p, center, 0.62);
+    sphere := rm_sphere_dist(p, center, 0.92);
     plane := rm_plane_dist(p);
     if sphere < plane return sphere;
     return plane;

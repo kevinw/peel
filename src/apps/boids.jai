@@ -4,6 +4,7 @@ NUM_INSTANCES :: BOIDS_COUNT;
 #load "../SGPU_App_Common.jai";
 
 #import "Jai-Shader-Transpiler";
+SHR :: #import,file "../shader_hot_reload.jai";
 #load "../boids_shader.jai";
 #load "../readback_stats.jai";
 
@@ -31,6 +32,9 @@ boids_control_ring_cpu: *[SGPU_FRAMES_IN_FLIGHT] Boids_Control;
 boids_control_ring_gpu: Gpu_Ptr;
 
 boids_readback: Readback_Stats;
+boids_shader_reload: SHR.Shader_Hot_Reload;
+BOIDS_GRAPHICS_ENTRY_ID :: "pair|METAL|boids_vertex_main|boids_frag_main";
+BOIDS_COMPUTE_ENTRY_ID  :: "single|METAL|compute|boids_step_compute";
 
 app_vec2_length :: (v: Vector2) -> float {
     return sqrt(v.x * v.x + v.y * v.y);
@@ -64,6 +68,18 @@ on_dll_init :: () {
 
     compute_pipeline = gpu_create_compute_pipeline(compute_source);
     assert(compute_pipeline != 0, "Compute pipeline creation failed.");
+
+    hot_reload_enabled_by_default := true;
+    #if RELEASE hot_reload_enabled_by_default = false;
+    _ = SHR.shader_hot_reload_init_auto(*boids_shader_reload, "src/apps/boids.jai", poll_every_frames = 15, log_prefix = "BOIDS_SHADER_RELOAD", enabled_by_default = hot_reload_enabled_by_default);
+    SHR.shader_hot_reload_register_graphics_pipeline(*boids_shader_reload, BOIDS_GRAPHICS_ENTRY_ID, *graphics_pipeline, {
+        cull = .CW,
+        color_targets = .[
+            .{format = .B8G8R8A8_UNORM}
+        ],
+        blend_state = *blend_state,
+    });
+    SHR.shader_hot_reload_register_compute_pipeline(*boids_shader_reload, BOIDS_COMPUTE_ENTRY_ID, *compute_pipeline);
 
     gpu_arena = gpu_make_arena(1024 * 1024, label = "boids arena");
 
@@ -197,6 +213,14 @@ tick :: () {
     gpu_submit_and_present(cmd_buff);
 
     frame_num := cast(s64) frame_count;
+    did_rebuild, swapped_all, rebuild_ok := SHR.shader_hot_reload_tick(*boids_shader_reload, frame_num);
+    sgpu_set_debug_status(SHR.shader_hot_reload_status_line(*boids_shader_reload));
+    if did_rebuild && !rebuild_ok {
+        log_error("BOIDS_SHADER_RELOAD build failed; keeping current runtime shaders.");
+    } else if did_rebuild && !swapped_all {
+        log_error("BOIDS_SHADER_RELOAD build succeeded but pipeline swap was partial.");
+    }
+
     if readback_stats_should_sample(*boids_readback, frame_num) {
         stats, ok := fb_collect_swapchain_framebuffer_stats(swapchain_image);
         if ok {
