@@ -25,3 +25,4 @@ dist/boids
 dist/boids.dylib
 dist/particles
 dist/particles.dylib
+dist/reaction_diffusion

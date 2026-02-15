@@ -4,7 +4,6 @@ APP_FILES :: string.[
     "particles.jai",
     "boids.jai",
     "reaction_diffusion.jai",
-    "hello.jai",
 ];
 
 active_app_filename :: () -> string {

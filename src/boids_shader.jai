@@ -10,6 +10,8 @@ BOIDS_SEPARATION_RADIUS :: 0.059;
 BOIDS_ALIGN_WEIGHT :: 0.9;
 BOIDS_COHESION_WEIGHT :: 0.45;
 BOIDS_SEPARATION_WEIGHT :: 1.4;
+BOIDS_CURSOR_AVOID_RADIUS :: 0.25;
+BOIDS_CURSOR_AVOID_WEIGHT :: 1.9;
 BOIDS_DT :: 1.0 / 60.0;
 
 boids_hash01 :: (i: u32, pos: Vector2) -> float {
@@ -162,6 +164,22 @@ boids_step_compute :: (using in: Boids_Compute_In, state: *Boid_State) {
     turn_impulse := boids_random_turn_impulse(i, pos, vel);
     accel.x += turn_impulse.x;
     accel.y += turn_impulse.y;
+
+    cursor_pos := state[BOIDS_CTRL_INDEX].vel;
+    cursor_delta := Vector2.{pos.x - cursor_pos.x, pos.y - cursor_pos.y};
+    cursor_dist2 := cursor_delta.x * cursor_delta.x + cursor_delta.y * cursor_delta.y;
+    cursor_radius2 := BOIDS_CURSOR_AVOID_RADIUS * BOIDS_CURSOR_AVOID_RADIUS;
+    if cursor_dist2 > 0.000001 && cursor_dist2 < cursor_radius2 {
+        cursor_dist := sqrt(cursor_dist2);
+        inv_cursor_dist := 1.0 / cursor_dist;
+        falloff := 1.0 - (cursor_dist / BOIDS_CURSOR_AVOID_RADIUS);
+        cursor_force := Vector2.{
+            cursor_delta.x * inv_cursor_dist * BOIDS_MAX_SPEED * falloff,
+            cursor_delta.y * inv_cursor_dist * BOIDS_MAX_SPEED * falloff,
+        };
+        accel.x += cursor_force.x * BOIDS_CURSOR_AVOID_WEIGHT;
+        accel.y += cursor_force.y * BOIDS_CURSOR_AVOID_WEIGHT;
+    }
 
     next_vel := Vector2.{vel.x + accel.x * BOIDS_DT, vel.y + accel.y * BOIDS_DT};
     next_vel_len := sqrt(next_vel.x * next_vel.x + next_vel.y * next_vel.y);

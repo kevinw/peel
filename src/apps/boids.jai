@@ -5,7 +5,7 @@ NUM_INSTANCES :: BOIDS_COUNT;
 
 #import "Jai-Shader-Transpiler";
 #load "../boids_shader.jai";
-#load "framebuffer_tools.jai";
+#load "../framebuffer_tools.jai";
 
 Draw_Data :: struct {
     vertex_params_gpu: Gpu_Ptr;
@@ -165,6 +165,18 @@ tick :: () {
     result, swapchain_image := gpu_swapchain_acquire();
     assert(result == .SUCCESS);
     if !swapchain_image return;
+
+    mx, my, mouse_ok := get_mouse_pointer_position(true);
+    _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
+    if mouse_ok && dims_ok && win_w > 0 && win_h > 0 {
+        nx := cast(float) mx / cast(float) win_w;
+        ny := cast(float) my / cast(float) win_h;
+        boid_state_storage_cpu.*[BOIDS_CTRL_INDEX].vel.x = (nx * 2.0 - 1.0) * BOIDS_VIEW_EXTENT;
+        boid_state_storage_cpu.*[BOIDS_CTRL_INDEX].vel.y = (ny * 2.0 - 1.0) * BOIDS_VIEW_EXTENT;
+    } else {
+        boid_state_storage_cpu.*[BOIDS_CTRL_INDEX].vel.x = 9999.0;
+        boid_state_storage_cpu.*[BOIDS_CTRL_INDEX].vel.y = 9999.0;
+    }
 
     main_queue := gpu_get_queue(.MAIN, 0);
     result=, cmd_buff := gpu_start_command_recording(main_queue);

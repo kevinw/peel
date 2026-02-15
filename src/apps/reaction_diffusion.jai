@@ -4,7 +4,7 @@ WRITE_SHADER_OUTPUT :: true;
 
 #import "Jai-Shader-Transpiler";
 #load "../reaction_diffusion_shader.jai";
-#load "rd_readback_tools.jai";
+#load "../rd_readback_tools.jai";
 
 Draw_Data :: struct {
     vertex_params_gpu: Gpu_Ptr;

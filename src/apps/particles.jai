@@ -5,7 +5,7 @@ NUM_INSTANCES :: SURPRISE_PARTICLE_COUNT;
 
 #import "Jai-Shader-Transpiler";
 #load "../surprise_shader.jai";
-#load "framebuffer_tools.jai";
+#load "../framebuffer_tools.jai";
 
 Draw_Data :: struct {
     vertex_params_gpu: Gpu_Ptr;
