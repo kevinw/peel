@@ -22,19 +22,19 @@ Raymarch_Fragment_In :: struct {
     uv: Vector2;
 }
 
-rm_sphere_dist :: (p: Vector3, c: Vector3, r: float) -> float {
+sphere_dist :: (p: Vector3, c: Vector3, r: float) -> float {
     q := Vector3.{p.x - c.x, p.y - c.y, p.z - c.z};
     return sqrt(q.x * q.x + q.y * q.y + q.z * q.z) - r;
 }
 
-rm_plane_dist :: (p: Vector3) -> float {
+plane_dist :: (p: Vector3) -> float {
     return p.y + 0.65;
 }
 
 rm_scene_dist :: (p: Vector3, time: float) -> float {
     center := Vector3.{sin(time * 0.8) * 0.65, 0.22 + sin(time * 1.3) * 0.07, cos(time * 0.7) * 0.22};
-    sphere := rm_sphere_dist(p, center, 0.92);
-    plane := rm_plane_dist(p);
+    sphere := sphere_dist(p, center, 0.93);
+    plane := plane_dist(p);
     if sphere < plane return sphere;
     return plane;
 }
@@ -128,8 +128,8 @@ raymarch_fragment_main :: (using in: Raymarch_Fragment_In, params: *Raymarch_Par
         spec = spec * spec * spec * 0.8;
 
         sphere_center := Vector3.{sin(time * 0.8) * 0.65, 0.22 + sin(time * 1.3) * 0.07, cos(time * 0.7) * 0.22};
-        ds := rm_sphere_dist(p, sphere_center, 0.62);
-        dp := rm_plane_dist(p);
+        ds := sphere_dist(p, sphere_center, 0.62);
+        dp := plane_dist(p);
         is_floor := dp < ds;
 
         base := Vector3.{0.42, 0.80, 1.00};

@@ -197,9 +197,15 @@ shader_reload_watcher_init_auto :: (watcher: *Shader_Reload_Watcher, app_source_
 }
 
 shader_reload_watcher_poll_and_rebuild :: (watcher: *Shader_Reload_Watcher, frame_num: s64) -> (bool, bool) {
-    if !watcher.enabled || !watcher.manifest.loaded return false, true;
-    if frame_num <= 0 return false, true;
-    if watcher.last_poll_frame >= 0 && frame_num - watcher.last_poll_frame < watcher.poll_every_frames return false, true;
+    changed_entry_ids_csv, has_changes := shader_reload_watcher_poll_changed_entry_ids_csv(watcher, frame_num);
+    if !has_changes return false, true;
+    return true, shader_reload_watcher_rebuild_entry_ids(watcher, changed_entry_ids_csv);
+}
+
+shader_reload_watcher_poll_changed_entry_ids_csv :: (watcher: *Shader_Reload_Watcher, frame_num: s64) -> (string, bool) {
+    if !watcher.enabled || !watcher.manifest.loaded return "", false;
+    if frame_num <= 0 return "", false;
+    if watcher.last_poll_frame >= 0 && frame_num - watcher.last_poll_frame < watcher.poll_every_frames return "", false;
     watcher.last_poll_frame = frame_num;
 
     changed_paths: [..] string;
@@ -221,11 +227,29 @@ shader_reload_watcher_poll_and_rebuild :: (watcher: *Shader_Reload_Watcher, fram
         }
     }
 
-    if changed_paths.count == 0 return false, true;
+    if changed_paths.count == 0 return "", false;
 
     changed_entry_ids_csv := shader_reload_manifest_collect_changed_entry_ids_csv(*watcher.manifest, changed_paths);
-    if changed_entry_ids_csv.count == 0 return false, true;
+    if changed_entry_ids_csv.count == 0 return "", false;
     watcher.last_changed_entry_ids_csv = changed_entry_ids_csv;
+    return changed_entry_ids_csv, true;
+}
+
+shader_reload_watcher_rebuild_entry_ids :: (watcher: *Shader_Reload_Watcher, changed_entry_ids_csv: string, timeout_ms: s32 = 120000) -> bool {
+    if changed_entry_ids_csv.count == 0 return true;
+
+    ok := shader_reload_build_entry_ids(watcher.app_source_file, changed_entry_ids_csv, timeout_ms);
+    watcher.last_build_ok = ok;
+    if !ok return false;
+
+    _ = shader_reload_manifest_load_auto(*watcher.manifest);
+    shader_reload_watcher_refresh_dependency_baseline(watcher);
+    log("SHADER_RELOAD build succeeded app=% ids=%", watcher.app_source_file, changed_entry_ids_csv);
+    return true;
+}
+
+shader_reload_build_entry_ids :: (app_source_file: string, changed_entry_ids_csv: string, timeout_ms: s32 = 120000) -> bool {
+    if app_source_file.count == 0 || changed_entry_ids_csv.count == 0 return false;
 
     build_working_dir := shader_reload_manifest_find_build_working_directory();
     process_result, stdout, stderr, timeout := Process.run_command(
@@ -235,30 +259,28 @@ shader_reload_watcher_poll_and_rebuild :: (watcher: *Shader_Reload_Watcher, fram
         "-shader_only",
         "-shader_entry_ids",
         changed_entry_ids_csv,
-        watcher.app_source_file,
+        app_source_file,
         working_directory = build_working_dir,
         capture_and_return_output = true,
-        timeout_ms = 120000);
+        timeout_ms = timeout_ms);
 
     if timeout {
-        watcher.last_build_ok = false;
-        log_error("SHADER_RELOAD build timed out app=% ids=%", watcher.app_source_file, changed_entry_ids_csv);
-        return true, false;
+        log_error("SHADER_RELOAD build timed out app=% ids=%", app_source_file, changed_entry_ids_csv);
+        return false;
     }
 
     if process_result.type != .EXITED || process_result.exit_code != 0 {
-        watcher.last_build_ok = false;
-        if stdout.count > 0 log_error("SHADER_RELOAD stdout:\n%", stdout);
-        if stderr.count > 0 log_error("SHADER_RELOAD stderr:\n%", stderr);
-        log_error("SHADER_RELOAD build failed app=% ids=% exit=%", watcher.app_source_file, changed_entry_ids_csv, process_result.exit_code);
-        return true, false;
+        if stdout.count > 0 write_strings("SHADER_RELOAD stdout:\n", stdout, "\n", to_standard_error = true);
+        if stderr.count > 0 write_strings("SHADER_RELOAD stderr:\n", stderr, "\n", to_standard_error = true);
+        log_error("SHADER_RELOAD build failed app=% ids=%", app_source_file, changed_entry_ids_csv);
+        return false;
     }
 
-    watcher.last_build_ok = true;
-    _ = shader_reload_manifest_load_auto(*watcher.manifest);
+    return true;
+}
+
+shader_reload_watcher_refresh_baseline :: (watcher: *Shader_Reload_Watcher) {
     shader_reload_watcher_refresh_dependency_baseline(watcher);
-    log("SHADER_RELOAD build succeeded app=% ids=%", watcher.app_source_file, changed_entry_ids_csv);
-    return true, true;
 }
 
 #scope_file

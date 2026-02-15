@@ -2,16 +2,30 @@ SRM :: #import,file "shader_reload_manifest.jai";
 
 Shader_Hot_Reload :: struct {
     enabled: bool;
+    use_background_thread: bool;
     log_prefix: string;
     watcher: SRM.Shader_Reload_Watcher;
     graphics_targets: [..] Shader_Hot_Reload_Graphics_Target;
     compute_targets: [..] Shader_Hot_Reload_Compute_Target;
     last_event_frame: s64;
     last_result: Shader_Hot_Reload_Last_Result;
+    worker_started: bool;
+    worker_thread: TH.Thread;
+    worker_wake: TH.Semaphore;
+    worker_mutex: TH.Mutex;
+    worker_should_exit: bool;
+    worker_has_pending: bool;
+    worker_pending_ids_csv: string;
+    worker_build_in_flight: bool;
+    worker_has_completed: bool;
+    worker_completed_ok: bool;
+    worker_completed_ids_csv: string;
 }
 
 Shader_Hot_Reload_Last_Result :: enum {
     NONE;
+    BUILD_QUEUED;
+    BUILD_RUNNING;
     BUILD_FAILED;
     SWAP_PARTIAL;
     SWAP_OK;
@@ -28,12 +42,16 @@ Shader_Hot_Reload_Compute_Target :: struct {
     pipeline: *Gpu_Pipeline;
 }
 
-shader_hot_reload_init_auto :: (reload: *Shader_Hot_Reload, app_source_file: string, poll_every_frames: s64 = 15, log_prefix: string = "SHADER_RELOAD", enabled_by_default: bool = false) -> bool {
+shader_hot_reload_init_auto :: (reload: *Shader_Hot_Reload, app_source_file: string, poll_every_frames: s64 = 15, log_prefix: string = "SHADER_RELOAD", enabled_by_default: bool = false, use_background_thread: bool = true) -> bool {
     reload.* = .{};
     reload.log_prefix = copy_string(log_prefix);
+    reload.use_background_thread = use_background_thread;
     reload.last_event_frame = -1;
     reload.last_result = .NONE;
     reload.enabled = SRM.shader_reload_watcher_init_auto(*reload.watcher, app_source_file, poll_every_frames, enabled_by_default);
+    if reload.enabled && reload.use_background_thread {
+        shader_hot_reload_start_worker_thread(reload);
+    }
     return reload.enabled;
 }
 
@@ -57,6 +75,34 @@ shader_hot_reload_register_compute_pipeline :: (reload: *Shader_Hot_Reload, entr
 shader_hot_reload_tick :: (reload: *Shader_Hot_Reload, frame_num: s64) -> (did_rebuild: bool, swapped_all: bool, build_ok: bool) {
     if !reload.enabled return false, true, true;
 
+    if reload.worker_started {
+        changed_ids_csv, has_changes := SRM.shader_reload_watcher_poll_changed_entry_ids_csv(*reload.watcher, frame_num);
+        if has_changes {
+            shader_hot_reload_queue_background_build(reload, changed_ids_csv);
+        }
+
+        completed_ok: bool;
+        completed_ids_csv: string;
+        has_completed := shader_hot_reload_take_background_completion(reload, *completed_ok, *completed_ids_csv);
+        if !has_completed return false, true, true;
+
+        reload.last_event_frame = frame_num;
+        shader_hot_reload_assign_string(*reload.watcher.last_changed_entry_ids_csv, completed_ids_csv);
+        if completed_ids_csv.count != 0 free(completed_ids_csv);
+        if !completed_ok {
+            reload.last_result = .BUILD_FAILED;
+            return true, false, false;
+        }
+
+        _ = SRM.shader_reload_manifest_load_auto(*reload.watcher.manifest);
+        SRM.shader_reload_watcher_refresh_baseline(*reload.watcher);
+
+        apply_ok := shader_hot_reload_apply_registered_pipelines(reload);
+        if apply_ok reload.last_result = .SWAP_OK;
+        else reload.last_result = .SWAP_PARTIAL;
+        return true, apply_ok, true;
+    }
+
     did_rebuild, build_ok := SRM.shader_reload_watcher_poll_and_rebuild(*reload.watcher, frame_num);
     if !did_rebuild return false, true, true;
     reload.last_event_frame = frame_num;
@@ -64,11 +110,10 @@ shader_hot_reload_tick :: (reload: *Shader_Hot_Reload, frame_num: s64) -> (did_r
         reload.last_result = .BUILD_FAILED;
         return true, false, false;
     }
-
     apply_ok := shader_hot_reload_apply_registered_pipelines(reload);
     if apply_ok reload.last_result = .SWAP_OK;
     else reload.last_result = .SWAP_PARTIAL;
-    return true, apply_ok, build_ok;
+    return true, apply_ok, true;
 }
 
 shader_hot_reload_status_line :: (reload: *Shader_Hot_Reload, max_ids_chars: s64 = 72) -> string {
@@ -82,7 +127,9 @@ shader_hot_reload_status_line :: (reload: *Shader_Hot_Reload, max_ids_chars: s64
     }
 
     result_text := "idle";
-    if reload.last_result == .BUILD_FAILED result_text = "build_failed";
+    if reload.last_result == .BUILD_QUEUED result_text = "queued";
+    else if reload.last_result == .BUILD_RUNNING result_text = "building";
+    else if reload.last_result == .BUILD_FAILED result_text = "build_failed";
     else if reload.last_result == .SWAP_PARTIAL result_text = "swap_partial";
     else if reload.last_result == .SWAP_OK result_text = "ok";
 
@@ -168,6 +215,95 @@ shader_hot_reload_apply_registered_pipelines :: (reload: *Shader_Hot_Reload) -> 
     return ok;
 }
 
+shader_hot_reload_start_worker_thread :: (reload: *Shader_Hot_Reload) {
+    TH.init(*reload.worker_wake, 0);
+    TH.init(*reload.worker_mutex, "shader_hot_reload");
+    ok := TH.thread_init(*reload.worker_thread, shader_hot_reload_worker_proc);
+    if !ok {
+        log_error("% failed to start worker thread; using synchronous reload path.", reload.log_prefix);
+        reload.worker_started = false;
+        reload.use_background_thread = false;
+        return;
+    }
+    reload.worker_thread.data = reload;
+    TH.thread_start(*reload.worker_thread);
+    reload.worker_started = true;
+}
+
+shader_hot_reload_queue_background_build :: (reload: *Shader_Hot_Reload, changed_ids_csv: string) {
+    if !reload.worker_started return;
+    TH.lock(*reload.worker_mutex);
+    defer TH.unlock(*reload.worker_mutex);
+
+    if reload.worker_build_in_flight {
+        reload.last_result = .BUILD_RUNNING;
+    } else {
+        reload.last_result = .BUILD_QUEUED;
+    }
+    shader_hot_reload_assign_string(*reload.worker_pending_ids_csv, changed_ids_csv);
+    reload.worker_has_pending = true;
+    TH.signal(*reload.worker_wake);
+}
+
+shader_hot_reload_take_background_completion :: (reload: *Shader_Hot_Reload, completed_ok: *bool, completed_ids_csv: *string) -> bool {
+    if !reload.worker_started return false;
+    TH.lock(*reload.worker_mutex);
+    defer TH.unlock(*reload.worker_mutex);
+
+    if !reload.worker_has_completed return false;
+    reload.worker_has_completed = false;
+    completed_ok.* = reload.worker_completed_ok;
+    completed_ids_csv.* = reload.worker_completed_ids_csv;
+    reload.worker_completed_ids_csv = "";
+    return true;
+}
+
+shader_hot_reload_worker_proc :: (thread: *TH.Thread) -> s64 {
+    reload := cast(*Shader_Hot_Reload) thread.data;
+    if !reload return 0;
+
+    while true {
+        _ = TH.wait_for(*reload.worker_wake);
+
+        ids_csv: string;
+        TH.lock(*reload.worker_mutex);
+        if reload.worker_should_exit {
+            TH.unlock(*reload.worker_mutex);
+            break;
+        }
+        if !reload.worker_has_pending {
+            TH.unlock(*reload.worker_mutex);
+            continue;
+        }
+        ids_csv = reload.worker_pending_ids_csv;
+        reload.worker_pending_ids_csv = "";
+        reload.worker_has_pending = false;
+        reload.worker_build_in_flight = true;
+        TH.unlock(*reload.worker_mutex);
+
+        build_ok := SRM.shader_reload_build_entry_ids(reload.watcher.app_source_file, ids_csv);
+
+        TH.lock(*reload.worker_mutex);
+        reload.worker_build_in_flight = false;
+        reload.worker_completed_ok = build_ok;
+        shader_hot_reload_assign_string(*reload.worker_completed_ids_csv, ids_csv);
+        reload.worker_has_completed = true;
+        TH.unlock(*reload.worker_mutex);
+        if ids_csv.count != 0 free(ids_csv);
+    }
+
+    return 0;
+}
+
+shader_hot_reload_assign_string :: (dst: *string, src: string) {
+    if dst.*.count != 0 {
+        free(dst.*);
+        dst.* = "";
+    }
+    if src.count != 0 dst.* = copy_string(src);
+}
+
 #import "Basic";
 #import "sgpu";
 File :: #import "File";
+TH :: #import "Thread";
