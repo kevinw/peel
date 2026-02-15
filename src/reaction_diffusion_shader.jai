@@ -1,8 +1,8 @@
 #import "Jai-Shader-Transpiler";
 #import "Math";
 
-RD_WIDTH  :: 256;
-RD_HEIGHT :: 256;
+RD_WIDTH  :: 512;
+RD_HEIGHT :: 512;
 RD_CELL_COUNT :: RD_WIDTH * RD_HEIGHT;
 
 RD_DT      :: 0.5;

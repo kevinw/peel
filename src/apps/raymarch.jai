@@ -1,0 +1,103 @@
+WRITE_SHADER_OUTPUT :: true;
+
+#load "../SGPU_App_Common.jai";
+
+#import "Jai-Shader-Transpiler";
+#load "../raymarch_shader.jai";
+#load "../readback_stats.jai";
+
+graphics_pipeline: Gpu_Pipeline;
+gpu_arena: Gpu_Arena;
+raymarch_params_cpu: *Raymarch_Params;
+raymarch_params_gpu: Gpu_Ptr;
+raymarch_readback: Readback_Stats;
+
+on_dll_init :: () {
+    readback_stats_init(*raymarch_readback, "RAYMARCH", snapshot_default_w = 128, snapshot_default_h = 128);
+    if readback_stats_needs_swapchain_readback(*raymarch_readback) {
+        gpu_set_swapchain_framebuffer_only(false);
+    }
+
+    graphics_source := cast([]u8) get_transpiled(.METAL, raymarch_vertex_main, raymarch_fragment_main);
+    assert(graphics_source.count > 0, "Transpilation failed for raymarch graphics shaders.");
+
+    graphics_pipeline = gpu_create_graphics_pipeline(graphics_source, {
+        cull = .CW,
+        color_targets = .[
+            .{format = .B8G8R8A8_UNORM}
+        ],
+    });
+    assert(graphics_pipeline != 0, "Raymarch graphics pipeline creation failed.");
+
+    gpu_arena = gpu_make_arena(64 * 1024, label = "raymarch arena");
+    raymarch_params_cpu, raymarch_params_gpu = gpu_arena_alloc(*gpu_arena, Raymarch_Params);
+    raymarch_params_cpu.* = .{
+        time = 0.0,
+        resolution = .{1280.0, 720.0},
+        mouse_uv = .{0.5, 0.5},
+        _pad = 0.0,
+    };
+
+    gpu_commit_residency();
+} @on_dll_init
+
+tick :: () {
+    result, swapchain_image := gpu_swapchain_acquire();
+    assert(result == .SUCCESS);
+    if !swapchain_image return;
+
+    _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
+    mx, my, mouse_ok := get_mouse_pointer_position(true);
+    if dims_ok && win_w > 0 && win_h > 0 {
+        raymarch_params_cpu.resolution = .{cast(float) win_w, cast(float) win_h};
+    }
+    if mouse_ok && dims_ok && win_w > 0 && win_h > 0 {
+        u := cast(float) mx / cast(float) win_w;
+        v := cast(float) my / cast(float) win_h;
+        if u < 0.0 u = 0.0;
+        if u > 1.0 u = 1.0;
+        if v < 0.0 v = 0.0;
+        if v > 1.0 v = 1.0;
+        raymarch_params_cpu.mouse_uv = .{u, v};
+    }
+    raymarch_params_cpu.time = cast(float) frame_count * (1.0 / 60.0);
+
+    main_queue := gpu_get_queue(.MAIN, 0);
+    result=, cmd_buff := gpu_start_command_recording(main_queue);
+    assert(result == .SUCCESS);
+
+    gpu_begin_scoped_render_pass(cmd_buff, {
+        color_targets = .[
+            {
+                view = swapchain_image,
+                load_op = .CLEAR,
+                store_op = .STORE,
+                clear_color._float = .[0.02, 0.02, 0.03, 1.0],
+            }
+        ]
+    });
+    gpu_set_depth_stencil_state(cmd_buff, {depth_test = .ALWAYS, depth_mode = .NONE,});
+    gpu_set_pipeline(cmd_buff, graphics_pipeline);
+
+    draw_result := gpu_draw_instanced(cmd_buff, 0, raymarch_params_gpu, 3, 1);
+    assert(draw_result == .SUCCESS, tprint("Raymarch draw failed: %", draw_result));
+
+    gpu_submit_and_present(cmd_buff);
+
+    frame_num := cast(s64) frame_count;
+    if readback_stats_should_sample(*raymarch_readback, frame_num) {
+        stats, ok := fb_collect_swapchain_framebuffer_stats(swapchain_image);
+        if ok {
+            readback_stats_log_sample(*raymarch_readback, "RAYMARCH", frame_num, stats);
+            readback_stats_maybe_dump_snapshot(*raymarch_readback, swapchain_image, frame_num, "raymarch_snapshot", "RAYMARCH");
+        }
+        if readback_stats_advance_sample(*raymarch_readback) {
+            log("RAYMARCH_FRAMEBUFFER_STATS completed % samples; quitting.", raymarch_readback.stats_max_samples);
+            app_quit_requested = true;
+        }
+    }
+} @on_tick
+
+#scope_file
+#import "Window_Creation";
+#import "Math";
