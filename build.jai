@@ -43,7 +43,12 @@ PLATFORM_DIR :: #run get_platform_dir(OS); // win, macos, linux
     apps_to_build: [..]string;
     {
         array_add(*apps_to_build, ..free_args);
-        if apps_to_build.count == 0 exit_with_error("Error: You must specify an app to build, like \"jai build.jai - app_name\"");
+        if apps_to_build.count == 0 {
+            log("Building all apps in src/app_list.jai's APP_FILES: (%)", String.join(..APP_FILES, separator=", "));
+            for APP_FILES {
+                array_add(*apps_to_build, tprint("src/apps/%", it));
+            }
+        }
         for apps_to_build {
             if !file_exists(it) {
                 exit_with_error(tprint("Error: Specified app file \"%\" does not exist", it));
