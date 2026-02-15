@@ -235,7 +235,7 @@ write_srcdeps_output :: (using p: *Build_Manifest_Metaprogram_Plugin, build_opti
     if !wrote_manifest {
         log_error("Error writing manifest file to '%'", manifest_filename);
     } else {
-        log("Wrote manifest '%'", manifest_filename);
+        if verbose log("Wrote manifest '%'", manifest_filename);
     }
 }
 

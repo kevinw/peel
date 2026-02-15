@@ -55,13 +55,16 @@ app_vec2_normalize_or_zero :: (v: Vector2) -> Vector2 {
 
 on_dll_init :: () {
     cmdline_args := get_command_line_arguments();
-    defer array_free(cmdline_args);
     for cmdline_args {
         if it == "-test_readback" || it == "--test_readback" || it == "--test-readback" {
             boids_test_readback = true;
             break;
+        } else if it_index > 0 { // first arg is the exe
+            log_error("Unknown command line argument: %", it);
+            exit(1);
         }
     }
+
     if fb_parse_env_int("PEEL_BOIDS_TEST_READBACK") > 0 boids_test_readback = true;
     boids_stats_every_frames = fb_parse_env_int("PEEL_BOIDS_STATS_EVERY");
     boids_stats_max_samples = fb_parse_env_int("PEEL_BOIDS_STATS_MAX");

@@ -2,10 +2,16 @@
 
 Minimal games and graphics prototyping framework built on SGPU.
 
-To build:
+To build an app:
 
 ```
-jai -quiet build.jai - -norun
+jai build.jai - src/apps/<app_name>.jai
+```
+
+To build and run an app with args in src/apps/<app_name>.jai:
+
+```
+jai build.jai - src/apps/<app_name>.jai -run -run_args "-runarg1 -runarg2"
 ```
 
 Important test runners in our dependency Jai-Shader-Transpiler:

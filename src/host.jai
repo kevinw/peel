@@ -13,6 +13,8 @@ Note: this host doesn't even open a window, or initialize a graphics API.
 
 */
 
+#load "app_list.jai";
+
 main :: () {
     start := seconds_since_init();
 
@@ -85,10 +87,6 @@ main :: () {
                     next_is_screenshot_filename = true;
                 case "--max-frames";
                     next_is_max_frames = true;
-                case;
-                    if it_index > 0 { // zero is the host exe itself
-                        log_error("Unhandled argument: %", it);
-                    }
             }
         }
     }
@@ -96,7 +94,9 @@ main :: () {
     #if !SINGLE_BINARY {
         // Decide which app DLL to load.
         if !library_filename {
-            library_filename = find_newest_app_dll();
+            first_app_jai := active_app_filename();
+            log("Because no --app was specified, using the first app in APP_LIST: %", first_app_jai);
+            library_filename = tprint("%.%", String.path_filename(first_app_jai), DLL_EXTENSION);
         }
 
         if !library_filename {

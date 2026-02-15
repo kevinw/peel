@@ -1,7 +1,7 @@
 #import "Jai-Shader-Transpiler";
 #import "Math";
 
-SURPRISE_PARTICLE_COUNT :: 12000;
+SURPRISE_PARTICLE_COUNT :: 100;
 
 UVector3 :: struct {
     x, y, z: u32;
