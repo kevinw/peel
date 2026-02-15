@@ -23,6 +23,18 @@ fb_parse_env_int :: (name: string, default: s64 = 0) -> s64 {
     return cast(s64) parsed;
 }
 
+fb_try_parse_env_int :: (name: string) -> (s64, bool) {
+    value_c := getenv(temp_c_string(name));
+    if !value_c return 0, false;
+    value_str := to_string(value_c, c_style_strlen(value_c));
+    parsed, ok, _ := String.string_to_int(value_str);
+    if !ok {
+        log_error("Invalid %='%'. Expected integer.", name, value_str);
+        return 0, false;
+    }
+    return cast(s64) parsed, true;
+}
+
 fb_collect_swapchain_framebuffer_stats :: (view: Gpu_Texture_View) -> (FB_Framebuffer_Stats, bool) {
     stats: FB_Framebuffer_Stats;
     width, height, size_ok := gpu_texture_view_size(view);

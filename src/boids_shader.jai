@@ -42,6 +42,17 @@ Boid_State :: struct {
     vel: Vector2;
 }
 
+Boids_Control :: struct {
+    cursor: Vector2;
+    use_b_as_src: u32;
+    _pad: u32;
+}
+
+Boids_Compute_Params :: struct {
+    state: *Boid_State;
+    control: *Boids_Control;
+}
+
 Boids_Compute_In :: struct {
     thread_id: UVector3; @thread_position_in_grid
 }
@@ -50,13 +61,11 @@ UVector3 :: struct {
     x, y, z: u32;
 }
 
-BOIDS_CTRL_INDEX :: BOIDS_COUNT * 2;
-
-boids_step_compute :: (using in: Boids_Compute_In, state: *Boid_State) {
+boids_step_compute :: (using in: Boids_Compute_In, data: *Boids_Compute_Params) {
     i := thread_id.x;
     if i >= BOIDS_COUNT return;
 
-    use_b_as_src := state[BOIDS_CTRL_INDEX].pos.x > 0.5;
+    use_b_as_src := data.control[0].use_b_as_src != 0;
     src_offset: u32 = 0;
     dst_offset: u32 = cast(u32) BOIDS_COUNT;
     if use_b_as_src {
@@ -64,8 +73,8 @@ boids_step_compute :: (using in: Boids_Compute_In, state: *Boid_State) {
         dst_offset = 0;
     }
 
-    pos := state[src_offset + i].pos;
-    vel := state[src_offset + i].vel;
+    pos := data.state[src_offset + i].pos;
+    vel := data.state[src_offset + i].vel;
 
     perception2 := BOIDS_PERCEPTION_RADIUS * BOIDS_PERCEPTION_RADIUS;
     separation2 := BOIDS_SEPARATION_RADIUS * BOIDS_SEPARATION_RADIUS;
@@ -82,8 +91,8 @@ boids_step_compute :: (using in: Boids_Compute_In, state: *Boid_State) {
             continue;
         }
 
-        other_pos_x := state[src_offset + j].pos.x;
-        other_pos_y := state[src_offset + j].pos.y;
+        other_pos_x := data.state[src_offset + j].pos.x;
+        other_pos_y := data.state[src_offset + j].pos.y;
         delta := Vector2.{other_pos_x - pos.x, other_pos_y - pos.y};
         dist2 := delta.x * delta.x + delta.y * delta.y;
         if dist2 > perception2 {
@@ -92,8 +101,8 @@ boids_step_compute :: (using in: Boids_Compute_In, state: *Boid_State) {
         }
 
         neighbors += 1;
-        align_sum.x += state[src_offset + j].vel.x;
-        align_sum.y += state[src_offset + j].vel.y;
+        align_sum.x += data.state[src_offset + j].vel.x;
+        align_sum.y += data.state[src_offset + j].vel.y;
         cohesion_sum.x += other_pos_x;
         cohesion_sum.y += other_pos_y;
 
@@ -165,7 +174,7 @@ boids_step_compute :: (using in: Boids_Compute_In, state: *Boid_State) {
     accel.x += turn_impulse.x;
     accel.y += turn_impulse.y;
 
-    cursor_pos := state[BOIDS_CTRL_INDEX].vel;
+    cursor_pos := data.control[0].cursor;
     cursor_delta := Vector2.{pos.x - cursor_pos.x, pos.y - cursor_pos.y};
     cursor_dist2 := cursor_delta.x * cursor_delta.x + cursor_delta.y * cursor_delta.y;
     cursor_radius2 := BOIDS_CURSOR_AVOID_RADIUS * BOIDS_CURSOR_AVOID_RADIUS;
@@ -199,16 +208,9 @@ boids_step_compute :: (using in: Boids_Compute_In, state: *Boid_State) {
     if next_pos.y < -BOIDS_VIEW_EXTENT next_pos.y += BOIDS_VIEW_EXTENT * 2.0;
     if next_pos.y > BOIDS_VIEW_EXTENT next_pos.y -= BOIDS_VIEW_EXTENT * 2.0;
 
-    state[dst_offset + i].pos = next_pos;
-    state[dst_offset + i].vel = next_vel;
+    data.state[dst_offset + i].pos = next_pos;
+    data.state[dst_offset + i].vel = next_vel;
 
-    if i == 0 {
-        if use_b_as_src {
-            state[BOIDS_CTRL_INDEX].pos.x = 0.0;
-        } else {
-            state[BOIDS_CTRL_INDEX].pos.x = 1.0;
-        }
-    }
 } @compute_shader
 
 boids_vertex_main :: (using in: Vertex_In, data: *All_Params) -> Vertex_Out {

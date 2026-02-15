@@ -5,7 +5,7 @@ NUM_INSTANCES :: BOIDS_COUNT;
 
 #import "Jai-Shader-Transpiler";
 #load "../boids_shader.jai";
-#load "../framebuffer_tools.jai";
+#load "../readback_stats.jai";
 
 Draw_Data :: struct {
     vertex_params_gpu: Gpu_Ptr;
@@ -20,27 +20,17 @@ compute_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
 
-boid_state_storage_cpu: *[NUM_INSTANCES * 2 + 1] Boid_State;
+boid_state_storage_cpu: *[NUM_INSTANCES * 2] Boid_State;
 boid_state_storage_gpu: Gpu_Ptr;
-boid_state_a_cpu: *[NUM_INSTANCES] Boid_State;
-boid_state_b_cpu: *[NUM_INSTANCES] Boid_State;
-boid_state_a_gpu: Gpu_Ptr;
-boid_state_b_gpu: Gpu_Ptr;
+boid_state: AB_Buffer([NUM_INSTANCES] Boid_State);
 boid_tints_cpu: *[NUM_INSTANCES] Vector4;
 boid_tints_gpu: Gpu_Ptr;
-src_is_a := true;
 vertex_params_a_gpu: Gpu_Ptr;
 vertex_params_b_gpu: Gpu_Ptr;
+boids_control_ring_cpu: *[SGPU_FRAMES_IN_FLIGHT] Boids_Control;
+boids_control_ring_gpu: Gpu_Ptr;
 
-boids_test_readback := false;
-boids_did_readback := false;
-boids_stats_mode := false;
-boids_stats_every_frames: s64 = 0;
-boids_stats_max_samples: s64 = 0;
-boids_stats_samples_done: s64 = 0;
-boids_snapshot_mode := false;
-boids_snapshot_width: s64 = 96;
-boids_snapshot_height: s64 = 96;
+boids_readback: Readback_Stats;
 
 app_vec2_length :: (v: Vector2) -> float {
     return sqrt(v.x * v.x + v.y * v.y);
@@ -54,19 +44,8 @@ app_vec2_normalize_or_zero :: (v: Vector2) -> Vector2 {
 }
 
 on_dll_init :: () {
-    if fb_parse_env_int("PEEL_BOIDS_TEST_READBACK") > 0 boids_test_readback = true;
-    boids_stats_every_frames = fb_parse_env_int("PEEL_BOIDS_STATS_EVERY");
-    boids_stats_max_samples = fb_parse_env_int("PEEL_BOIDS_STATS_MAX");
-    if boids_stats_every_frames > 0 && boids_stats_max_samples > 0 {
-        boids_stats_mode = true;
-    } else if boids_stats_every_frames > 0 || boids_stats_max_samples > 0 {
-        log_error("Boids stats mode requires both PEEL_BOIDS_STATS_EVERY (>0) and PEEL_BOIDS_STATS_MAX (>0).");
-    }
-    if fb_parse_env_int("PEEL_BOIDS_SNAPSHOT") > 0 boids_snapshot_mode = true;
-    boids_snapshot_width = max(1, fb_parse_env_int("PEEL_BOIDS_SNAPSHOT_W", boids_snapshot_width));
-    boids_snapshot_height = max(1, fb_parse_env_int("PEEL_BOIDS_SNAPSHOT_H", boids_snapshot_height));
-
-    if boids_test_readback || boids_stats_mode gpu_set_swapchain_framebuffer_only(false);
+    readback_stats_init(*boids_readback, "BOIDS", snapshot_default_w = 96, snapshot_default_h = 96);
+    if readback_stats_needs_swapchain_readback(*boids_readback) gpu_set_swapchain_framebuffer_only(false);
 
     graphics_source := cast([]u8) get_transpiled(.METAL, boids_vertex_main, boids_frag_main);
     assert(graphics_source.count > 0);
@@ -95,11 +74,11 @@ on_dll_init :: () {
         .{-0.014, -0.011},
     ];
 
-    state_storage, state_storage_gpu := gpu_arena_alloc(*gpu_arena, [NUM_INSTANCES * 2 + 1] Boid_State);
+    state_storage, state_storage_gpu := gpu_arena_alloc(*gpu_arena, [NUM_INSTANCES * 2] Boid_State);
     boid_state_storage_cpu = state_storage;
     boid_state_storage_gpu = state_storage_gpu;
-    boid_state_a_cpu = cast(*[NUM_INSTANCES] Boid_State) boid_state_storage_cpu;
-    boid_state_b_cpu = cast(*[NUM_INSTANCES] Boid_State) (cast(*Boid_State) boid_state_storage_cpu + NUM_INSTANCES);
+    boid_state_a_cpu := cast(*[NUM_INSTANCES] Boid_State) boid_state_storage_cpu;
+    boid_state_b_cpu := cast(*[NUM_INSTANCES] Boid_State) (cast(*Boid_State) boid_state_storage_cpu + NUM_INSTANCES);
     tints, tints_gpu := gpu_arena_alloc(*gpu_arena, [NUM_INSTANCES] Vector4);
     boid_tints_cpu = tints;
     boid_tints_gpu = tints_gpu;
@@ -125,23 +104,29 @@ on_dll_init :: () {
         boid_tints_cpu.*[it] = palette[palette_idx];
     }
     boid_state_b_cpu.* = boid_state_a_cpu.*;
-    boid_state_storage_cpu.*[BOIDS_CTRL_INDEX].pos.x = 0.0;
-    boid_state_storage_cpu.*[BOIDS_CTRL_INDEX].pos.y = 0.0;
-    boid_state_storage_cpu.*[BOIDS_CTRL_INDEX].vel.x = 0.0;
-    boid_state_storage_cpu.*[BOIDS_CTRL_INDEX].vel.y = 0.0;
-
     bytes_per_state := NUM_INSTANCES * size_of(Boid_State);
-    boid_state_a_gpu = boid_state_storage_gpu;
-    boid_state_b_gpu = boid_state_storage_gpu + bytes_per_state.(Gpu_Ptr);
-    src_is_a = true;
+    boid_state = .{
+        a_cpu = boid_state_a_cpu,
+        b_cpu = boid_state_b_cpu,
+        a_gpu = boid_state_storage_gpu,
+        b_gpu = boid_state_storage_gpu + bytes_per_state.(Gpu_Ptr),
+        src_is_a = true,
+    };
 
     param_block_a, vertex_params_gpu_a := gpu_arena_alloc(*gpu_arena, [3] Gpu_Ptr);
-    param_block_a.* = .[vertex_gpu, boid_tints_gpu, boid_state_a_gpu];
+    param_block_a.* = .[vertex_gpu, boid_tints_gpu, boid_state.a_gpu];
     vertex_params_a_gpu = vertex_params_gpu_a;
 
     param_block_b, vertex_params_gpu_b := gpu_arena_alloc(*gpu_arena, [3] Gpu_Ptr);
-    param_block_b.* = .[vertex_gpu, boid_tints_gpu, boid_state_b_gpu];
+    param_block_b.* = .[vertex_gpu, boid_tints_gpu, boid_state.b_gpu];
     vertex_params_b_gpu = vertex_params_gpu_b;
+
+    boids_control_ring_cpu, boids_control_ring_gpu = sgpu_arena_alloc_frame_ring(*gpu_arena, Boids_Control);
+    for 0..SGPU_FRAMES_IN_FLIGHT-1 {
+        boids_control_ring_cpu.*[it].cursor = .{9999.0, 9999.0};
+        boids_control_ring_cpu.*[it].use_b_as_src = 0;
+        boids_control_ring_cpu.*[it]._pad = 0;
+    }
 
     indices := u32.[0, 2, 1];
     index_buffer, index_gpu := gpu_arena_alloc(*gpu_arena, [3] u32);
@@ -168,14 +153,15 @@ tick :: () {
 
     mx, my, mouse_ok := get_mouse_pointer_position(true);
     _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
+    control := sgpu_frame_ring_cpu_slot(boids_control_ring_cpu);
     if mouse_ok && dims_ok && win_w > 0 && win_h > 0 {
         nx := cast(float) mx / cast(float) win_w;
         ny := cast(float) my / cast(float) win_h;
-        boid_state_storage_cpu.*[BOIDS_CTRL_INDEX].vel.x = (nx * 2.0 - 1.0) * BOIDS_VIEW_EXTENT;
-        boid_state_storage_cpu.*[BOIDS_CTRL_INDEX].vel.y = (ny * 2.0 - 1.0) * BOIDS_VIEW_EXTENT;
+        control.cursor.x = (nx * 2.0 - 1.0) * BOIDS_VIEW_EXTENT;
+        control.cursor.y = (ny * 2.0 - 1.0) * BOIDS_VIEW_EXTENT;
     } else {
-        boid_state_storage_cpu.*[BOIDS_CTRL_INDEX].vel.x = 9999.0;
-        boid_state_storage_cpu.*[BOIDS_CTRL_INDEX].vel.y = 9999.0;
+        control.cursor.x = 9999.0;
+        control.cursor.y = 9999.0;
     }
 
     main_queue := gpu_get_queue(.MAIN, 0);
@@ -184,14 +170,12 @@ tick :: () {
 
     result = gpu_set_pipeline(cmd_buff, compute_pipeline);
     assert(result == .SUCCESS, tprint("Boids compute set pipeline failed: %", result));
-    gpu_dispatch(cmd_buff, boid_state_storage_gpu, .[(NUM_INSTANCES + 63) / 64, 1, 1]);
+    control.use_b_as_src = ifx boid_state.src_is_a then cast(u32) 0 else cast(u32) 1;
+    control_gpu := sgpu_frame_ring_gpu_slot(boids_control_ring_gpu, Boids_Control);
+    gpu_dispatch_buffers(cmd_buff, .[boid_state_storage_gpu, control_gpu], .[(NUM_INSTANCES + 63) / 64, 1, 1]);
 
-    src_is_a = !src_is_a;
-    if src_is_a {
-        draw_data.vertex_params_gpu = vertex_params_a_gpu;
-    } else {
-        draw_data.vertex_params_gpu = vertex_params_b_gpu;
-    }
+    ab_buffer_advance(*boid_state);
+    draw_data.vertex_params_gpu = ifx boid_state.src_is_a then vertex_params_a_gpu else vertex_params_b_gpu;
 
     gpu_begin_scoped_render_pass(cmd_buff, {
         color_targets = .[
@@ -211,57 +195,22 @@ tick :: () {
     gpu_draw_indexed_instanced(cmd_buff, vertex_params_gpu, pixel_gpu, index_gpu, num_vertices, num_instances);
 
     gpu_submit_and_present(cmd_buff);
-    gpu_wait_idle();
 
-    if boids_stats_mode && boids_stats_samples_done < boids_stats_max_samples {
-        frame_num := cast(s64) frame_count;
-        if frame_num > 0 && (frame_num % boids_stats_every_frames) == 0 {
-            stats, ok := fb_collect_swapchain_framebuffer_stats(swapchain_image);
-            if ok {
-                log("BOIDS_FRAMEBUFFER_STATS frame=% sample=%/% size=%x% avg_rgb=(%, %, %) avg_luma=% min_luma=% max_luma=% std_luma=%",
-                    frame_num,
-                    boids_stats_samples_done + 1,
-                    boids_stats_max_samples,
-                    stats.width,
-                    stats.height,
-                    stats.avg_r,
-                    stats.avg_g,
-                    stats.avg_b,
-                    stats.avg_luma,
-                    stats.min_luma,
-                    stats.max_luma,
-                    stats.stddev_luma);
-
-                if boids_snapshot_mode {
-                    path := tprint("./boids_snapshot_frame_%.ppm", frame_num);
-                    dumped := fb_dump_swapchain_thumbnail_ppm(
-                        swapchain_image,
-                        path,
-                        cast(u32) boids_snapshot_width,
-                        cast(u32) boids_snapshot_height);
-                    if dumped log("BOIDS_FRAMEBUFFER_SNAPSHOT frame=% path=%", frame_num, path);
-                }
-            }
-            boids_stats_samples_done += 1;
-            if boids_stats_samples_done >= boids_stats_max_samples {
-                log("BOIDS_FRAMEBUFFER_STATS completed % samples; quitting.", boids_stats_max_samples);
-                app_quit_requested = true;
-            }
+    frame_num := cast(s64) frame_count;
+    if readback_stats_should_sample(*boids_readback, frame_num) {
+        stats, ok := fb_collect_swapchain_framebuffer_stats(swapchain_image);
+        if ok {
+            readback_stats_log_sample(*boids_readback, "BOIDS", frame_num, stats);
+            readback_stats_maybe_dump_snapshot(*boids_readback, swapchain_image, frame_num, "boids_snapshot", "BOIDS");
+        }
+        if readback_stats_advance_sample(*boids_readback) {
+            log("BOIDS_FRAMEBUFFER_STATS completed % samples; quitting.", boids_readback.stats_max_samples);
+            app_quit_requested = true;
         }
     }
 
-    if boids_test_readback && !boids_did_readback && frame_count >= 1 {
-        boids_did_readback = true;
-        stats, ok := fb_collect_swapchain_framebuffer_stats(swapchain_image);
-        assert(ok, "Boids readback check failed: framebuffer stats unavailable.");
-        log("READBACK_SUMMARY backend=boids_metal avg_luma=% min_luma=% max_luma=% std_luma=%",
-            stats.avg_luma,
-            stats.min_luma,
-            stats.max_luma,
-            stats.stddev_luma);
-        assert(stats.max_luma > 0.05 && stats.stddev_luma > 0.001,
-               "Boids readback check failed: output appears uniform/black.");
-    }
+    assert(readback_stats_maybe_run_readback_check(*boids_readback, swapchain_image, "boids_metal"),
+           "Boids readback check failed: output appears uniform/black.");
 } @on_tick
 
 #scope_file

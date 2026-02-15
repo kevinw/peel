@@ -5,7 +5,7 @@ NUM_INSTANCES :: SURPRISE_PARTICLE_COUNT;
 
 #import "Jai-Shader-Transpiler";
 #load "../surprise_shader.jai";
-#load "../framebuffer_tools.jai";
+#load "../readback_stats.jai";
 
 Draw_Data :: struct {
     vertex_params_gpu: Gpu_Ptr;
@@ -22,15 +22,7 @@ draw_data: Draw_Data;
 spark_state_cpu: *[NUM_INSTANCES] Surprise_State;
 spark_state_gpu: Gpu_Ptr;
 
-surprise_stats_mode := false;
-surprise_stats_every_frames: s64 = 0;
-surprise_stats_max_samples: s64 = 0;
-surprise_stats_samples_done: s64 = 0;
-surprise_snapshot_mode := false;
-surprise_snapshot_width: s64 = 160;
-surprise_snapshot_height: s64 = 160;
-surprise_export_jpg_mode := false;
-surprise_exported_jpg := false;
+surprise_readback: Readback_Stats;
 
 surprise_vec2_length :: (v: Vector2) -> float {
     return sqrt(v.x * v.x + v.y * v.y);
@@ -44,20 +36,8 @@ surprise_vec2_normalize_or_zero :: (v: Vector2) -> Vector2 {
 }
 
 on_dll_init :: () {
-    surprise_stats_every_frames = fb_parse_env_int("PEEL_SURPRISE_STATS_EVERY", 0);
-    surprise_stats_max_samples = fb_parse_env_int("PEEL_SURPRISE_STATS_MAX", 0);
-    if surprise_stats_every_frames > 0 && surprise_stats_max_samples > 0 {
-        surprise_stats_mode = true;
-    } else if surprise_stats_every_frames > 0 || surprise_stats_max_samples > 0 {
-        log_error("Surprise stats mode requires both PEEL_SURPRISE_STATS_EVERY (>0) and PEEL_SURPRISE_STATS_MAX (>0).");
-    }
-
-    if fb_parse_env_int("PEEL_SURPRISE_SNAPSHOT", 0) > 0 surprise_snapshot_mode = true;
-    surprise_snapshot_width = max(1, fb_parse_env_int("PEEL_SURPRISE_SNAPSHOT_W", surprise_snapshot_width));
-    surprise_snapshot_height = max(1, fb_parse_env_int("PEEL_SURPRISE_SNAPSHOT_H", surprise_snapshot_height));
-    if fb_parse_env_int("PEEL_SURPRISE_EXPORT_JPG", 0) > 0 surprise_export_jpg_mode = true;
-
-    if surprise_stats_mode || surprise_snapshot_mode || surprise_export_jpg_mode {
+    readback_stats_init(*surprise_readback, "SURPRISE", snapshot_default_w = 160, snapshot_default_h = 160, enable_export_jpg = true);
+    if readback_stats_needs_swapchain_readback(*surprise_readback) {
         gpu_set_swapchain_framebuffer_only(false);
     }
 
@@ -167,50 +147,25 @@ tick :: () {
     gpu_wait_idle();
 
     frame_num := cast(s64) frame_count;
-    if surprise_stats_mode && surprise_stats_samples_done < surprise_stats_max_samples {
-        if frame_num > 0 && (frame_num % surprise_stats_every_frames) == 0 {
-            stats, ok := fb_collect_swapchain_framebuffer_stats(swapchain_image);
-            if ok {
-                log("SURPRISE_FRAMEBUFFER_STATS frame=% sample=%/% size=%x% avg_rgb=(%, %, %) avg_luma=% min_luma=% max_luma=% std_luma=%",
-                    frame_num,
-                    surprise_stats_samples_done + 1,
-                    surprise_stats_max_samples,
-                    stats.width,
-                    stats.height,
-                    stats.avg_r,
-                    stats.avg_g,
-                    stats.avg_b,
-                    stats.avg_luma,
-                    stats.min_luma,
-                    stats.max_luma,
-                    stats.stddev_luma);
-
-                if surprise_snapshot_mode {
-                    thumb_path := tprint("./surprise_thumb_frame_%.ppm", frame_num);
-                    dumped := fb_dump_swapchain_thumbnail_ppm(
-                        swapchain_image,
-                        thumb_path,
-                        cast(u32) surprise_snapshot_width,
-                        cast(u32) surprise_snapshot_height);
-                    if dumped log("SURPRISE_FRAMEBUFFER_SNAPSHOT frame=% path=%", frame_num, thumb_path);
-                }
-
-                if surprise_export_jpg_mode && !surprise_exported_jpg {
-                    surprise_exported_jpg = true;
-                    gpu_dump_to_bitmap("../surprise.jpg");
-                    log("SURPRISE_JPG_EXPORTED path=../surprise.jpg");
-                }
-            } else {
-                log_error("SURPRISE_FRAMEBUFFER_STATS failed for frame=%", frame_num);
+    if readback_stats_should_sample(*surprise_readback, frame_num) {
+        stats, ok := fb_collect_swapchain_framebuffer_stats(swapchain_image);
+        if ok {
+            readback_stats_log_sample(*surprise_readback, "SURPRISE", frame_num, stats);
+            readback_stats_maybe_dump_snapshot(*surprise_readback, swapchain_image, frame_num, "surprise_thumb", "SURPRISE");
+            if readback_stats_should_export_jpg(*surprise_readback, frame_num, 0) {
+                readback_stats_mark_jpg_exported(*surprise_readback);
+                gpu_dump_to_bitmap("../surprise.jpg");
+                log("SURPRISE_JPG_EXPORTED path=../surprise.jpg");
             }
-
-            surprise_stats_samples_done += 1;
-            if surprise_stats_samples_done >= surprise_stats_max_samples {
-                app_quit_requested = true;
-            }
+        } else {
+            log_error("SURPRISE_FRAMEBUFFER_STATS failed for frame=%", frame_num);
         }
-    } else if surprise_export_jpg_mode && !surprise_exported_jpg && frame_num >= 2 {
-        surprise_exported_jpg = true;
+
+        if readback_stats_advance_sample(*surprise_readback) {
+            app_quit_requested = true;
+        }
+    } else if readback_stats_should_export_jpg(*surprise_readback, frame_num) {
+        readback_stats_mark_jpg_exported(*surprise_readback);
         gpu_dump_to_bitmap("../surprise.jpg");
         log("SURPRISE_JPG_EXPORTED path=../surprise.jpg");
         app_quit_requested = true;
