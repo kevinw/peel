@@ -11,6 +11,9 @@ RD_DIFF_B  :: 0.5;
 RD_FEED    :: 0.022;
 RD_KILL    :: 0.051;
 RD_DEBUG_SHOW_UV :: false;
+RD_CURSOR_BRUSH_RADIUS :: 10.0;
+RD_CURSOR_B_INJECT :: 0.32;
+RD_CURSOR_A_SUPPRESS :: 0.22;
 
 RD_Compute_In :: struct {
     thread_id: UVector3; @thread_position_in_grid
@@ -18,6 +21,12 @@ RD_Compute_In :: struct {
 
 UVector3 :: struct {
     x, y, z: u32;
+}
+
+RD_Compute_Control :: struct {
+    cursor_uv: Vector2;
+    use_b_as_src: u32;
+    cursor_active: u32;
 }
 
 RD_Vertex_In :: struct {
@@ -80,11 +89,15 @@ rd_lerp :: (a: float, b: float, t: float) -> float {
     return a + (b - a) * t;
 }
 
-rd_step_compute_ab :: (using in: RD_Compute_In, state: *Vector2) {
+rd_step_compute :: (using in: RD_Compute_In, state: *Vector2, control: *RD_Compute_Control) {
     if thread_id.x >= RD_CELL_COUNT return;
 
     src_offset: u32 = 0;
     dst_offset: u32 = RD_CELL_COUNT;
+    if control[0].use_b_as_src != 0 {
+        src_offset = RD_CELL_COUNT;
+        dst_offset = 0;
+    }
 
     i := thread_id.x;
     x := i % RD_WIDTH;
@@ -119,50 +132,21 @@ rd_step_compute_ab :: (using in: RD_Compute_In, state: *Vector2) {
     next_a := a + (RD_DIFF_A * lap_a - reaction + RD_FEED * (1.0 - a)) * RD_DT;
     next_b := b + (RD_DIFF_B * lap_b + reaction - (RD_KILL + RD_FEED) * b) * RD_DT;
 
-    state[dst_offset + i] = .{
-        rd_clamp01(next_a),
-        rd_clamp01(next_b),
-    };
-} @compute_shader
-
-rd_step_compute_ba :: (using in: RD_Compute_In, state: *Vector2) {
-    if thread_id.x >= RD_CELL_COUNT return;
-
-    src_offset: u32 = RD_CELL_COUNT;
-    dst_offset: u32 = 0;
-
-    i := thread_id.x;
-    x := i % RD_WIDTH;
-    y := i / RD_WIDTH;
-
-    left_x := rd_wrap_left(x);
-    right_x := rd_wrap_right(x);
-    up_y := rd_wrap_up(y);
-    down_y := rd_wrap_down(y);
-
-    left := src_offset + rd_cell_index(left_x, y);
-    right := src_offset + rd_cell_index(right_x, y);
-    up := src_offset + rd_cell_index(x, up_y);
-    down := src_offset + rd_cell_index(x, down_y);
-    up_left := src_offset + rd_cell_index(left_x, up_y);
-    up_right := src_offset + rd_cell_index(right_x, up_y);
-    down_left := src_offset + rd_cell_index(left_x, down_y);
-    down_right := src_offset + rd_cell_index(right_x, down_y);
-
-    s := state[src_offset + i];
-    a := s.x;
-    b := s.y;
-
-    lap_a := 0.2 * (state[left].x + state[right].x + state[up].x + state[down].x) +
-             0.05 * (state[up_left].x + state[up_right].x + state[down_left].x + state[down_right].x) -
-             a;
-    lap_b := 0.2 * (state[left].y + state[right].y + state[up].y + state[down].y) +
-             0.05 * (state[up_left].y + state[up_right].y + state[down_left].y + state[down_right].y) -
-             b;
-
-    reaction := a * b * b;
-    next_a := a + (RD_DIFF_A * lap_a - reaction + RD_FEED * (1.0 - a)) * RD_DT;
-    next_b := b + (RD_DIFF_B * lap_b + reaction - (RD_KILL + RD_FEED) * b) * RD_DT;
+    if control[0].cursor_active != 0 {
+        cursor_x := control[0].cursor_uv.x * cast(float) RD_WIDTH;
+        cursor_y := control[0].cursor_uv.y * cast(float) RD_HEIGHT;
+        cell_x := cast(float) x + 0.5;
+        cell_y := cast(float) y + 0.5;
+        dx := cell_x - cursor_x;
+        dy := cell_y - cursor_y;
+        dist2 := dx * dx + dy * dy;
+        brush_r2 := RD_CURSOR_BRUSH_RADIUS * RD_CURSOR_BRUSH_RADIUS;
+        if dist2 < brush_r2 {
+            t := 1.0 - dist2 / brush_r2;
+            next_b += RD_CURSOR_B_INJECT * t;
+            next_a -= RD_CURSOR_A_SUPPRESS * t;
+        }
+    }
 
     state[dst_offset + i] = .{
         rd_clamp01(next_a),

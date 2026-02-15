@@ -15,8 +15,7 @@ Draw_Data :: struct {
 }
 
 graphics_pipeline: Gpu_Pipeline;
-compute_pipeline_ab: Gpu_Pipeline;
-compute_pipeline_ba: Gpu_Pipeline;
+compute_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
 rd_readback: Readback_Stats;
@@ -25,6 +24,8 @@ window_snapshot_mode := false;
 state_storage_gpu: Gpu_Ptr;
 state_storage_cpu: *[RD_CELL_COUNT * 2] Vector2;
 rd_state: AB_Buffer([RD_CELL_COUNT] Vector2);
+rd_control_cpu: *RD_Compute_Control;
+rd_control_gpu: Gpu_Ptr;
 
 rd_init_state :: (state: *[RD_CELL_COUNT] Vector2) {
     center_x := cast(s64) RD_WIDTH / 2;
@@ -104,15 +105,11 @@ on_dll_init :: () {
 
     if readback_stats_needs_swapchain_readback(*rd_readback) || window_snapshot_mode gpu_set_swapchain_framebuffer_only(false);
 
-    compute_source_ab := cast([]u8) get_transpiled(.METAL, rd_step_compute_ab);
-    compute_source_ba := cast([]u8) get_transpiled(.METAL, rd_step_compute_ba);
-    assert(compute_source_ab.count > 0, "Compute transpilation failed (rd_step_compute_ab).");
-    assert(compute_source_ba.count > 0, "Compute transpilation failed (rd_step_compute_ba).");
+    compute_source := cast([]u8) get_transpiled(.METAL, rd_step_compute);
+    assert(compute_source.count > 0, "Compute transpilation failed (rd_step_compute).");
     graphics_source := cast([]u8) get_transpiled(.METAL, rd_vertex_main, rd_fragment_main);
-    compute_pipeline_ab = gpu_create_compute_pipeline(compute_source_ab);
-    compute_pipeline_ba = gpu_create_compute_pipeline(compute_source_ba);
-    assert(compute_pipeline_ab != 0, "Compute pipeline creation failed (ab).");
-    assert(compute_pipeline_ba != 0, "Compute pipeline creation failed (ba).");
+    compute_pipeline = gpu_create_compute_pipeline(compute_source);
+    assert(compute_pipeline != 0, "Compute pipeline creation failed.");
 
     graphics_pipeline = gpu_create_graphics_pipeline(graphics_source, {
         cull = .CW,
@@ -139,6 +136,12 @@ on_dll_init :: () {
         b_gpu = state_storage_gpu + bytes_per_state.(Gpu_Ptr),
         src_is_a = true,
     };
+    rd_control_cpu, rd_control_gpu = gpu_arena_alloc(*gpu_arena, RD_Compute_Control);
+    rd_control_cpu.* = .{
+        cursor_uv = .{-1.0, -1.0},
+        use_b_as_src = 0,
+        cursor_active = 0,
+    };
 
     draw_data = .{
         vertex_params_gpu = rd_state.a_gpu,
@@ -161,11 +164,26 @@ tick :: () {
     assert(result == .SUCCESS);
 
     src_cpu := ab_buffer_src_cpu(*rd_state);
-    pipeline := ifx rd_state.src_is_a then compute_pipeline_ab else compute_pipeline_ba;
     rd_inject_perturbation(src_cpu, cast(s64) frame_count);
-    result = gpu_set_pipeline(compute_cmd, pipeline);
+    result = gpu_set_pipeline(compute_cmd, compute_pipeline);
     assert(result == .SUCCESS, tprint("RD compute set pipeline failed: %", result));
-    gpu_dispatch(compute_cmd, state_storage_gpu, .[(RD_CELL_COUNT + 63) / 64, 1, 1]);
+    mx, my, mouse_ok := get_mouse_pointer_position(true);
+    _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
+    rd_control_cpu.use_b_as_src = ifx rd_state.src_is_a then cast(u32) 0 else cast(u32) 1;
+    if mouse_ok && dims_ok && win_w > 0 && win_h > 0 {
+        u := cast(float) mx / cast(float) win_w;
+        v := cast(float) my / cast(float) win_h;
+        if u < 0.0 u = 0.0;
+        if u > 1.0 u = 1.0;
+        if v < 0.0 v = 0.0;
+        if v > 1.0 v = 1.0;
+        rd_control_cpu.cursor_uv = .{u, v};
+        rd_control_cpu.cursor_active = 1;
+    } else {
+        rd_control_cpu.cursor_uv = .{-1.0, -1.0};
+        rd_control_cpu.cursor_active = 0;
+    }
+    gpu_dispatch_buffers(compute_cmd, .[state_storage_gpu, rd_control_gpu], .[(RD_CELL_COUNT + 63) / 64, 1, 1]);
 
     ab_buffer_advance(*rd_state);
     render_state_gpu := ab_buffer_src_gpu(*rd_state);
