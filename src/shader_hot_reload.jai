@@ -1,4 +1,4 @@
-SRM :: #import,file "shader_reload_manifest.jai";
+SRM :: #import,file "../modules/Jai-Shader-Transpiler/modules/shader_reload_manifest.jai";
 
 Shader_Hot_Reload :: struct {
     enabled: bool;
@@ -87,7 +87,7 @@ shader_hot_reload_tick :: (reload: *Shader_Hot_Reload, frame_num: s64) -> (did_r
         if !has_completed return false, true, true;
 
         reload.last_event_frame = frame_num;
-        shader_hot_reload_assign_string(*reload.watcher.last_changed_entry_ids_csv, completed_ids_csv);
+        assign_string(*reload.watcher.last_changed_entry_ids_csv, completed_ids_csv);
         if completed_ids_csv.count != 0 free(completed_ids_csv);
         if !completed_ok {
             reload.last_result = .BUILD_FAILED;
@@ -240,7 +240,7 @@ shader_hot_reload_queue_background_build :: (reload: *Shader_Hot_Reload, changed
     } else {
         reload.last_result = .BUILD_QUEUED;
     }
-    shader_hot_reload_assign_string(*reload.worker_pending_ids_csv, changed_ids_csv);
+    assign_string(*reload.worker_pending_ids_csv, changed_ids_csv);
     reload.worker_has_pending = true;
     TH.signal(*reload.worker_wake);
 }
@@ -286,7 +286,7 @@ shader_hot_reload_worker_proc :: (thread: *TH.Thread) -> s64 {
         TH.lock(*reload.worker_mutex);
         reload.worker_build_in_flight = false;
         reload.worker_completed_ok = build_ok;
-        shader_hot_reload_assign_string(*reload.worker_completed_ids_csv, ids_csv);
+        assign_string(*reload.worker_completed_ids_csv, ids_csv);
         reload.worker_has_completed = true;
         TH.unlock(*reload.worker_mutex);
         if ids_csv.count != 0 free(ids_csv);
@@ -295,7 +295,7 @@ shader_hot_reload_worker_proc :: (thread: *TH.Thread) -> s64 {
     return 0;
 }
 
-shader_hot_reload_assign_string :: (dst: *string, src: string) {
+assign_string :: (dst: *string, src: string) {
     if dst.*.count != 0 {
         free(dst.*);
         dst.* = "";

@@ -242,10 +242,8 @@ common_options :: (workspace: Workspace, result_output_type: type_of(Build_Optio
         if result_output_type == .EXECUTABLE {
             // Patch the output binary's rpaths so that it can find the dylibs we link to.
             linker_args: [..]string;
-
-            for get_dynamic_library_paths() {
-                array_add(*linker_args, "-rpath", it);
-            }
+            for get_dynamic_library_paths() array_add(*linker_args, "-rpath", it);
+            array_add(*linker_args, ..additional_linker_arguments);
             additional_linker_arguments = linker_args;
         }
     }
@@ -452,7 +450,11 @@ add_common_plugins :: (plugins: *[..] *Metaprogram_Plugin, script_opts: Build_Sc
     }
 }
 
-add_app_plugins :: (plugins: *[..] *Metaprogram_Plugin, script_opts: Build_Script_Opts, shader_entry_ids_filter: string = "") {
+add_app_plugins :: (plugins: *[..] *Metaprogram_Plugin,
+    script_opts: Build_Script_Opts,
+    shader_entry_ids_filter: string = "",
+    shader_only := false, // true if we're doing a shader-only build
+) {
     {
         // Notes globals in the game's dll so that we can reload them automatically when the dll is recompiled.
         Globals_Reload :: #import "Globals_Reload";
@@ -463,7 +465,7 @@ add_app_plugins :: (plugins: *[..] *Metaprogram_Plugin, script_opts: Build_Scrip
         Event_Functions_Metaprogram :: #import "Event_Functions_Metaprogram";
         array_add(plugins, Event_Functions_Metaprogram.get_plugin());
     }
-    #if !BUILD_IS_FOR_IDE {
+    if !BUILD_IS_FOR_IDE || shader_only {
         JSL :: #import "Jai-Shader-Transpiler";
         plugin := JSL.get_plugin();
         plugin.output_shaders = true;
@@ -521,11 +523,10 @@ build_shader_only :: (script_opts: Build_Script_Opts, app_filename: string) -> b
     plugins: [..] *Metaprogram_Plugin;
     plugins.allocator = temp;
     add_common_plugins(*plugins, script_opts);
-    add_app_plugins(*plugins, script_opts, shader_entry_ids_filter=script_opts.shader_entry_ids);
+    add_app_plugins(*plugins, script_opts, shader_entry_ids_filter=script_opts.shader_entry_ids, shader_only=true);
 
     app_name := String.path_strip_extension(String.path_filename(app_filename));
-    result := build_artifact(
-        workspace_name = tprint("Build shaders %", app_name),
+    result := build_artifact(workspace_name = tprint("Build shaders %", app_name),
         .NO_OUTPUT, app_name, plugins, app_filename, OUTPUT_PATH, script_opts);
 
     return result != .failed;
