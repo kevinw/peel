@@ -11,4 +11,8 @@
     "label": "raymarch",
     "command": "jai ~/src/peel/build.jai - src/apps/raymarch.jai -run -dll",
   },
+  {
+    "label": "textured_triangle_smoke",
+    "command": "cd ~/src/peel && ./tools/textured_triangle_probe.sh",
+  },
 ]
