@@ -27,26 +27,101 @@ sphere_dist :: (p: Vector3, c: Vector3, r: float) -> float {
     return sqrt(q.x * q.x + q.y * q.y + q.z * q.z) - r;
 }
 
+rm_abs :: (x: float) -> float {
+    if x < 0.0 return -x;
+    return x;
+}
+
+capped_cylinder_dist :: (p: Vector3, center_y: float, half_h: float, radius: float) -> float {
+    radial := sqrt(p.x * p.x + p.z * p.z) - radius;
+    vertical := rm_abs(p.y - center_y) - half_h;
+    if radial > vertical return radial;
+    return vertical;
+}
+
+repeat_symmetric :: (x: float, spacing: float) -> float {
+    return x - spacing * floor(x / spacing + 0.5);
+}
+
+repeat_positive :: (x: float, spacing: float) -> float {
+    return x - spacing * floor(x / spacing);
+}
+
+tree_cell_index_x :: (world_x: float) -> float {
+    return floor(world_x / 2.8 + 0.5);
+}
+
+tree_cell_index_z :: (world_z: float) -> float {
+    return floor((world_z + 10.0) / 4.8);
+}
+
+tree_variation :: (p: Vector3) -> float {
+    ix := tree_cell_index_x(p.x);
+    iz := tree_cell_index_z(p.z);
+    seed := ix * cast(float) 127.1 + iz * cast(float) 311.7;
+    return fract(sin(seed) * cast(float) 43758.5453);
+}
+
+tree_local_pos_from_world :: (p: Vector3) -> Vector3 {
+    q := p;
+    x_spacing := 2.8;
+    z_spacing := 4.8;
+    q.x = repeat_symmetric(q.x, x_spacing);
+    q.z = repeat_positive(q.z + 10.0, z_spacing) - z_spacing * 0.5;
+    return q;
+}
+
+tree_trunk_dist :: (p: Vector3) -> float {
+    tree_h := tree_variation(p);
+    trunk_half_h := lerp(0.34, 0.56, tree_h);
+    trunk_radius := lerp(0.070, 0.112, tree_h);
+    trunk_center_y := -0.65 + trunk_half_h;
+    q := tree_local_pos_from_world(p);
+    return capped_cylinder_dist(q, trunk_center_y, trunk_half_h, trunk_radius);
+}
+
+tree_leaves_dist :: (p: Vector3) -> float {
+    tree_h := tree_variation(p);
+    scale := lerp(0.82, 1.26, tree_h);
+    shift := (tree_h - 0.5) * 0.10;
+    q := tree_local_pos_from_world(p);
+    crown_a := sphere_dist(q, .{0.0 + shift * 0.5, 0.34 + tree_h * 0.14, 0.0}, 0.34 * scale);
+    crown_b := sphere_dist(q, .{0.20 + shift, 0.30 + tree_h * 0.08, -0.08}, 0.26 * scale);
+    crown_c := sphere_dist(q, .{-0.18 + shift * 0.6, 0.28 + tree_h * 0.10, 0.10}, 0.24 * scale);
+    leaves := crown_a;
+    if crown_b < leaves leaves = crown_b;
+    if crown_c < leaves leaves = crown_c;
+    return leaves;
+}
+
+tree_dist :: (p: Vector3) -> float {
+  trunk := tree_trunk_dist(p);
+  leaves := tree_leaves_dist(p);
+  if leaves < trunk return leaves;
+  return trunk;
+}
+
 plane_dist :: (p: Vector3) -> float {
     return p.y + 0.65;
 }
 
-rm_scene_dist :: (p: Vector3, time: float) -> float {
-    center := Vector3.{sin(time * 0.8) * 0.65, 0.22 + sin(time * 1.3) * 0.07, cos(time * 0.7) * 0.22};
-    sphere := sphere_dist(p, center, 0.93);
+scene_dist :: (p: Vector3, time: float) -> float {
+    _ = time;
+    trunk, leaves, tree := tree_trunk_dist(p), tree_leaves_dist(p), tree_dist(p);
+    _ = trunk; _ = leaves;
     plane := plane_dist(p);
-    if sphere < plane return sphere;
+    if tree < plane return tree;
     return plane;
 }
 
-rm_scene_normal :: (p: Vector3, time: float) -> Vector3 {
+scene_normal :: (p: Vector3, time: float) -> Vector3 {
     eps := 0.001;
     ex := Vector3.{eps, 0, 0};
     ey := Vector3.{0, eps, 0};
     ez := Vector3.{0, 0, eps};
-    nx := rm_scene_dist(.{p.x + ex.x, p.y + ex.y, p.z + ex.z}, time) - rm_scene_dist(.{p.x - ex.x, p.y - ex.y, p.z - ex.z}, time);
-    ny := rm_scene_dist(.{p.x + ey.x, p.y + ey.y, p.z + ey.z}, time) - rm_scene_dist(.{p.x - ey.x, p.y - ey.y, p.z - ey.z}, time);
-    nz := rm_scene_dist(.{p.x + ez.x, p.y + ez.y, p.z + ez.z}, time) - rm_scene_dist(.{p.x - ez.x, p.y - ez.y, p.z - ez.z}, time);
+    nx := scene_dist(.{p.x + ex.x, p.y + ex.y, p.z + ex.z}, time) - scene_dist(.{p.x - ex.x, p.y - ex.y, p.z - ex.z}, time);
+    ny := scene_dist(.{p.x + ey.x, p.y + ey.y, p.z + ey.z}, time) - scene_dist(.{p.x - ey.x, p.y - ey.y, p.z - ey.z}, time);
+    nz := scene_dist(.{p.x + ez.x, p.y + ez.y, p.z + ez.z}, time) - scene_dist(.{p.x - ez.x, p.y - ez.y, p.z - ez.z}, time);
     return normalize(Vector3.{nx, ny, nz});
 }
 
@@ -96,7 +171,7 @@ raymarch_fragment_main :: (using in: Raymarch_Fragment_In, params: *Raymarch_Par
     hit := false;
     for 0..95 {
         p := Vector3.{ro.x + rd.x * t, ro.y + rd.y * t, ro.z + rd.z * t};
-        d := rm_scene_dist(p, time);
+        d := scene_dist(p, time);
         if d < 0.0015 {
             hit = true;
             break;
@@ -116,29 +191,40 @@ raymarch_fragment_main :: (using in: Raymarch_Fragment_In, params: *Raymarch_Par
 
     if hit {
         p := Vector3.{ro.x + rd.x * t, ro.y + rd.y * t, ro.z + rd.z * t};
-        n := rm_scene_normal(p, time);
+        n := scene_normal(p, time);
         light := Vector3.{2.2 * sin(time * 0.8), 2.7, -2.0 + 1.2 * cos(time * 0.6)};
-        l := normalize(Vector3.{light.x - p.x, light.y - p.y, light.z - p.z});
-        v := normalize(Vector3.{ro.x - p.x, ro.y - p.y, ro.z - p.z});
-        h := normalize(Vector3.{l.x + v.x, l.y + v.y, l.z + v.z});
+        l := normalize(.{light.x - p.x, light.y - p.y, light.z - p.z});
+        v := normalize(.{ro.x - p.x, ro.y - p.y, ro.z - p.z});
+        h := normalize(.{l.x + v.x, l.y + v.y, l.z + v.z});
 
         diff := clamp(dot(n, l), 0.0, 1.0);
         ndh := clamp(dot(n, h), 0.0, 1.0);
         spec := ndh * ndh;
         spec = spec * spec * spec * 0.8;
 
-        sphere_center := Vector3.{sin(time * 0.8) * 0.65, 0.22 + sin(time * 1.3) * 0.07, cos(time * 0.7) * 0.22};
-        ds := sphere_dist(p, sphere_center, 0.62);
+        q := tree_local_pos_from_world(p);
+        tree_h := tree_variation(p);
+        trunk_d, leaves_d, tree_d := tree_trunk_dist(p), tree_leaves_dist(p), tree_dist(p);
         dp := plane_dist(p);
-        is_floor := dp < ds;
+        is_floor := dp < tree_d;
+        is_trunk := !is_floor && trunk_d < leaves_d;
 
-        base := Vector3.{0.42, 0.80, 1.00};
+        base := Vector3.{0.16, 0.46 + 0.16 * tree_h, 0.18 + 0.12 * tree_h};
         if is_floor {
             checker := floor(p.x * 3.0) + floor(p.z * 3.0);
             check := checker - floor(checker * 0.5) * 2.0;
             floor_a := Vector3.{0.14, 0.13, 0.16};
             floor_b := Vector3.{0.20, 0.18, 0.24};
             base = ifx check < 1.0 then floor_a else floor_b;
+        } else if is_trunk {
+            bark_mix := clamp((q.y + 0.65) * 0.9, 0.0, 1.0);
+            bark_a := Vector3.{0.24 + 0.07 * tree_h, 0.15 + 0.04 * tree_h, 0.08};
+            bark_b := Vector3.{0.34 + 0.08 * tree_h, 0.22 + 0.05 * tree_h, 0.11};
+            base = .{
+                lerp(bark_a.x, bark_b.x, bark_mix),
+                lerp(bark_a.y, bark_b.y, bark_mix),
+                lerp(bark_a.z, bark_b.z, bark_mix),
+            };
         }
 
         ambient := 0.22;

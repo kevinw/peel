@@ -463,7 +463,7 @@ add_app_plugins :: (plugins: *[..] *Metaprogram_Plugin, script_opts: Build_Scrip
         Event_Functions_Metaprogram :: #import "Event_Functions_Metaprogram";
         array_add(plugins, Event_Functions_Metaprogram.get_plugin());
     }
-    {
+    #if !BUILD_IS_FOR_IDE {
         JSL :: #import "Jai-Shader-Transpiler";
         plugin := JSL.get_plugin();
         plugin.output_shaders = true;
