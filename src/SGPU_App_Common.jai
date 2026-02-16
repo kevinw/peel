@@ -89,7 +89,7 @@ app_update :: (update_ctx: *App_Update_Ctx) {
     auto_release_temp();
 
     #if OS == .MACOS {
-        pool := objc_init(objc_alloc(NSAutoreleasePool));
+        pool := objc_new(NSAutoreleasePool);
         defer release(pool);
     }
 
@@ -141,36 +141,34 @@ app_update :: (update_ctx: *App_Update_Ctx) {
 }
 
 create_window_and_init_sgpu :: () {
-    width :s32 = 2000;
-    height :s32 = 1500;
-
-    window = create_window(width, height, "hello peel");
-
+    window = create_window(2000, 1500, "hello peel");
     result := gpu_init();
     assert(result == .SUCCESS);
-
-    window_type: Native_Window_Type;
-    #if      OS == .WINDOWS then window_type = .WIN32;
-    else #if OS == .LINUX   then window_type = .X11;
-    else #if OS == .MACOS   then window_type = .COCOA;
-    else assert(false, "Unsupported OS");
-
-    gpu_init_swapchain(cast(u64)window, window_type);
+    gpu_init_swapchain(xx window);
 }
 
 host_quit :: (quit_ctx: Quit_Ctx) {
-    // @Perf probably not necessary in release builds.
-    gpu_destroy_swapchain();
-    gpu_shutdown();
-    if sgpu_debug_status.count != 0 {
-        free(sgpu_debug_status);
-        sgpu_debug_status = "";
+    #if !RELEASE {
+        gpu_destroy_swapchain();
+        gpu_shutdown();
+        if sgpu_debug_status.count != 0 {
+            free(sgpu_debug_status);
+            sgpu_debug_status = "";
+        }
     }
 }
 
 max_frames: int = 0;
 
 host_init :: (init_ctx: Init_Ctx) -> bool {
+    #if !RELEASE && OS == .MACOS {
+        using,only(setenv) POSIX :: #import "POSIX";
+        setenv("MTL_LOG_TO_STDERR", "1", 1);
+        setenv("MTL_DEBUG_LAYER", "1", 1);
+        setenv("MTL_LOG_LEVEL", "MTLLogLevelDebug", 1);
+        setenv("MTL_LOG_BUFFER_SIZE", "2048", 1);
+    }
+
     max_frames = init_ctx.max_frames;
     #if OS == {
         case .WINDOWS;

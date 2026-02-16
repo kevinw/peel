@@ -90,7 +90,7 @@ geometry_smith :: (N: Vector3, V: Vector3, L: Vector3, roughness: float) -> floa
     return g1 * g2;
 }
 
-pbr_vertex_main :: (using in: PBR_Vertex_In) -> PBR_Vertex_Out {
+pbr_vertex_main :: (using in: PBR_Vertex_In, params: *PBR_Params) -> PBR_Vertex_Out {
     using out: PBR_Vertex_Out;
 
     tri := vertex_id / 3;
@@ -144,9 +144,27 @@ pbr_vertex_main :: (using in: PBR_Vertex_In) -> PBR_Vertex_Out {
     };
 
     _ = instance_id;
-    gl_Position = .{n.x * 0.85, n.y * 0.85, 0.0, 1.0};
+
+    p := params[0];
+    spin := p.time * 0.25;
+    spin_sin := sin(spin);
+    spin_cos := cos(spin);
+    n_rot := Vector3.{
+        n.x * spin_cos - n.z * spin_sin,
+        n.y,
+        n.x * spin_sin + n.z * spin_cos,
+    };
+
+    aspect := 1.0;
+    if p.resolution_y > 0.0 {
+        aspect = p.resolution_x / p.resolution_y;
+    }
+    radius_x := 0.85 / max(aspect, 0.0001);
+    radius_y := 0.85;
+
+    gl_Position = .{n_rot.x * radius_x, n_rot.y * radius_y, 0.0, 1.0};
     uv = uv_out;
-    world_pos = n;
+    world_pos = n_rot;
     return out;
 } @vertex_shader
 

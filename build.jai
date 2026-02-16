@@ -122,7 +122,7 @@ PLATFORM_DIR :: #run get_platform_dir(OS); // win, macos, linux
         defer script_opts.output_exe = "";
 
         if !build_host(script_opts, include_app_plugins=!script_opts.dll, build_strings=host_build_strings) {
-            exit_with_error("Failed to build the host");
+            exit_with_error();
         }
 
         if script_opts.dll break; // We only need one host when we're building dll.
@@ -171,11 +171,11 @@ PLATFORM_DIR :: #run get_platform_dir(OS); // win, macos, linux
                 args_splitted_by_space := String.split(script_opts.run_args, #char " ");
                 array_add(*host_args, ..args_splitted_by_space);
             }
-            if script_opts.verbose log("RUNNING in %: %", abs_output_path, String.join(..host_args, separator=" "));
+            if script_opts.verbose {
+                log("RUNNING in %: %", abs_output_path, String.join(..host_args, separator=" "));
+            }
             res, stdout, stderr := run_command(..host_args);
             if script_opts.verbose log("App exited.");
-            if stderr log("Stderr: %", stderr);
-            if stdout log("Stdout: %", stdout);
         }
     } else {
         if script_opts.verbose log("Not running the app, because we're building for the IDE.");
