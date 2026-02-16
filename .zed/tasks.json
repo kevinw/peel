@@ -7,4 +7,8 @@
     "label": "boids",
     "command": "jai ~/src/peel/build.jai - src/apps/boids.jai -run -dll",
   },
+  {
+    "label": "raymarch",
+    "command": "jai ~/src/peel/build.jai - src/apps/raymarch.jai -run -dll",
+  },
 ]

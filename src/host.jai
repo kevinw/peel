@@ -22,6 +22,7 @@ main :: () {
 
     #if !RELEASE {
         Debug.init();
+        Debug.set_report_mode(interactive = false);
     }
 
     // Install our custom logger
