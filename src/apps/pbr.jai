@@ -312,4 +312,4 @@ ensure_depth_target :: (width: u32, height: u32) {
 
 #import "Jai-Shader-Transpiler";
 #import "stb_image";
-#load "../pbr_shader.jai";
+#load "shaders/pbr_shader.jai";

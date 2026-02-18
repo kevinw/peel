@@ -1,6 +1,6 @@
 #import "Jai-Shader-Transpiler";
 #import "Math";
-#import,file "../modules/Jai-Shader-Transpiler/modules/ShaderFuncs/module.jai";
+#import,file "../../../modules/Jai-Shader-Transpiler/modules/ShaderFuncs/module.jai";
 
 Textured_Triangle_Vertex_In :: struct {
     vertex_id: u32; @SV_VertexID

@@ -4,7 +4,7 @@ WRITE_SHADER_OUTPUT :: true;
 
 #import "Jai-Shader-Transpiler";
 SHR :: #import,file "../shader_hot_reload.jai";
-#load "../fluid2d_shader.jai";
+#load "shaders/fluid2d_shader.jai";
 #load "../readback_stats.jai";
 
 Draw_Data :: struct {

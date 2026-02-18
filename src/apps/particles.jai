@@ -4,7 +4,7 @@ NUM_INSTANCES :: SURPRISE_PARTICLE_COUNT;
 #load "../SGPU_App_Common.jai";
 
 #import "Jai-Shader-Transpiler";
-#load "../surprise_shader.jai";
+#load "shaders/surprise_shader.jai";
 #load "../readback_stats.jai";
 
 Draw_Data :: struct {

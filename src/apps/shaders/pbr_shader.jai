@@ -1,6 +1,6 @@
 #import "Jai-Shader-Transpiler";
 #import "Math";
-#import,file "../modules/Jai-Shader-Transpiler/modules/ShaderFuncs/module.jai";
+#import,file "../../../modules/Jai-Shader-Transpiler/modules/ShaderFuncs/module.jai";
 
 PBR_PI :: cast(float) 3.1415926535;
 PBR_SPHERE_SEG_X :: 64;

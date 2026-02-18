@@ -1,6 +1,6 @@
 #import "Jai-Shader-Transpiler";
 #import "Math";
-#import,file "../modules/Jai-Shader-Transpiler/modules/ShaderFuncs/module.jai"; // TODO
+#import,file "../../../modules/Jai-Shader-Transpiler/modules/ShaderFuncs/module.jai"; // TODO
 
 Raymarch_Params :: struct {
     resolution: Vector2;

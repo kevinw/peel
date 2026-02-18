@@ -5,7 +5,7 @@ NUM_INSTANCES :: BOIDS_COUNT;
 
 #import "Jai-Shader-Transpiler";
 SHR :: #import,file "../shader_hot_reload.jai";
-#load "../boids_shader.jai";
+#load "shaders/boids_shader.jai";
 #load "../readback_stats.jai";
 
 Draw_Data :: struct {

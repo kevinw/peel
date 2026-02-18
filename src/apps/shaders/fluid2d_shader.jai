@@ -1,6 +1,6 @@
 #import "Jai-Shader-Transpiler";
 #import "Math";
-#import,file "../modules/Jai-Shader-Transpiler/modules/ShaderFuncs/module.jai";
+#import,file "../../../modules/Jai-Shader-Transpiler/modules/ShaderFuncs/module.jai";
 
 FLUID_WIDTH  :: 320;
 FLUID_HEIGHT :: 320;

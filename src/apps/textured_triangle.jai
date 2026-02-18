@@ -4,69 +4,8 @@ WRITE_SHADER_OUTPUT :: true;
 #load "../readback_stats.jai";
 
 #import "Jai-Shader-Transpiler";
-#load "../textured_triangle_shader.jai";
+#load "shaders/textured_triangle_shader.jai";
 
-USE_HANDCRAFTED_METAL :: false;
-
-HANDCRAFTED_METAL_SOURCE :: #string END
-#include <metal_stdlib>
-#include <simd/simd.h>
-using namespace metal;
-
-struct VertexMain_out
-{
-    float2 uv [[user(locn0)]];
-    float4 gl_Position [[position]];
-};
-struct Pixel_Params
-{
-    uint texture_index;
-    uint sampler_index;
-    uint debug_mode;
-    uint _pad;
-};
-vertex VertexMain_out VertexMain(uint vertex_id [[vertex_id]])
-{
-    VertexMain_out out = {};
-    float2 pos;
-    float2 uv;
-    if (vertex_id == 0u)
-    {
-        pos = float2(0.0, 0.82);
-        uv = float2(0.5, 1.0);
-    }
-    else if (vertex_id == 1u)
-    {
-        pos = float2(-0.82, -0.66);
-        uv = float2(0.0, 0.0);
-    }
-    else
-    {
-        pos = float2(0.82, -0.66);
-        uv = float2(1.0, 0.0);
-    }
-    out.gl_Position = float4(pos, 0.0, 1.0);
-    out.uv = uv;
-    return out;
-}
-struct FragmentMain_out
-{
-    float4 out_color [[color(0)]];
-};
-fragment FragmentMain_out FragmentMain(VertexMain_out in [[stage_in]],
-                                       const device Pixel_Params& params [[buffer(0)]],
-                                       array<texture2d<float>, 16> sample_2d_textures [[texture(0)]],
-                                       array<sampler, 16> sample_2d_samplers [[sampler(0)]])
-{
-    FragmentMain_out out = {};
-    if ((params.debug_mode & 1u) != 0u) {
-        out.out_color = float4(min(1.0, float(params.texture_index)), min(1.0, float(params.sampler_index)), 0.0, 1.0);
-    } else {
-        out.out_color = sample_2d_textures[params.texture_index].sample(sample_2d_samplers[params.sampler_index], in.uv);
-    }
-    return out;
-}
-END;
 
 NOISE_W :: 128;
 NOISE_H :: 128;
@@ -132,12 +71,7 @@ on_dll_init :: () {
         gpu_set_swapchain_framebuffer_only(false);
     }
 
-    graphics_source: []u8;
-    if USE_HANDCRAFTED_METAL {
-        graphics_source = cast([]u8) HANDCRAFTED_METAL_SOURCE;
-    } else {
-        graphics_source = cast([]u8) get_transpiled(.METAL, textured_triangle_vertex_main, textured_triangle_fragment_main);
-    }
+    graphics_source := cast([]u8) get_transpiled(.METAL, textured_triangle_vertex_main, textured_triangle_fragment_main);
     assert(graphics_source.count > 0, "Transpilation failed for textured triangle shaders.");
 
     graphics_pipeline = gpu_create_graphics_pipeline(graphics_source, .{

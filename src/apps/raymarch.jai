@@ -4,7 +4,7 @@ WRITE_SHADER_OUTPUT :: true;
 
 #import "Jai-Shader-Transpiler";
 SHR :: #import,file "../shader_hot_reload.jai";
-#load "../raymarch_shader.jai";
+#load "shaders/raymarch_shader.jai";
 #load "../readback_stats.jai";
 
 graphics_pipeline: Gpu_Pipeline;
