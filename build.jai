@@ -13,11 +13,14 @@ Build_Script_Opts :: struct {
     perf                    : bool;         @"?Show a compiler performance report"
 
     // used internally (todo: move elsewhere)
-    output_exe              : string;
+    sub_build               : bool;
+    output_exe              : string; @skip
 }
 
+USE_PARALLEL_BUILD_WHEN_BUILDING_ALL :: true;
 THIS_SCRIPT_PATH            :: #run String.path_join(#filepath, "build.jai");
 HOST_JAI_ROOT               :: "src/host.jai";
+APPS_DIR                    :: "src/apps";
 OUTPUT_PATH                 :: "dist";        // The directory where the program binary goes.
 LIVE_RELOAD_HOST_EXE_NAME   :: "peel";        // The name of the live reload host executable.
 BUILD_IS_FOR_IDE            :: #exists(JAILS_DIAGNOSTICS_BUILD); // Whether the build is for the IDE's error display. (Jails language server runs the build to check for errors.)
@@ -32,13 +35,16 @@ BUILD_IS_FOR_IDE            :: #exists(JAILS_DIAGNOSTICS_BUILD); // Whether the 
 PLATFORM_DIR :: #run get_platform_dir(OS); // win, macos, linux
 
 #run,stallable {
+    start_time := current_time_monotonic();
     set_build_options_dc(.{ do_output = false });
     set_working_directory(#filepath);
+
+    cmd_line_args := get_build_options().compile_time_command_line;
 
     // Command line arguments to this build script.
     success, script_opts, is_set, free_args := Command_Line.parse_arguments(Build_Script_Opts,
         flags=.SHOW_HELP_ON_ERROR | .ALIGN_HELP | .FREE_ARGUMENTS_ALLOWED,
-        args=get_build_options().compile_time_command_line);
+        args=cmd_line_args);
     if !success {
         exit_with_error("Failed to parse command line arguments");
     }
@@ -50,8 +56,11 @@ PLATFORM_DIR :: #run get_platform_dir(OS); // win, macos, linux
         array_add(*apps_to_build, ..free_args);
         if apps_to_build.count == 0 {
             log("Building all apps in src/app_list.jai's APP_FILES: (%)", String.join(..APP_FILES, separator=", "));
+            if USE_PARALLEL_BUILD_WHEN_BUILDING_ALL && !script_opts.sub_build {
+                parallel_build_all_and_exit(cmd_line_args);
+            }
             for APP_FILES {
-                array_add(*apps_to_build, tprint("src/apps/%", it));
+                array_add(*apps_to_build, tprint("%/%", APPS_DIR, it));
             }
         }
         for apps_to_build {
@@ -179,6 +188,10 @@ PLATFORM_DIR :: #run get_platform_dir(OS); // win, macos, linux
         }
     } else {
         if script_opts.verbose log("Not running the app, because we're building for the IDE.");
+    }
+
+    if !script_opts.sub_build {
+        log("Built in % seconds.", to_float64_seconds(current_time_monotonic() - start_time));
     }
 }
 
@@ -671,11 +684,34 @@ environment_specifies_release_build :: () -> bool {
     return false;
 }
 
+parallel_build_all_and_exit :: (cmd_line_args: []string) {
+    args_list: [..][]string;
+    for APP_FILES {
+        args: [..]string;
+        array_add(*args, "jai", "build.jai", "-", "-sub_build");
+        array_add(*args, ..cmd_line_args);
+        array_add(*args, tprint("%/%", APPS_DIR, it));
+
+        array_add(*args_list, args);
+    }
+
+    start_time := current_time_monotonic();
+    all_ok := parallel_run(args_list);
+    if all_ok {
+        log("Built everything in % seconds.", to_float64_seconds(current_time_monotonic() - start_time));
+        exit(0);
+    }
+
+    log_error("Parallel build failed.");
+    exit(1);
+}
+
 #import "Basic";
 #import "File";
 #import "Compiler";
 #import "File_Utilities"; // for visit_files
 #import "Process";
+#import "Parallel_Run";
 #import "Compile_Time_Shader_Build";
 Command_Line :: #import "Command_Line";
 String :: #import "String";
