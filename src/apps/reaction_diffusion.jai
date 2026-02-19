@@ -20,7 +20,6 @@ compute_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
 rd_readback: Readback_Stats;
-window_snapshot_mode := false;
 rd_shader_reload: SHR.Shader_Hot_Reload;
 RD_GRAPHICS_ENTRY_ID :: "pair|METAL|rd_vertex_main|rd_fragment_main";
 RD_COMPUTE_ENTRY_ID  :: "single|METAL|compute|rd_step_compute";

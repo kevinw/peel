@@ -10,10 +10,10 @@ SHR :: #import,file "../shader_hot_reload.jai";
 
 Draw_Data :: struct {
     vertex_params_gpu: Gpu_Ptr;
-    pixel_gpu: Gpu_Ptr;
-    index_gpu: Gpu_Ptr;
-    num_vertices: u32;
-    num_instances: u32;
+    pixel_gpu:         Gpu_Ptr;
+    index_gpu:         Gpu_Ptr;
+    num_vertices:      u32;
+    num_instances:     u32;
 }
 
 graphics_pipeline: Gpu_Pipeline;
@@ -51,17 +51,13 @@ on_dll_init :: () {
     readback_stats_init(*boids_readback, "BOIDS", snapshot_default_w = 96, snapshot_default_h = 96);
     if readback_stats_needs_swapchain_readback(*boids_readback) gpu_set_swapchain_framebuffer_only(false);
 
-    graphics_source := cast([]u8) get_transpiled(.METAL, boids_vertex_main, boids_frag_main);
-    assert(graphics_source.count > 0);
-    compute_source := cast([]u8) get_transpiled(.METAL, boids_step_compute);
-    assert(compute_source.count > 0);
+    graphics_source := cast([]u8) get_transpiled(.METAL, boids_vertex_main, boids_frag_main); assert(graphics_source.count > 0);
+    compute_source  := cast([]u8) get_transpiled(.METAL, boids_step_compute);                 assert(compute_source.count > 0);
 
     blend_state: Gpu_Blend_Desc;
     graphics_pipeline = gpu_create_graphics_pipeline(graphics_source, {
         cull = .CW,
-        color_targets = .[
-            .{format = .B8G8R8A8_UNORM}
-        ],
+        color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
         blend_state = *blend_state,
     });
     assert(graphics_pipeline != 0, "Pipeline creation failed.");
@@ -74,9 +70,7 @@ on_dll_init :: () {
     _ = SHR.shader_hot_reload_init_auto(*boids_shader_reload, "src/apps/boids.jai", poll_every_frames = 15, log_prefix = "BOIDS_SHADER_RELOAD", enabled_by_default = hot_reload_enabled_by_default);
     SHR.shader_hot_reload_register_graphics_pipeline(*boids_shader_reload, BOIDS_GRAPHICS_ENTRY_ID, *graphics_pipeline, {
         cull = .CW,
-        color_targets = .[
-            .{format = .B8G8R8A8_UNORM}
-        ],
+        color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
         blend_state = *blend_state,
     });
     SHR.shader_hot_reload_register_compute_pipeline(*boids_shader_reload, BOIDS_COMPUTE_ENTRY_ID, *compute_pipeline);

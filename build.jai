@@ -11,10 +11,11 @@ Build_Script_Opts :: struct {
     iprof                   : bool;         @"?Add the IProf metaprogram plugin"
     verbose                 : bool;         @"?Print verbose output for the build process"
     perf                    : bool;         @"?Show a compiler performance report"
+    timings                 : bool;         @"?Show extra timings"
 
     // used internally (todo: move elsewhere)
     sub_build               : bool;
-    output_exe              : string; @skip
+    output_exe              : string;
 }
 
 USE_PARALLEL_BUILD_WHEN_BUILDING_ALL :: true;
@@ -56,8 +57,8 @@ PLATFORM_DIR :: #run get_platform_dir(OS); // win, macos, linux
         array_add(*apps_to_build, ..free_args);
         if apps_to_build.count == 0 {
             log("Building all apps in src/app_list.jai's APP_FILES: (%)", String.join(..APP_FILES, separator=", "));
-            if USE_PARALLEL_BUILD_WHEN_BUILDING_ALL && !script_opts.sub_build {
-                parallel_build_all_and_exit(cmd_line_args);
+            if !BUILD_IS_FOR_IDE && USE_PARALLEL_BUILD_WHEN_BUILDING_ALL && !script_opts.sub_build {
+                parallel_build_all_and_exit(cmd_line_args, script_opts);
             }
             for APP_FILES {
                 array_add(*apps_to_build, tprint("%/%", APPS_DIR, it));
@@ -80,23 +81,6 @@ PLATFORM_DIR :: #run get_platform_dir(OS); // win, macos, linux
 
     make_directory_if_it_does_not_exist(OUTPUT_PATH, recursive = true); // Create the output dir.
 
-    // Build shaders.
-    #if !BUILD_IS_FOR_IDE {
-        #if OS == .MACOS && 0 {
-            shader_input_files  :: string.[
-                "dist/shaders/metal/triangle.metal",
-                "modules/im3d/shaders/Im3d.metal"
-            ];
-            output_library_path :: "dist/default.metallib";
-
-            Build_Manifest.external_build(shader_input_files, output_library_path, () {
-                if !build_metal(shader_input_files, output_library_path) {
-                    exit_with_error("Error building shaders.");
-                }
-            });
-        }
-    }
-
     #if OS == .WINDOWS {
         if !do_path_setup_for_dlls("modules", make_paths_absolute = true) {
             exit_with_error("Failed to setup PATH for DLLs");
@@ -105,9 +89,6 @@ PLATFORM_DIR :: #run get_platform_dir(OS); // win, macos, linux
         module_paths_already_set_in_environment = true;
     }
 
-    // All builds will depend on the contents of this build.jai file, as well as all their source files.
-    #if !BUILD_IS_FOR_IDE Build_Manifest.mark_meta_dependency(THIS_SCRIPT_PATH);
-
     if script_opts.shader_only {
         for apps_to_build {
             if !build_shader_only(script_opts, it) {
@@ -115,6 +96,11 @@ PLATFORM_DIR :: #run get_platform_dir(OS); // win, macos, linux
             }
         }
         return;
+    }
+
+    // All builds will depend on the contents of this build.jai file, as well as all their source files.
+    #if !BUILD_IS_FOR_IDE {
+        Build_Manifest.mark_meta_dependency(THIS_SCRIPT_PATH);
     }
 
     dll_host_was_running := !BUILD_IS_FOR_IDE && script_opts.dll && check_if_host_is_running(script_opts, LIVE_RELOAD_HOST_EXE_NAME);
@@ -325,7 +311,6 @@ get_dynamic_library_paths :: () -> []string /* temp allocated */ {
 }
 
 build_jdll :: (output_name: string, source_file: string, script_opts: Build_Script_Opts) -> (success: bool) {
-
     plugins: [..]*Metaprogram_Plugin;
     add_common_plugins(*plugins, script_opts);
     check_for_unnecessary_build: bool;
@@ -468,30 +453,32 @@ add_app_plugins :: (plugins: *[..] *Metaprogram_Plugin,
     shader_entry_ids_filter: string = "",
     shader_only := false, // true if we're doing a shader-only build
 ) {
-    {
+    #if !BUILD_IS_FOR_IDE {
         // Notes globals in the game's dll so that we can reload them automatically when the dll is recompiled.
         Globals_Reload :: #import "Globals_Reload";
         p := Globals_Reload.get_plugin();
         array_add(plugins, p);
+
+        if script_opts.codex {
+            Codex :: #import "Codex";
+            array_add(plugins, Codex.get_plugin());
+        }
+        if script_opts.iprof {
+            IProf :: #import "Iprof";
+            array_add(plugins, IProf.get_plugin());
+        }
     }
     {
         Event_Functions_Metaprogram :: #import "Event_Functions_Metaprogram";
         array_add(plugins, Event_Functions_Metaprogram.get_plugin());
     }
-    if !BUILD_IS_FOR_IDE || shader_only {
+    {
         JSL :: #import "Jai-Shader-Transpiler";
         plugin := JSL.get_plugin();
-        plugin.output_shaders = true;
+        // plugin.output_shaders = true;
+        // plugin.timings_enabled = true;
         plugin.shader_entry_ids_filter = shader_entry_ids_filter;
         array_add(plugins, plugin);
-    }
-    if script_opts.codex {
-        Codex :: #import "Codex";
-        array_add(plugins, Codex.get_plugin());
-    }
-    if script_opts.iprof {
-        IProf :: #import "Iprof";
-        array_add(plugins, IProf.get_plugin());
     }
 }
 
@@ -504,6 +491,9 @@ build_host :: (script_opts: Build_Script_Opts, include_app_plugins: bool = false
     local_build_strings: [..]string;
     array_add(*local_build_strings, ..build_strings);
     array_add(*local_build_strings, tprint("HOST_OUTPUT_EXECUTABLE_NAME :: \"%\";", script_opts.output_exe));
+    if !script_opts.dll {
+        array_add(*local_build_strings, tprint("APP_NAME :: \"%\";", script_opts.output_exe));
+    }
 
     result := build_artifact("Build host",
         .EXECUTABLE, script_opts.output_exe, plugins, HOST_JAI_ROOT, OUTPUT_PATH, script_opts,
@@ -525,9 +515,11 @@ build_app :: (script_opts: Build_Script_Opts, app_filename: string) -> bool {
 
     app_output_executable_name := String.path_strip_extension(String.path_filename(app_filename));
 
+    build_strings: []string = .[tprint("APP_NAME :: \"%\";", app_filename)];
     result := build_artifact(
         workspace_name = tprint("Build app %", app_output_executable_name),
-        .DYNAMIC_LIBRARY, app_output_executable_name, plugins, app_filename, OUTPUT_PATH, script_opts);
+        .DYNAMIC_LIBRARY, app_output_executable_name, plugins, app_filename, OUTPUT_PATH, script_opts,
+        build_strings=build_strings);
 
     return result != .failed;
 };
@@ -573,6 +565,7 @@ build_artifact :: (workspace_name: string,
     {
         options: Build_Options = common_options(workspace, output_type, output_dir, script_opts);
         options.output_executable_name = output_filename;
+        options.intermediate_path = sprint(".build/%", output_filename); // so parallel builds don't clobber each other.
         if script_opts.release {
             set_optimization(*options, .VERY_OPTIMIZED);
             options.array_bounds_check = .OFF;
@@ -684,7 +677,7 @@ environment_specifies_release_build :: () -> bool {
     return false;
 }
 
-parallel_build_all_and_exit :: (cmd_line_args: []string) {
+parallel_build_all_and_exit :: (cmd_line_args: []string, script_opts: Build_Script_Opts) {
     args_list: [..][]string;
     for APP_FILES {
         args: [..]string;
@@ -698,7 +691,12 @@ parallel_build_all_and_exit :: (cmd_line_args: []string) {
     start_time := current_time_monotonic();
     all_ok := parallel_run(args_list);
     if all_ok {
-        log("Built everything in % seconds.", to_float64_seconds(current_time_monotonic() - start_time));
+        // For now it doesn't make sense to log the build time if we're running everything at once, since
+        // we won't actually know the "finish" time until the last window is closed.
+        if !script_opts.run {
+            log("OK: Built everything in % seconds.", to_float64_seconds(current_time_monotonic() - start_time));
+        }
+
         exit(0);
     }
 

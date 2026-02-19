@@ -6,7 +6,6 @@ WRITE_SHADER_OUTPUT :: true;
 #import "Jai-Shader-Transpiler";
 #load "shaders/textured_triangle_shader.jai";
 
-
 NOISE_W :: 128;
 NOISE_H :: 128;
 NOISE_BYTE_COUNT :: NOISE_W * NOISE_H * 4;
@@ -26,9 +25,6 @@ noise_texture: Gpu_Texture;
 noise_texture_view: Gpu_Texture_View;
 noise_sampler: Gpu_Sampler;
 textured_triangle_readback: Readback_Stats;
-window_snapshot_mode := false;
-window_validate_mode := false;
-window_probe_auto_quit := false;
 tt_smoke_mode := false;
 tt_debug_mode: u32 = 0;
 

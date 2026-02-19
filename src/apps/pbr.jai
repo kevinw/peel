@@ -1,16 +1,16 @@
 WRITE_SHADER_OUTPUT :: true;
 
-PBR_ALBEDO_PATH :: "./textures/Snow/Snow015_2K-JPG_Color.jpg";
-PBR_NORMAL_PATH :: "./textures/Snow/Snow015_2K-JPG_NormalGL.jpg";
-PBR_ROUGHNESS_PATH :: "./textures/Snow/Snow015_2K-JPG_Roughness.jpg";
-PBR_AO_PATH :: "./textures/Snow/Snow015_2K-JPG_AmbientOcclusion.jpg";
+PBR_ALBEDO_PATH       :: "./textures/Snow/Snow015_2K-JPG_Color.jpg";
+PBR_NORMAL_PATH       :: "./textures/Snow/Snow015_2K-JPG_NormalGL.jpg";
+PBR_ROUGHNESS_PATH    :: "./textures/Snow/Snow015_2K-JPG_Roughness.jpg";
+PBR_AO_PATH           :: "./textures/Snow/Snow015_2K-JPG_AmbientOcclusion.jpg";
 PBR_DISPLACEMENT_PATH :: "./textures/Snow/Snow015_2K-JPG_Displacement.jpg";
 
-PBR_TEXTURE_COUNT :: 5;
-PBR_TEX_ALBEDO :: 0;
-PBR_TEX_NORMAL :: 1;
-PBR_TEX_ROUGHNESS :: 2;
-PBR_TEX_AO :: 3;
+PBR_TEXTURE_COUNT    :: 5;
+PBR_TEX_ALBEDO       :: 0;
+PBR_TEX_NORMAL       :: 1;
+PBR_TEX_ROUGHNESS    :: 2;
+PBR_TEX_AO           :: 3;
 PBR_TEX_DISPLACEMENT :: 4;
 
 Draw_Data :: struct {
@@ -32,16 +32,10 @@ pbr_depth_view: Gpu_Texture_View;
 pbr_depth_w: u32;
 pbr_depth_h: u32;
 
-pbr_readback: Readback_Stats;
-window_snapshot_mode := false;
-window_validate_mode := false;
-window_probe_auto_quit := false;
-pbr_smoke_mode := false;
-pbr_debug_mode: u32 = 0;
-
+readback_stats: Readback_Stats;
 
 on_dll_init :: () {
-    frame_debug_init();
+    frame_debug_init(*readback_stats);
     graphics_source := cast([]u8) get_transpiled(.METAL, pbr_vertex_main, pbr_fragment_main);
     assert(graphics_source.count > 0, "Transpilation failed for PBR shaders.");
 
@@ -87,7 +81,7 @@ on_dll_init :: () {
         displacement_index = cast(u32) pbr_views[PBR_TEX_DISPLACEMENT] - 1,
 
         sampler_index = cast(u32) pbr_sampler - 1,
-        debug_mode = pbr_debug_mode,
+        debug_mode = debug_mode,
         _pad0 = 0,
         _pad1 = 0,
 
@@ -190,69 +184,10 @@ tick :: () {
 
     gpu_submit_and_present(cmd_buff);
 
-    per_frame_debug(cast(s64)frame_count, swapchain_image);
+    per_frame_debug(*readback_stats, cast(s64)frame_count, swapchain_image);
 } @on_tick
 
 #scope_file
-
-
-frame_debug_init :: () {
-    readback_stats_init(*pbr_readback, "PBR", snapshot_default_w = 128, snapshot_default_h = 128, enable_export_jpg = true);
-
-    smoke_mode_env,      _ := readback_stats_env_int("PEEL_SMOKE");
-    window_snapshot_env, _ := readback_stats_env_int("PEEL_WINDOW_SNAPSHOT");
-    window_validate_env, _ := readback_stats_env_int("PEEL_WINDOW_VALIDATE");
-    pbr_debug_mode_env,  _ := readback_stats_env_int("PEEL_PBR_DEBUG_MODE");
-
-    if smoke_mode_env > 0      pbr_smoke_mode = true;
-    if window_snapshot_env > 0 window_snapshot_mode = true;
-    if window_validate_env > 0 window_validate_mode = true;
-    if pbr_debug_mode_env > 0  pbr_debug_mode = cast(u32) pbr_debug_mode_env;
-
-    if pbr_smoke_mode {
-        pbr_readback.test_readback = true;
-        window_probe_auto_quit = true;
-    }
-    if window_snapshot_mode || window_validate_mode window_probe_auto_quit = true;
-
-    if readback_stats_needs_swapchain_readback(*pbr_readback) || window_snapshot_mode || window_validate_mode {
-        gpu_set_swapchain_framebuffer_only(false);
-    }
-
-}
-
-per_frame_debug :: (frame_num: s64, swapchain_image: Gpu_Texture_View) {
-    if frame_num >= 2 && window_snapshot_mode {
-        window_snapshot_path := tprint("./pbr_window_frame_%.jpeg", frame_num);
-        gpu_dump_to_bitmap(window_snapshot_path);
-        log("PBR_WINDOW_SNAPSHOT frame=% path=%", frame_num, window_snapshot_path);
-        window_snapshot_mode = false;
-    }
-    if frame_num >= 2 && window_validate_mode {
-        ok := gpu_validate_window_readback_non_black();
-        assert(ok, "PBR window capture validation failed: output appears black.");
-        window_validate_mode = false;
-    }
-    if frame_num >= 2 && window_probe_auto_quit && !window_snapshot_mode && !window_validate_mode {
-        log("PBR_WINDOW_PROBE completed; quitting.");
-        app_quit_requested = true;
-    }
-
-    if readback_stats_should_sample(*pbr_readback, frame_num) {
-        stats, ok := fb_collect_swapchain_framebuffer_stats(swapchain_image);
-        if ok {
-            readback_stats_log_sample(*pbr_readback, "PBR", frame_num, stats);
-            readback_stats_maybe_dump_snapshot(*pbr_readback, swapchain_image, frame_num, "pbr_snapshot", "PBR");
-        }
-        if readback_stats_advance_sample(*pbr_readback) {
-            log("PBR_FRAMEBUFFER_STATS completed % samples; quitting.", pbr_readback.stats_max_samples);
-            app_quit_requested = true;
-        }
-    }
-
-    assert(readback_stats_maybe_run_readback_check(*pbr_readback, swapchain_image, "pbr_metal"),
-           "PBR readback check failed: output appears uniform/black.");
-}
 
 load_texture_rgba8 :: (path: string) -> Gpu_Texture, Gpu_Texture_View {
     width, height, num_channels: s32 = 0;
