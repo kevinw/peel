@@ -1,12 +1,3 @@
-WRITE_SHADER_OUTPUT :: true;
-
-#load "../SGPU_App_Common.jai";
-
-#import "Jai-Shader-Transpiler";
-SHR :: #import,file "../shader_hot_reload.jai";
-#load "../reaction_diffusion_shader.jai";
-#load "../readback_stats.jai";
-
 Draw_Data :: struct {
     vertex_params_gpu: Gpu_Ptr;
     pixel_gpu: Gpu_Ptr;
@@ -19,7 +10,6 @@ graphics_pipeline: Gpu_Pipeline;
 compute_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
-rd_readback: Readback_Stats;
 rd_shader_reload: SHR.Shader_Hot_Reload;
 RD_GRAPHICS_ENTRY_ID :: "pair|METAL|rd_vertex_main|rd_fragment_main";
 RD_COMPUTE_ENTRY_ID  :: "single|METAL|compute|rd_step_compute";
@@ -91,23 +81,6 @@ rd_inject_perturbation :: (state: *[RD_CELL_COUNT] Vector2, frame: s64) {
 }
 
 on_dll_init :: () {
-    test_readback_from_args := false;
-    cmdline_args := get_command_line_arguments();
-    defer array_free(cmdline_args);
-    for cmdline_args {
-        if it == "-test_readback" || it == "--test_readback" || it == "--test-readback" {
-            test_readback_from_args = true;
-            break;
-        }
-    }
-    readback_stats_init(*rd_readback, "RD", snapshot_default_w = 96, snapshot_default_h = 96);
-    if test_readback_from_args rd_readback.test_readback = true;
-
-    window_snapshot_env, _ := readback_stats_env_int("PEEL_WINDOW_SNAPSHOT");
-    if window_snapshot_env > 0 window_snapshot_mode = true;
-
-    if readback_stats_needs_swapchain_readback(*rd_readback) || window_snapshot_mode gpu_set_swapchain_framebuffer_only(false);
-
     compute_source := cast([]u8) get_transpiled(.METAL, rd_step_compute);
     assert(compute_source.count > 0, "Compute transpilation failed (rd_step_compute).");
     graphics_source := cast([]u8) get_transpiled(.METAL, rd_vertex_main, rd_fragment_main);
@@ -242,62 +215,12 @@ tick :: () {
     } else if did_rebuild && !swapped_all {
         log_error("RD_SHADER_RELOAD build succeeded but pipeline swap was partial.");
     }
-
-    if readback_stats_should_sample(*rd_readback, frame_num) {
-        stats, stats_ok := fb_collect_swapchain_framebuffer_stats(swapchain_image);
-        if stats_ok {
-                sim_min_b: float = 999.0;
-                sim_max_b: float = -1.0;
-                sim_sum_b: float = 0.0;
-                for render_state_cpu.* {
-                    b := it.y;
-                    sim_min_b = min(sim_min_b, b);
-                    sim_max_b = max(sim_max_b, b);
-                    sim_sum_b += b;
-                }
-                sim_avg_b := sim_sum_b / cast(float) RD_CELL_COUNT;
-                delta_luma := 0.0;
-                if rd_readback.prev_valid delta_luma = stats.avg_luma - rd_readback.prev_avg_luma;
-                log("RD_FRAMEBUFFER_STATS frame=% sample=%/% size=%x% avg_rgb=(%, %, %) avg_luma=% min_luma=% max_luma=% std_luma=% delta_avg_luma=% sim_b(avg=% min=% max=%)",
-                    frame_num,
-                    rd_readback.stats_samples_done + 1,
-                    rd_readback.stats_max_samples,
-                    stats.width,
-                    stats.height,
-                    stats.avg_r,
-                    stats.avg_g,
-                    stats.avg_b,
-                    stats.avg_luma,
-                    stats.min_luma,
-                    stats.max_luma,
-                    stats.stddev_luma,
-                    delta_luma,
-                    sim_avg_b,
-                    sim_min_b,
-                    sim_max_b);
-                rd_readback.prev_avg_luma = stats.avg_luma;
-                rd_readback.prev_valid = true;
-                readback_stats_maybe_dump_snapshot(*rd_readback, swapchain_image, frame_num, "rd_snapshot", "RD");
-                if window_snapshot_mode {
-                    window_snapshot_path := tprint("./rd_window_frame_%.jpeg", frame_num);
-                    gpu_dump_to_bitmap(window_snapshot_path);
-                    log("RD_WINDOW_SNAPSHOT frame=% path=%", frame_num, window_snapshot_path);
-                }
-        } else {
-            log_error("RD_FRAMEBUFFER_STATS frame=% sample=%/% failed to collect stats.",
-                      frame_num, rd_readback.stats_samples_done + 1, rd_readback.stats_max_samples);
-        }
-        if readback_stats_advance_sample(*rd_readback) {
-            log("RD_FRAMEBUFFER_STATS completed % samples; quitting.", rd_readback.stats_max_samples);
-            app_quit_requested = true;
-        }
-    }
-
-    assert(readback_stats_maybe_run_readback_check(*rd_readback, swapchain_image, "rd_metal"),
-           "Reaction diffusion readback check failed: rendered output appears black.");
-
 } @on_tick
 
 #scope_file
 #import "Window_Creation";
 #import "Math";
+#load "../SGPU_App_Common.jai";
+#import "Jai-Shader-Transpiler";
+SHR :: #import,file "../shader_hot_reload.jai";
+#load "../reaction_diffusion_shader.jai";

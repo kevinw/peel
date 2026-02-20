@@ -5,21 +5,15 @@ WRITE_SHADER_OUTPUT :: true;
 #import "Jai-Shader-Transpiler";
 SHR :: #import,file "../shader_hot_reload.jai";
 #load "shaders/raymarch_shader.jai";
-#load "../readback_stats.jai";
 
 graphics_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 raymarch_params_cpu: *Raymarch_Params;
 raymarch_params_gpu: Gpu_Ptr;
-raymarch_readback: Readback_Stats;
 raymarch_shader_reload: SHR.Shader_Hot_Reload;
 RAYMARCH_ENTRY_ID :: "pair|METAL|raymarch_vertex_main|raymarch_fragment_main";
 
 on_dll_init :: () {
-    readback_stats_init(*raymarch_readback, "RAYMARCH", snapshot_default_w = 128, snapshot_default_h = 128);
-    if readback_stats_needs_swapchain_readback(*raymarch_readback) {
-        gpu_set_swapchain_framebuffer_only(false);
-    }
     hot_reload_enabled_by_default := true;
     #if RELEASE hot_reload_enabled_by_default = false;
     _ = SHR.shader_hot_reload_init_auto(*raymarch_shader_reload, "src/apps/raymarch.jai", poll_every_frames = 15, log_prefix = "RAYMARCH_SHADER_RELOAD", enabled_by_default = hot_reload_enabled_by_default);
@@ -103,18 +97,6 @@ tick :: () {
         log_error("RAYMARCH_SHADER_RELOAD build failed; keeping current runtime shaders.");
     } else if did_rebuild && !swapped_all {
         log_error("RAYMARCH_SHADER_RELOAD build succeeded but pipeline swap was partial; keeping remaining old pipelines.");
-    }
-
-    if readback_stats_should_sample(*raymarch_readback, frame_num) {
-        stats, ok := fb_collect_swapchain_framebuffer_stats(swapchain_image);
-        if ok {
-            readback_stats_log_sample(*raymarch_readback, "RAYMARCH", frame_num, stats);
-            readback_stats_maybe_dump_snapshot(*raymarch_readback, swapchain_image, frame_num, "raymarch_snapshot", "RAYMARCH");
-        }
-        if readback_stats_advance_sample(*raymarch_readback) {
-            log("RAYMARCH_FRAMEBUFFER_STATS completed % samples; quitting.", raymarch_readback.stats_max_samples);
-            app_quit_requested = true;
-        }
     }
 } @on_tick
 

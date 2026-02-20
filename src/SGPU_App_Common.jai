@@ -1,4 +1,8 @@
-#load "App_Common.jai";
+READBACK_ENABLED :: !RELEASE;
+
+#if READBACK_ENABLED {
+    readback_stats: Readback_Stats;
+}
 
 app_needs_recompile: string;
 app_quit_requested := false;
@@ -131,7 +135,17 @@ app_update :: (update_ctx: *App_Update_Ctx) {
         return;
     }
 
-    call_event_functions(.tick);
+    {
+        call_event_functions(.tick);
+        #if READBACK_ENABLED {
+            swapchain_image := gpu_current_swapchain_view();
+            if swapchain_image == 0 {
+                log_error("Error: READBACK_ENABLED but no gpu_current_swapchain_view()");
+            } else {
+                per_frame_debug(*readback_stats, cast(s64)frame_count, swapchain_image);
+            }
+        }
+    }
 
     if max_frames > 0 && frame_count > max_frames {
         log("Hit max frame count (%), exiting.", max_frames);
@@ -148,7 +162,7 @@ create_window_and_init_sgpu :: () {
 }
 
 host_quit :: (quit_ctx: Quit_Ctx) {
-    #if !RELEASE {
+    #if !RELEASE { // let OS do cleanup for us in release mode.
         gpu_destroy_swapchain();
         gpu_shutdown();
         if sgpu_debug_status.count != 0 {
@@ -183,6 +197,8 @@ host_init :: (init_ctx: Init_Ctx) -> bool {
     last_time = seconds_since_init();
 
     create_window_and_init_sgpu();
+
+    #if READBACK_ENABLED frame_debug_init(*readback_stats);
     call_event_functions(.dll_init);
 
     return true;
@@ -223,3 +239,8 @@ Input :: #import "Input";
         return cast(*CAMetalLayer)content_view.layer(content_view);
     }
 }
+
+#load "App_Common.jai";
+#scope_file
+#load "readback_stats.jai";
+#import "Window_Creation";

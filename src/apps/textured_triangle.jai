@@ -1,11 +1,3 @@
-WRITE_SHADER_OUTPUT :: true;
-
-#load "../SGPU_App_Common.jai";
-#load "../readback_stats.jai";
-
-#import "Jai-Shader-Transpiler";
-#load "shaders/textured_triangle_shader.jai";
-
 NOISE_W :: 128;
 NOISE_H :: 128;
 NOISE_BYTE_COUNT :: NOISE_W * NOISE_H * 4;
@@ -24,9 +16,6 @@ pixel_params_cpu: *Textured_Triangle_Pixel_Params;
 noise_texture: Gpu_Texture;
 noise_texture_view: Gpu_Texture_View;
 noise_sampler: Gpu_Sampler;
-textured_triangle_readback: Readback_Stats;
-tt_smoke_mode := false;
-tt_debug_mode: u32 = 0;
 
 noise_fill_rgba8 :: (pixels: *[NOISE_BYTE_COUNT] u8) {
     for y: 0..NOISE_H - 1 {
@@ -48,25 +37,6 @@ noise_fill_rgba8 :: (pixels: *[NOISE_BYTE_COUNT] u8) {
 }
 
 on_dll_init :: () {
-    readback_stats_init(*textured_triangle_readback, "TEXTURED_TRIANGLE", snapshot_default_w = 128, snapshot_default_h = 128, enable_export_jpg = true);
-    smoke_mode_env, _ := readback_stats_env_int("PEEL_SMOKE");
-    window_snapshot_env, _ := readback_stats_env_int("PEEL_WINDOW_SNAPSHOT");
-    window_validate_env, _ := readback_stats_env_int("PEEL_WINDOW_VALIDATE");
-    tt_debug_mode_env, _ := readback_stats_env_int("PEEL_TT_DEBUG_MODE");
-    if smoke_mode_env > 0 tt_smoke_mode = true;
-    if window_snapshot_env > 0 window_snapshot_mode = true;
-    if window_validate_env > 0 window_validate_mode = true;
-    if tt_debug_mode_env > 0 tt_debug_mode = 1;
-    if tt_smoke_mode {
-        textured_triangle_readback.test_readback = true;
-        window_probe_auto_quit = true;
-    }
-    if window_snapshot_mode || window_validate_mode window_probe_auto_quit = true;
-
-    if readback_stats_needs_swapchain_readback(*textured_triangle_readback) || window_snapshot_mode || window_validate_mode {
-        gpu_set_swapchain_framebuffer_only(false);
-    }
-
     graphics_source := cast([]u8) get_transpiled(.METAL, textured_triangle_vertex_main, textured_triangle_fragment_main);
     assert(graphics_source.count > 0, "Transpilation failed for textured triangle shaders.");
 
@@ -111,7 +81,7 @@ on_dll_init :: () {
     pixel_params_cpu.* = .{
         texture_index = cast(u32) noise_texture_view - 1,
         sampler_index = cast(u32) noise_sampler - 1,
-        debug_mode = tt_debug_mode,
+        debug_mode = debug_mode,
         _pad = 0,
     };
     draw_data = .{
@@ -149,37 +119,9 @@ tick :: () {
     assert(draw_result == .SUCCESS, tprint("Textured triangle draw failed: %", draw_result));
 
     gpu_submit_and_present(cmd_buff);
-
-    frame_num := cast(s64) frame_count;
-    if frame_num >= 2 && window_snapshot_mode {
-        window_snapshot_path := tprint("./textured_triangle_window_frame_%.jpeg", frame_num);
-        gpu_dump_to_bitmap(window_snapshot_path);
-        log("TEXTURED_TRIANGLE_WINDOW_SNAPSHOT frame=% path=%", frame_num, window_snapshot_path);
-        window_snapshot_mode = false;
-    }
-    if frame_num >= 2 && window_validate_mode {
-        ok := gpu_validate_window_readback_non_black();
-        assert(ok, "Textured triangle window capture validation failed: output appears black.");
-        window_validate_mode = false;
-    }
-    if frame_num >= 2 && window_probe_auto_quit && !window_snapshot_mode && !window_validate_mode {
-        log("TEXTURED_TRIANGLE_WINDOW_PROBE completed; quitting.");
-        app_quit_requested = true;
-    }
-    if readback_stats_should_sample(*textured_triangle_readback, frame_num) {
-        stats, ok := fb_collect_swapchain_framebuffer_stats(swapchain_image);
-        if ok {
-            readback_stats_log_sample(*textured_triangle_readback, "TEXTURED_TRIANGLE", frame_num, stats);
-            readback_stats_maybe_dump_snapshot(*textured_triangle_readback, swapchain_image, frame_num, "textured_triangle_snapshot", "TEXTURED_TRIANGLE");
-        }
-        if readback_stats_advance_sample(*textured_triangle_readback) {
-            log("TEXTURED_TRIANGLE_FRAMEBUFFER_STATS completed % samples; quitting.", textured_triangle_readback.stats_max_samples);
-            app_quit_requested = true;
-        }
-    }
-    assert(readback_stats_maybe_run_readback_check(*textured_triangle_readback, swapchain_image, "textured_triangle_metal"),
-           "Textured triangle readback check failed: output appears uniform/black.");
 } @on_tick
 
 #scope_file
-#import "Window_Creation";
+#load "../SGPU_App_Common.jai";
+#import "Jai-Shader-Transpiler";
+#load "shaders/textured_triangle_shader.jai";

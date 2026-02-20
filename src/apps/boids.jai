@@ -5,7 +5,6 @@ NUM_INSTANCES :: BOIDS_COUNT;
 #import "Jai-Shader-Transpiler";
 SHR :: #import,file "../shader_hot_reload.jai";
 #load "shaders/boids_shader.jai";
-#load "../readback_stats.jai";
 
 Draw_Data :: struct {
     vertex_params_gpu: Gpu_Ptr;
@@ -30,7 +29,6 @@ vertex_params_b_gpu: Gpu_Ptr;
 boids_control_ring_cpu: *[SGPU_FRAMES_IN_FLIGHT] Boids_Control;
 boids_control_ring_gpu: Gpu_Ptr;
 
-boids_readback: Readback_Stats;
 boids_shader_reload: SHR.Shader_Hot_Reload;
 BOIDS_GRAPHICS_ENTRY_ID :: "pair|METAL|boids_vertex_main|boids_frag_main";
 BOIDS_COMPUTE_ENTRY_ID  :: "single|METAL|compute|boids_step_compute";
@@ -47,9 +45,6 @@ app_vec2_normalize_or_zero :: (v: Vector2) -> Vector2 { // TODO
 }
 
 on_dll_init :: () {
-    readback_stats_init(*boids_readback, "BOIDS", snapshot_default_w = 96, snapshot_default_h = 96);
-    if readback_stats_needs_swapchain_readback(*boids_readback) gpu_set_swapchain_framebuffer_only(false);
-
     graphics_source := cast([]u8) get_transpiled(.METAL, boids_vertex_main, boids_frag_main); assert(graphics_source.count > 0);
     compute_source  := cast([]u8) get_transpiled(.METAL, boids_step_compute);                 assert(compute_source.count > 0);
 
@@ -205,29 +200,13 @@ tick :: () {
 
     gpu_submit_and_present(cmd_buff);
 
-    frame_num := cast(s64) frame_count;
-    did_rebuild, swapped_all, rebuild_ok := SHR.shader_hot_reload_tick(*boids_shader_reload, frame_num);
+    did_rebuild, swapped_all, rebuild_ok := SHR.shader_hot_reload_tick(*boids_shader_reload, cast(s64)frame_count);
     sgpu_set_debug_status(SHR.shader_hot_reload_status_line(*boids_shader_reload));
     if did_rebuild && !rebuild_ok {
         log_error("BOIDS_SHADER_RELOAD build failed; keeping current runtime shaders.");
     } else if did_rebuild && !swapped_all {
         log_error("BOIDS_SHADER_RELOAD build succeeded but pipeline swap was partial.");
     }
-
-    if readback_stats_should_sample(*boids_readback, frame_num) {
-        stats, ok := fb_collect_swapchain_framebuffer_stats(swapchain_image);
-        if ok {
-            readback_stats_log_sample(*boids_readback, "BOIDS", frame_num, stats);
-            readback_stats_maybe_dump_snapshot(*boids_readback, swapchain_image, frame_num, "boids_snapshot", "BOIDS");
-        }
-        if readback_stats_advance_sample(*boids_readback) {
-            log("BOIDS_FRAMEBUFFER_STATS completed % samples; quitting.", boids_readback.stats_max_samples);
-            app_quit_requested = true;
-        }
-    }
-
-    assert(readback_stats_maybe_run_readback_check(*boids_readback, swapchain_image, "boids_metal"),
-           "Boids readback check failed: output appears uniform/black.");
 } @on_tick
 
 #scope_file

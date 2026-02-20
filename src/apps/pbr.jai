@@ -1,10 +1,9 @@
-WRITE_SHADER_OUTPUT :: true;
-
-PBR_ALBEDO_PATH       :: "./textures/Snow/Snow015_2K-JPG_Color.jpg";
-PBR_NORMAL_PATH       :: "./textures/Snow/Snow015_2K-JPG_NormalGL.jpg";
-PBR_ROUGHNESS_PATH    :: "./textures/Snow/Snow015_2K-JPG_Roughness.jpg";
-PBR_AO_PATH           :: "./textures/Snow/Snow015_2K-JPG_AmbientOcclusion.jpg";
-PBR_DISPLACEMENT_PATH :: "./textures/Snow/Snow015_2K-JPG_Displacement.jpg";
+TEX_TEMPL :: "./textures/Snow/Snow015_2K-JPG_%.jpg";
+PBR_ALBEDO_PATH       :: #run sprint(TEX_TEMPL, "Color");
+PBR_NORMAL_PATH       :: #run sprint(TEX_TEMPL, "NormalGL");
+PBR_ROUGHNESS_PATH    :: #run sprint(TEX_TEMPL, "Roughness");
+PBR_AO_PATH           :: #run sprint(TEX_TEMPL, "AmbientOcclusion");
+PBR_DISPLACEMENT_PATH :: #run sprint(TEX_TEMPL, "Displacement");
 
 PBR_TEXTURE_COUNT    :: 5;
 PBR_TEX_ALBEDO       :: 0;
@@ -32,10 +31,7 @@ pbr_depth_view: Gpu_Texture_View;
 pbr_depth_w: u32;
 pbr_depth_h: u32;
 
-readback_stats: Readback_Stats;
-
 on_dll_init :: () {
-    frame_debug_init(*readback_stats);
     graphics_source := cast([]u8) get_transpiled(.METAL, pbr_vertex_main, pbr_fragment_main);
     assert(graphics_source.count > 0, "Transpilation failed for PBR shaders.");
 
@@ -49,13 +45,11 @@ on_dll_init :: () {
     assert(graphics_pipeline != 0, "PBR graphics pipeline creation failed.");
 
     stbi_set_flip_vertically_on_load(1);
-    log("Loading textures...");
-    pbr_textures[PBR_TEX_ALBEDO], pbr_views[PBR_TEX_ALBEDO] = load_texture_rgba8(PBR_ALBEDO_PATH);
-    pbr_textures[PBR_TEX_NORMAL], pbr_views[PBR_TEX_NORMAL] = load_texture_rgba8(PBR_NORMAL_PATH);
-    pbr_textures[PBR_TEX_ROUGHNESS], pbr_views[PBR_TEX_ROUGHNESS] = load_texture_rgba8(PBR_ROUGHNESS_PATH);
-    pbr_textures[PBR_TEX_AO], pbr_views[PBR_TEX_AO] = load_texture_rgba8(PBR_AO_PATH);
+    pbr_textures[PBR_TEX_ALBEDO], pbr_views[PBR_TEX_ALBEDO]             = load_texture_rgba8(PBR_ALBEDO_PATH);
+    pbr_textures[PBR_TEX_NORMAL], pbr_views[PBR_TEX_NORMAL]             = load_texture_rgba8(PBR_NORMAL_PATH);
+    pbr_textures[PBR_TEX_ROUGHNESS], pbr_views[PBR_TEX_ROUGHNESS]       = load_texture_rgba8(PBR_ROUGHNESS_PATH);
+    pbr_textures[PBR_TEX_AO], pbr_views[PBR_TEX_AO]                     = load_texture_rgba8(PBR_AO_PATH);
     pbr_textures[PBR_TEX_DISPLACEMENT], pbr_views[PBR_TEX_DISPLACEMENT] = load_texture_rgba8(PBR_DISPLACEMENT_PATH);
-    log("Loaded textures.");
 
     pbr_sampler = gpu_create_sampler(.{
         min_filter = .LINEAR,
@@ -183,8 +177,6 @@ tick :: () {
     assert(draw_result == .SUCCESS, tprint("PBR draw failed: %", draw_result));
 
     gpu_submit_and_present(cmd_buff);
-
-    per_frame_debug(*readback_stats, cast(s64)frame_count, swapchain_image);
 } @on_tick
 
 #scope_file
@@ -241,10 +233,7 @@ ensure_depth_target :: (width: u32, height: u32) {
     gpu_commit_residency();
 }
 
-#import "Window_Creation";
 #load "../SGPU_App_Common.jai";
-#load "../readback_stats.jai";
-
 #import "Jai-Shader-Transpiler";
 #import "stb_image";
 #load "shaders/pbr_shader.jai";

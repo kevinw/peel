@@ -5,7 +5,6 @@ WRITE_SHADER_OUTPUT :: true;
 #import "Jai-Shader-Transpiler";
 SHR :: #import,file "../shader_hot_reload.jai";
 #load "shaders/fluid2d_shader.jai";
-#load "../readback_stats.jai";
 
 Draw_Data :: struct {
     vertex_params_gpu: Gpu_Ptr;
@@ -19,7 +18,6 @@ graphics_pipeline: Gpu_Pipeline;
 compute_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
-fluid_readback: Readback_Stats;
 fluid_shader_reload: SHR.Shader_Hot_Reload;
 FLUID_GRAPHICS_ENTRY_ID :: "pair|METAL|fluid_vertex_main|fluid_fragment_main";
 FLUID_COMPUTE_ENTRY_ID  :: "single|METAL|compute|fluid_step_compute";
@@ -55,11 +53,6 @@ fluid_init_state :: (state: *[FLUID_CELL_COUNT] Vector4) {
 }
 
 on_dll_init :: () {
-    readback_stats_init(*fluid_readback, "FLUID2D", snapshot_default_w = 128, snapshot_default_h = 128);
-    if readback_stats_needs_swapchain_readback(*fluid_readback) {
-        gpu_set_swapchain_framebuffer_only(false);
-    }
-
     compute_source := cast([]u8) get_transpiled(.METAL, fluid_step_compute);
     assert(compute_source.count > 0, "Compute transpilation failed (fluid_step_compute).");
     graphics_source := cast([]u8) get_transpiled(.METAL, fluid_vertex_main, fluid_fragment_main);
@@ -201,21 +194,6 @@ tick :: () {
     } else if did_rebuild && !swapped_all {
         log_error("FLUID2D_SHADER_RELOAD build succeeded but pipeline swap was partial.");
     }
-
-    if readback_stats_should_sample(*fluid_readback, frame_num) {
-        stats, ok := fb_collect_swapchain_framebuffer_stats(swapchain_image);
-        if ok {
-            readback_stats_log_sample(*fluid_readback, "FLUID2D", frame_num, stats);
-            readback_stats_maybe_dump_snapshot(*fluid_readback, swapchain_image, frame_num, "fluid2d_snapshot", "FLUID2D");
-        }
-        if readback_stats_advance_sample(*fluid_readback) {
-            log("FLUID2D_FRAMEBUFFER_STATS completed % samples; quitting.", fluid_readback.stats_max_samples);
-            app_quit_requested = true;
-        }
-    }
-
-    assert(readback_stats_maybe_run_readback_check(*fluid_readback, swapchain_image, "fluid2d_metal"),
-           "Fluid2D readback check failed: output appears uniform/black.");
 } @on_tick
 
 #scope_file

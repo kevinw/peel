@@ -1,13 +1,13 @@
 #import "Jai-Shader-Transpiler";
 #import "Math";
 
-SURPRISE_PARTICLE_COUNT :: 100;
+PARTICLE_COUNT :: 1000;
 
 UVector3 :: struct {
     x, y, z: u32;
 }
 
-Surprise_State :: struct {
+Particle :: struct {
     pos: Vector2;
     vel: Vector2;
     hue: float;
@@ -25,7 +25,7 @@ Surprise_Vertex_In :: struct {
 
 Surprise_Vertex_Params :: struct {
     quad: *Vector2;
-    sparks: *Surprise_State;
+    sparks: *Particle;
 }
 
 Surprise_Vertex_Out :: struct {
@@ -57,7 +57,7 @@ surprise_clamp01 :: (x: float) -> float {
     return x;
 }
 
-surprise_respawn :: (i: u32, old: Surprise_State) -> Surprise_State {
+surprise_respawn :: (i: u32, old: Particle) -> Particle {
     seed := cast(float) i * 12.9898 + old.hue * 78.233 + old.pos.x * 37.719 + old.pos.y * 11.131;
     angle := surprise_hash1(seed) * 6.2831853;
     radius := 0.08 + 0.35 * surprise_hash1(seed + 1.7);
@@ -67,14 +67,14 @@ surprise_respawn :: (i: u32, old: Surprise_State) -> Surprise_State {
 
     out := old;
     out.pos = p;
-    out.vel = Vector2.{tangent.x * speed, tangent.y * speed};
+    out.vel = {tangent.x * speed, tangent.y * speed};
     out.hue = surprise_hash1(seed + 8.3);
     out.life = 0.65 + 0.35 * surprise_hash1(seed + 13.9);
     return out;
 }
 
-surprise_step_compute :: (using in: Surprise_Compute_In, sparks: *Surprise_State) {
-    if thread_id.x >= SURPRISE_PARTICLE_COUNT return;
+surprise_step_compute :: (using in: Surprise_Compute_In, sparks: *Particle) {
+    if thread_id.x >= PARTICLE_COUNT return;
 
     i := thread_id.x;
     s := sparks[i];
@@ -113,7 +113,7 @@ surprise_vertex_main :: (using in: Surprise_Vertex_In, data: *Surprise_Vertex_Pa
     quad := data.quad[vertex_id];
 
     local_speed := sqrt(p.vel.x * p.vel.x + p.vel.y * p.vel.y);
-    size := 0.0045 + (1.0 - p.life) * 0.006 + local_speed * 18.0;
+    size := 0.0045 + (1.0 - p.life) * 0.006 + local_speed * 3.0;
 
     world := Vector2.{p.pos.x + quad.x * size, p.pos.y + quad.y * size};
 
@@ -137,8 +137,8 @@ surprise_fragment_main :: (using in: Surprise_Fragment_In, data: *Surprise_Verte
     green := 0.45 + 0.45 * cos(6.2831853 * (t + 0.33));
     blue := 0.45 + 0.45 * cos(6.2831853 * (t + 0.66));
 
-    boost := 0.35 + speed * 30.0 + (1.0 - life) * 0.6;
+    boost := 0.35 + speed * 30.0 + (1.0 - life) * 0.06;
     color := Vector3.{red * boost * glow, green * boost * glow, blue * boost * glow};
 
-    return .{color.x, color.y, color.z, glow * 0.9};
+    return .{color.x, color.y, color.z, glow * 0.3};
 } @fragment_shader
