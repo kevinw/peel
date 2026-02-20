@@ -11,8 +11,8 @@ sounds: struct {
 }
 
 #program_export
-load_sounds :: () {
-    push_context {
+load_sounds :: () #c_call {
+    push_context,defer_pop;
     sound_player_init(.{});
 
     using sounds;
@@ -28,11 +28,11 @@ load_sounds :: () {
             start_playing(stream);
         }
     }
-    }
 }
 
 #program_export
-deinit_sounds :: () {
+deinit_sounds :: () #c_call {
+    push_context,defer_pop;
     using sounds;
     sound_player_shutdown();
 }
@@ -49,8 +49,8 @@ stage_sound :: (data: *Sound_Data, category := Sound_Category.GENERAL_SFX, pertu
 }
 
 #program_export
-trigger_sound :: (name: string) {
-    push_context {
+trigger_sound :: (name: string) #c_call {
+    push_context,defer_pop;
     using sounds;
     sound_data: *Sound_Data;
     if name == {
@@ -69,11 +69,11 @@ trigger_sound :: (name: string) {
 
     stream := stage_sound(*footsteps, .GENERAL_SFX, true);
     start_playing(stream);
-    }
 }
 
 #program_export
-per_frame_update :: () {
+per_frame_update :: () #c_call {
+    push_context,defer_pop;
     Sound_Player.update();
 }
 

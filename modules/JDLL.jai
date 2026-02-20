@@ -21,6 +21,8 @@ You get a module that can be used to call those functions:
 //
 // use @jdll_export instead of #program_export and wrap functions in a generated #program_export
 // function which calls Remap_Context automatically.
+//
+// add an option to mark the files as readonly since they bring some duplication into the tree
 
 #scope_file
 DEFAULT_VERBOSE :: false;
@@ -97,15 +99,26 @@ generate_interface_module_output :: (using p: *JDLL_Metaprogram_Plugin) -> (ok: 
     lib_name := tprint("%_lib", interface_module_output);
 
     for decl: exported_decls {
-        decl_copy := decl.*;
+        // TODO: we could also support #program_export structs or variables.
+        assert(decl.expression.kind == .PROCEDURE_HEADER);
+
+        if decl.expression.(*Code_Procedure_Header).procedure_flags & .C_CALL == 0 {
+            MSG := tprint(#string END
+    JDLL currently requires #program_exported procedure '%' to be #c_call and
+    use push_context or push_context,defer pop inside. Once the compiler bug
+    involving #elsewhere Jai ABI'd procs is fixed, this error can go away.
+    END, decl.name);
+            compiler_report(MSG, loc=make_location(decl.expression));
+            assert(false);
+        }
 
         // Remove the #program_export flag since we're writing out code that does the importing.
+        decl_copy := decl.*;
         decl_copy.flags &= ~.PROGRAM_EXPORT;
         print_declaration(*sb, *decl_copy);
 
         // TODO: maybe just modify the flags so print_declaration does this part for us
-        symbol_name := decl.name;
-        print_to_builder(*sb, " #elsewhere % \"%\";\n", lib_name, symbol_name);
+        print_to_builder(*sb, " #foreign %;\n", lib_name);
     }
 
     // make sure include_files get automatically #loaded

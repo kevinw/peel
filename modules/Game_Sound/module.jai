@@ -1,13 +1,13 @@
 // Auto-generated interface module for JDLL 'Game_Sound'
 
-per_frame_update :: () #elsewhere Game_Sound_lib "per_frame_update";
-trigger_sound :: (name: string) #elsewhere Game_Sound_lib "trigger_sound";
-deinit_sounds :: () #elsewhere Game_Sound_lib "deinit_sounds";
-load_sounds :: () #elsewhere Game_Sound_lib "load_sounds";
+per_frame_update :: () #c_call #foreign Game_Sound_lib;
+trigger_sound :: (name: string) #c_call #foreign Game_Sound_lib;
+deinit_sounds :: () #c_call #foreign Game_Sound_lib;
+load_sounds :: () #c_call #foreign Game_Sound_lib;
 
 #scope_file
 #if OS == .MACOS {
-Game_Sound_lib :: #library,no_static_library "lib/macos/Game_Sound";
+    Game_Sound_lib :: #library,no_static_library "macos/Game_Sound";
 } else #if OS == .WINDOWS {
-Game_Sound_lib :: #library,no_static_library "lib/win/Game_Sound";
+    Game_Sound_lib :: #library,no_static_library "win/Game_Sound";
 }

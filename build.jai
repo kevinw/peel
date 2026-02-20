@@ -320,6 +320,7 @@ build_jdll :: (output_name: string, source_file: string, script_opts: Build_Scri
     } else {
         check_for_unnecessary_build = script_opts.dll;
         array_add(*plugins, Build_Manifest.get_plugin());
+        // TODO: include JDLL source in build manifest implicit dependencies!
         array_add(*plugins, JDLL.get_plugin());
     }
 

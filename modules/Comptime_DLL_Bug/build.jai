@@ -8,6 +8,7 @@
 
     // build the DLL
     {
+        log("building dll");
         w := compiler_create_workspace();
         defer compiler_destroy_workspace(w);
 
@@ -25,6 +26,7 @@
 
     // build the main program
     {
+        log("building program");
         w := compiler_create_workspace();
         defer compiler_destroy_workspace(w);
 

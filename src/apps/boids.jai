@@ -2,7 +2,6 @@ WRITE_SHADER_OUTPUT :: true;
 NUM_INSTANCES :: BOIDS_COUNT;
 
 #load "../SGPU_App_Common.jai";
-
 #import "Jai-Shader-Transpiler";
 SHR :: #import,file "../shader_hot_reload.jai";
 #load "shaders/boids_shader.jai";
@@ -36,11 +35,11 @@ boids_shader_reload: SHR.Shader_Hot_Reload;
 BOIDS_GRAPHICS_ENTRY_ID :: "pair|METAL|boids_vertex_main|boids_frag_main";
 BOIDS_COMPUTE_ENTRY_ID  :: "single|METAL|compute|boids_step_compute";
 
-app_vec2_length :: (v: Vector2) -> float {
+app_vec2_length :: (v: Vector2) -> float { // TODO
     return sqrt(v.x * v.x + v.y * v.y);
 }
 
-app_vec2_normalize_or_zero :: (v: Vector2) -> Vector2 {
+app_vec2_normalize_or_zero :: (v: Vector2) -> Vector2 { // TODO
     len := app_vec2_length(v);
     if len < 0.000001 return .{0, 0};
     inv := 1.0 / len;
