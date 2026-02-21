@@ -1,6 +1,18 @@
 [
   {
-    "label": "Build and run",
-    "command": "jai build.jai",
+    "label": "particles",
+    "command": "jai ~/src/peel/build.jai - src/apps/particles.jai -run -dll",
+  },
+  {
+    "label": "boids",
+    "command": "jai ~/src/peel/build.jai - src/apps/boids.jai -run -dll",
+  },
+  {
+    "label": "raymarch",
+    "command": "jai ~/src/peel/build.jai - src/apps/raymarch.jai -run -dll",
+  },
+  {
+    "label": "textured_triangle_smoke",
+    "command": "cd ~/src/peel && ./tools/textured_triangle_probe.sh",
   },
 ]

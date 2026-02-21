@@ -1,3 +1,9 @@
+READBACK_ENABLED :: !RELEASE;
+
+#if READBACK_ENABLED {
+    readback_stats: Readback_Stats;
+}
+
 app_needs_recompile: string;
 app_quit_requested := false;
 did_init := false;
@@ -9,19 +15,85 @@ time: float64;
 frame_count: int;
 last_window_size: V2(u32);
 window: *void; // TODO
+sgpu_debug_status: string;
 
-#import "sgpu_metal";
+#import "sgpu"()(SLANG_COMPILER=false);
+
+SGPU_FRAMES_IN_FLIGHT :: 3;
+
+AB_Buffer :: struct($T: Type) {
+    a_cpu: *T;
+    b_cpu: *T;
+    a_gpu: Gpu_Ptr;
+    b_gpu: Gpu_Ptr;
+    src_is_a: bool;
+}
+
+ab_buffer_src_cpu :: (buffer: *AB_Buffer($T)) -> *T #expand {
+    if buffer.src_is_a return buffer.a_cpu;
+    return buffer.b_cpu;
+}
+
+ab_buffer_dst_cpu :: (buffer: *AB_Buffer($T)) -> *T #expand {
+    if buffer.src_is_a return buffer.b_cpu;
+    return buffer.a_cpu;
+}
+
+ab_buffer_src_gpu :: (buffer: *AB_Buffer($T)) -> Gpu_Ptr #expand {
+    if buffer.src_is_a return buffer.a_gpu;
+    return buffer.b_gpu;
+}
+
+ab_buffer_dst_gpu :: (buffer: *AB_Buffer($T)) -> Gpu_Ptr #expand {
+    if buffer.src_is_a return buffer.b_gpu;
+    return buffer.a_gpu;
+}
+
+ab_buffer_advance :: (buffer: *AB_Buffer($T)) #expand {
+    buffer.src_is_a = !buffer.src_is_a;
+}
+
+sgpu_frame_ring_index :: (frame_number: s64 = -1) -> s64 {
+    if frame_number < 0 frame_number = cast(s64) gpu_submission_frame_index();
+    idx := frame_number % SGPU_FRAMES_IN_FLIGHT;
+    if idx < 0 idx += SGPU_FRAMES_IN_FLIGHT;
+    return idx;
+}
+
+sgpu_arena_alloc_frame_ring :: (arena: *Gpu_Arena, $T: Type, min_alignment: s64 = 16) -> (*[SGPU_FRAMES_IN_FLIGHT] T, Gpu_Ptr) {
+    cpu_ring, gpu_ring := gpu_arena_alloc(arena, [SGPU_FRAMES_IN_FLIGHT] T, min_alignment);
+    return cpu_ring, gpu_ring;
+}
+
+sgpu_frame_ring_cpu_slot :: (ring: *[SGPU_FRAMES_IN_FLIGHT] $T, frame_number: s64 = -1) -> *T #expand {
+    idx := sgpu_frame_ring_index(frame_number);
+    return cast(*T) ring + idx;
+}
+
+sgpu_frame_ring_gpu_slot :: (ring_base_gpu: Gpu_Ptr, $T: Type, frame_number: s64 = -1) -> Gpu_Ptr #expand {
+    idx := sgpu_frame_ring_index(frame_number);
+    return ring_base_gpu + (idx * size_of(T)).(Gpu_Ptr);
+}
 
 gpu_begin_scoped_render_pass :: (cmd_buf: Gpu_Command_Buffer, desc: Gpu_Render_Pass_Desc) #expand {
     gpu_begin_render_pass(cmd_buf, desc);
     `defer gpu_end_render_pass(cmd_buf);
 }
 
+sgpu_set_debug_status :: (status: string) {
+    if sgpu_debug_status == status return;
+    if sgpu_debug_status.count != 0 {
+        free(sgpu_debug_status);
+        sgpu_debug_status = "";
+    }
+    if status.count != 0 sgpu_debug_status = copy_string(status);
+}
+
 app_update :: (update_ctx: *App_Update_Ctx) {
     auto_release_temp();
 
     #if OS == .MACOS {
-        pool := objc_init(objc_alloc(NSAutoreleasePool));
+        pool := objc_new(NSAutoreleasePool);
         defer release(pool);
     }
 
@@ -30,8 +102,12 @@ app_update :: (update_ctx: *App_Update_Ctx) {
     last_time = time;
 
     #if !RELEASE {
-        if window && frame_count % (60 * 3) == 0 {
-            title := human_readable_bytes(current_memory_usage_bytes(),, temp);
+        if window && frame_count % 10 == 0 {
+            mem_text := human_readable_bytes(current_memory_usage_bytes(),, temp);
+            title := mem_text;
+            if sgpu_debug_status.count != 0 {
+                title = tprint("% | %", mem_text, sgpu_debug_status);
+            }
             set_window_title(window, title);
         }
     }
@@ -59,36 +135,55 @@ app_update :: (update_ctx: *App_Update_Ctx) {
         return;
     }
 
-    call_event_functions(.tick);
+    {
+        call_event_functions(.tick);
+        #if READBACK_ENABLED {
+            swapchain_image := gpu_current_swapchain_view();
+            if swapchain_image == 0 {
+                log_error("Error: READBACK_ENABLED but no gpu_current_swapchain_view()");
+            } else {
+                per_frame_debug(*readback_stats, cast(s64)frame_count, swapchain_image);
+            }
+        }
+    }
+
+    if max_frames > 0 && frame_count > max_frames {
+        log("Hit max frame count (%), exiting.", max_frames);
+        update_ctx.app_return_flags |= .Quit;
+        return;
+    }
 }
 
 create_window_and_init_sgpu :: () {
-    width :s32 = 1200;
-    height :s32 = 800;
-
-    window = create_window(width, height, "hello peel");
-
+    window = create_window(2000, 1500, "hello peel");
     result := gpu_init();
     assert(result == .SUCCESS);
-
-    window_type: Native_Window_Type;
-    #if      OS == .WINDOWS then window_type = .WIN32;
-    else #if OS == .LINUX   then window_type = .X11;
-    else #if OS == .MACOS   then window_type = .COCOA;
-    else assert(false, "Unsupported OS");
-
-    gpu_init_swapchain(cast(u64)window, window_type);
+    gpu_init_swapchain(xx window);
 }
 
 host_quit :: (quit_ctx: Quit_Ctx) {
-    log("host_quit!");
-
-    // @Perf probably not necessary in release builds.
-    gpu_destroy_swapchain();
-    gpu_shutdown();
+    #if !RELEASE { // let OS do cleanup for us in release mode.
+        gpu_destroy_swapchain();
+        gpu_shutdown();
+        if sgpu_debug_status.count != 0 {
+            free(sgpu_debug_status);
+            sgpu_debug_status = "";
+        }
+    }
 }
 
+max_frames: int = 0;
+
 host_init :: (init_ctx: Init_Ctx) -> bool {
+    #if !RELEASE && OS == .MACOS {
+        using,only(setenv) POSIX :: #import "POSIX";
+        setenv("MTL_LOG_TO_STDERR", "1", 1);
+        setenv("MTL_DEBUG_LAYER", "1", 1);
+        setenv("MTL_LOG_LEVEL", "MTLLogLevelDebug", 1);
+        setenv("MTL_LOG_BUFFER_SIZE", "2048", 1);
+    }
+
+    max_frames = init_ctx.max_frames;
     #if OS == {
         case .WINDOWS;
             #if !RELEASE {
@@ -102,6 +197,8 @@ host_init :: (init_ctx: Init_Ctx) -> bool {
     last_time = seconds_since_init();
 
     create_window_and_init_sgpu();
+
+    #if READBACK_ENABLED frame_debug_init(*readback_stats);
     call_event_functions(.dll_init);
 
     return true;
@@ -142,3 +239,8 @@ Input :: #import "Input";
         return cast(*CAMetalLayer)content_view.layer(content_view);
     }
 }
+
+#load "App_Common.jai";
+#scope_file
+#load "readback_stats.jai";
+#import "Window_Creation";

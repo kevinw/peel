@@ -13,6 +13,8 @@ Note: this host doesn't even open a window, or initialize a graphics API.
 
 */
 
+#load "app_list.jai";
+
 main :: () {
     start := seconds_since_init();
 
@@ -20,6 +22,7 @@ main :: () {
 
     #if !RELEASE {
         Debug.init();
+        Debug.set_report_mode(interactive = false);
     }
 
     // Install our custom logger
@@ -53,11 +56,13 @@ main :: () {
 
     screenshot_filename := "";
     library_filename := "";
+    max_frames: int = 0;
 
     // parse args
     {
         next_is_app_dll := false;
         next_is_screenshot_filename := false;
+        next_is_max_frames := false;
         for args {
             if next_is_app_dll {
                 library_filename = copy_string(it);
@@ -65,6 +70,9 @@ main :: () {
             } else if next_is_screenshot_filename {
                 screenshot_filename = it;
                 next_is_screenshot_filename = false;
+            } else if next_is_max_frames {
+                max_frames = String.string_to_int(it);
+                next_is_max_frames = false;
             } else if it == {
                 case "--app";
                     #if SINGLE_BINARY {
@@ -78,6 +86,8 @@ main :: () {
                     next_is_app_dll = true;
                 case "--screenshot";
                     next_is_screenshot_filename = true;
+                case "--max-frames";
+                    next_is_max_frames = true;
             }
         }
     }
@@ -85,7 +95,9 @@ main :: () {
     #if !SINGLE_BINARY {
         // Decide which app DLL to load.
         if !library_filename {
-            library_filename = find_newest_app_dll();
+            first_app_jai := active_app_filename();
+            log("Warning: because no --app was specified, using the first app in APP_LIST: %", first_app_jai);
+            library_filename = tprint("%.%", String.path_filename(first_app_jai), DLL_EXTENSION);
         }
 
         if !library_filename {
@@ -110,7 +122,7 @@ main :: () {
         app := Single_Binary_App.{};
     }
 
-    init_res := app.on_host_message(.{type = .Init});
+    init_res := app.on_host_message(.{type = .Init, init_ctx = {max_frames = max_frames}});
     if !init_res.success {
         log_error("App not initialized correctly, abort!");
         exit(1);
@@ -121,7 +133,9 @@ main :: () {
             app.on_host_message(.{type = .Quit});
             app.on_host_message(.{type = .Unload});
             reset_temporary_storage();
-            app_library_unload(*app, verbose=VERBOSE);
+            #if !SINGLE_BINARY {
+                app_library_unload(*app, verbose=VERBOSE);
+            }
         }
     }
 
@@ -145,8 +159,9 @@ main :: () {
             log("First frame rendered in % seconds", duration);
         }
 
-        #if !SINGLE_BINARY
+        #if !SINGLE_BINARY {
             handle_app_live_reload(*app, *ctx, *library_filename, verbose=VERBOSE);
+        }
     }
 
     if library_filename {

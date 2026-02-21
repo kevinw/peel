@@ -17,6 +17,13 @@ You get a module that can be used to call those functions:
 
 */
 
+// TODO:
+//
+// use @jdll_export instead of #program_export and wrap functions in a generated #program_export
+// function which calls Remap_Context automatically.
+//
+// add an option to mark the files as readonly since they bring some duplication into the tree
+
 #scope_file
 DEFAULT_VERBOSE :: false;
 
@@ -30,7 +37,17 @@ JDLL_Metaprogram_Plugin :: struct {
     using #as plugin: Metaprogram_Plugin;
     message = on_compiler_message;
 
-    verbose := DEFAULT_VERBOSE;
+    // Options for users of the plugin.
+    using options: struct {
+        verbose := DEFAULT_VERBOSE;
+        include_files: [..]string;
+    };
+
+    // Filled by the plugin, you can inspect after the build.
+    output: struct {
+        // The Jai interface module to the dynamic library.
+        generated_module_filename: string;
+    }
 
     using compilation_state: struct {
         exported_decls: [..]*Code_Declaration;
@@ -57,7 +74,9 @@ on_compiler_message :: (_p: *Metaprogram_Plugin, compiler_message: *Message) {
             }
         }
     case .COMPLETE;
-        generate_interface_module_output(p);
+        if compiler_message.(*Message_Complete).error_code == .NONE {
+            generate_interface_module_output(p);
+        }
     }
 }
 
@@ -80,30 +99,52 @@ generate_interface_module_output :: (using p: *JDLL_Metaprogram_Plugin) -> (ok: 
     lib_name := tprint("%_lib", interface_module_output);
 
     for decl: exported_decls {
-        decl_copy := decl.*;
+        // TODO: we could also support #program_export structs or variables.
+        assert(decl.expression.kind == .PROCEDURE_HEADER);
+
+        if decl.expression.(*Code_Procedure_Header).procedure_flags & .C_CALL == 0 {
+            MSG := tprint(#string END
+    JDLL currently requires #program_exported procedure '%' to be #c_call and
+    use push_context or push_context,defer pop inside. Once the compiler bug
+    involving #elsewhere Jai ABI'd procs is fixed, this error can go away.
+    END, decl.name);
+            compiler_report(MSG, loc=make_location(decl.expression));
+            assert(false);
+        }
 
         // Remove the #program_export flag since we're writing out code that does the importing.
+        decl_copy := decl.*;
         decl_copy.flags &= ~.PROGRAM_EXPORT;
         print_declaration(*sb, *decl_copy);
 
         // TODO: maybe just modify the flags so print_declaration does this part for us
-        symbol_name := decl.name;
-        append(*sb, tprint(" #elsewhere % \"%\";\n", lib_name, symbol_name));
+        print_to_builder(*sb, " #foreign %;\n", lib_name);
+    }
+
+    // make sure include_files get automatically #loaded
+    for p.options.include_files {
+        print_to_builder(*sb, "#load \"%\";\n", String.path_filename(it));
     }
 
     append(*sb, tprint(#string END
 
 #scope_file
 #if OS == .MACOS {
-%1 :: #library,no_static_library "lib/macos/%2";
+    %1 :: #library,no_static_library "macos/%2";
 } else #if OS == .WINDOWS {
-%1 :: #library,no_static_library "lib/win/%2";
+    %1 :: #library,no_static_library "win/%2";
 }
 END, lib_name, interface_module_output));
 
     module_dirname := tprint("modules/%", interface_module_output);
     File.make_directory_if_it_does_not_exist(module_dirname, recursive=true);
-    filename := tprint("%/module.jai", module_dirname);
+    filename := sprint("%/module.jai", module_dirname);
+    p.output.generated_module_filename = filename;
+
+    // copy include_files into the module directory.
+    for p.options.include_files {
+        copy_file(it, tprint("%/%", module_dirname, String.path_filename(it)));
+    }
 
     if !File.write_entire_file(filename, builder_to_string(*sb)) {
         compiler_report(tprint("Failed to generate interface module '%'", interface_module_output));
@@ -121,3 +162,4 @@ END, lib_name, interface_module_output));
 #import "Program_Print";
 String :: #import "String";
 File :: #import "File";
+using,only(copy_file) File_Utilities :: #import "File_Utilities";

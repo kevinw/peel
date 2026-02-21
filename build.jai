@@ -1,17 +1,33 @@
-/*
+// Builds and optionally runs a peel "app".
 
-Builds and runs the host and the "app" dll.
+Build_Script_Opts :: struct {
+    run                     : bool;         @"?Run after building"
+    run_args                : string;       @"?Args to pass to app run after building (in quotes)"
+    dll                     : bool;         @"?Build app code as a split binary live reload DLL"
+    shader_only             : bool;         @"?Typecheck + transpile shaders only (no binary output)"
+    shader_entry_ids        : string;       @"?Comma-separated manifest entry ids to transpile (use with -shader_only)"
+    release                 : bool;         @"?Build in release mode with optimizations"
+    codex                   : bool;         @"?Add the Codex metaprogram plugin"
+    iprof                   : bool;         @"?Add the IProf metaprogram plugin"
+    verbose                 : bool;         @"?Print verbose output for the build process"
+    perf                    : bool;         @"?Show a compiler performance report"
+    timings                 : bool;         @"?Show extra timings"
 
-*/
+    // used internally (todo: move elsewhere)
+    sub_build               : bool;
+    output_exe              : string;
+}
+
+USE_PARALLEL_BUILD_WHEN_BUILDING_ALL :: true;
+THIS_SCRIPT_PATH            :: #run String.path_join(#filepath, "build.jai");
+HOST_JAI_ROOT               :: "src/host.jai";
+APPS_DIR                    :: "src/apps";
+OUTPUT_PATH                 :: "dist";        // The directory where the program binary goes.
+LIVE_RELOAD_HOST_EXE_NAME   :: "peel";        // The name of the live reload host executable.
+BUILD_IS_FOR_IDE            :: #exists(JAILS_DIAGNOSTICS_BUILD); // Whether the build is for the IDE's error display. (Jails language server runs the build to check for errors.)
 
 #load "src/app_list.jai";
-THIS_SCRIPT_PATH :: #run String.path_join(#filepath, "build.jai");
-HOST_JAI_ROOT :: "src/host.jai";
 
-OUTPUT_PATH                 :: "dist";      // The directory where the program binary goes.
-HOST_OUTPUT_EXECUTABLE_NAME :: "peel";      // The name of the host executable.
-BUILD_IS_FOR_IDE            :: #exists(JAILS_DIAGNOSTICS_BUILD); // Whether the build is for the IDE's error display. (Jails language server runs the build to check for errors.)
-VERBOSE                     :: false;       // Whether to print verbose output for the build process.
 #if OS == .MACOS {
     MACOS_MAJOR_VERSION_FOR_RELEASE_BUILD :: 15;
     MACOS_MAJOR_VERSION_FOR_DEBUG_BUILD :: 36;
@@ -19,99 +35,51 @@ VERBOSE                     :: false;       // Whether to print verbose output f
 }
 PLATFORM_DIR :: #run get_platform_dir(OS); // win, macos, linux
 
-Build_Script_Opts :: struct {
-    run_program_after_build : bool = true;
-    build_host              : bool = true;
-    build_all_dlls          : bool;
-    release                 : bool;
-    skip_host_build         : bool;
-    codex                   : bool;
-    iprof                   : bool;
-    single_binary           : bool;
-}
-
 #run,stallable {
+    start_time := current_time_monotonic();
     set_build_options_dc(.{ do_output = false });
     set_working_directory(#filepath);
 
-    USAGE_MESSAGE :: #string END
-Options:
-    -all           Build all apps.
-    -onlyapp       Only build the app DLL, not the host.
-    -release       Build in release mode with optimizations.
-    -skiphost      Skip building the host.
-    -codex         Add the Codex metaprogram plugin.
-    -iprof         Add the IProf metaprogram plugin.
-    -norun         Don't run the program after building it.
-    -help          Show this help message.
-END;
+    cmd_line_args := get_build_options().compile_time_command_line;
 
     // Command line arguments to this build script.
-    script_opts: Build_Script_Opts;
-
-    for get_build_options().compile_time_command_line {
-        if it == {
-        case "-help";
-            exit_with_success(USAGE_MESSAGE);
-        case "-all";
-            script_opts.build_all_dlls = true;
-        case "-norun"; // Don't run the program after building it.
-            script_opts.run_program_after_build = false;
-        case "-onlyapp"; // Only build the app DLL, not the host.
-            script_opts.build_host = false;
-            script_opts.run_program_after_build = false;
-        case "-release"; // Build the program in release mode with optimizations.
-            set_release_build(*script_opts);
-        case "-skiphost"; // Skip building the host.
-            script_opts.skip_host_build = true;
-        case "-codex";
-            script_opts.codex = true;
-        case "-iprof";
-            script_opts.iprof = true;
-            script_opts.single_binary = true;
-        case;
-            log(USAGE_MESSAGE);
-            log_error("Unknown argument #%: %\n", it_index, it);
-            exit_with_error();
-        }
+    success, script_opts, is_set, free_args := Command_Line.parse_arguments(Build_Script_Opts,
+        flags=.SHOW_HELP_ON_ERROR | .ALIGN_HELP | .FREE_ARGUMENTS_ALLOWED,
+        args=cmd_line_args);
+    if !success {
+        exit_with_error("Failed to parse command line arguments");
     }
 
-    #if OS == .MACOS {
-        using,only(getenv) POSIX :: #import "POSIX";
-        if getenv("XCODE_VERSION_MINOR") != null && getenv("TARGET_NAME") != null {
-            configuration := to_string(getenv("CONFIGURATION"));
-            if configuration == "Release" {
-                log("Building from XCode. CONFIGURATION=%, so setting release build.", configuration);
-                set_release_build(*script_opts);
+    script_opts.run = is_set.run;
+
+    apps_to_build: [..]string;
+    {
+        array_add(*apps_to_build, ..free_args);
+        if apps_to_build.count == 0 {
+            log("Building all apps in src/app_list.jai's APP_FILES: (%)", String.join(..APP_FILES, separator=", "));
+            if !BUILD_IS_FOR_IDE && USE_PARALLEL_BUILD_WHEN_BUILDING_ALL && !script_opts.sub_build {
+                parallel_build_all_and_exit(cmd_line_args, script_opts);
+            }
+            for APP_FILES {
+                array_add(*apps_to_build, tprint("%/%", APPS_DIR, it));
+            }
+        }
+        for apps_to_build {
+            if !file_exists(it) {
+                exit_with_error(tprint("Error: Specified app file \"%\" does not exist", it));
             }
         }
     }
-
-    // Create the output dir.
-    make_directory_if_it_does_not_exist(OUTPUT_PATH, recursive = true);
-
-    if script_opts.single_binary {
-        assert(!script_opts.build_all_dlls);
+    if is_set.dll && apps_to_build.count > 1 {
+        exit_with_error("Error: Cannot build multiple apps as a DLL");
+    }
+    if is_set.shader_entry_ids && !is_set.shader_only {
+        exit_with_error("Error: -shader_entry_ids requires -shader_only.");
     }
 
-    // Build shaders.
-    #if !BUILD_IS_FOR_IDE {
-        #if OS == .MACOS && 0 {
-            shader_input_files  :: string.[
-                "dist/shaders/metal/triangle.metal",
-                "modules/im3d/shaders/Im3d.metal"
-            ];
-            output_library_path :: "dist/default.metallib";
+    if script_opts.release || environment_specifies_release_build() set_release_build(*script_opts);
 
-            Build_Manifest.external_build(shader_input_files, output_library_path, () {
-                if !build_metal(shader_input_files, output_library_path) {
-                    exit_with_error("Error building shaders.");
-                }
-            });
-        }
-    }
-
-    app_filename := APP_FILES[0];
+    make_directory_if_it_does_not_exist(OUTPUT_PATH, recursive = true); // Create the output dir.
 
     #if OS == .WINDOWS {
         if !do_path_setup_for_dlls("modules", make_paths_absolute = true) {
@@ -121,45 +89,45 @@ END;
         module_paths_already_set_in_environment = true;
     }
 
+    if script_opts.shader_only {
+        for apps_to_build {
+            if !build_shader_only(script_opts, it) {
+                exit_with_error("Failed to shader-only build app '%'.", it);
+            }
+        }
+        return;
+    }
+
+    // All builds will depend on the contents of this build.jai file, as well as all their source files.
     #if !BUILD_IS_FOR_IDE {
-        // All builds will depend on the contents of this build.jai file, as well as all their source files.
         Build_Manifest.mark_meta_dependency(THIS_SCRIPT_PATH);
     }
 
-    // Build the host if it's not already running.
-    host_was_running := false;
-    if script_opts.build_host {
-        #if !BUILD_IS_FOR_IDE {
-            host_was_running = check_if_host_is_running();
-        }
+    dll_host_was_running := !BUILD_IS_FOR_IDE && script_opts.dll && check_if_host_is_running(script_opts, LIVE_RELOAD_HOST_EXE_NAME);
 
-        if !host_was_running && !script_opts.skip_host_build {
-            include_app_plugins_for_app_filename: string;
-            if script_opts.single_binary {
-                include_app_plugins_for_app_filename = app_filename;
-            }
+    for app_to_build: apps_to_build {
+        host_build_strings: [..]string;
 
-            if !build_host(script_opts, include_app_plugins_for_app_filename) {
-                exit_with_error("Failed to build the host");
-            }
+        if !script_opts.dll  {
+            array_add(*host_build_strings, tprint("#load \"%\";\n", app_to_build));
+            script_opts.output_exe = String.path_strip_extension(String.path_filename(app_to_build));
         } else {
-            log("Skipping host build.");
+            script_opts.output_exe = LIVE_RELOAD_HOST_EXE_NAME;
         }
+        defer script_opts.output_exe = "";
+
+        if !build_host(script_opts, include_app_plugins=!script_opts.dll, build_strings=host_build_strings) {
+            exit_with_error();
+        }
+
+        if script_opts.dll break; // We only need one host when we're building dll.
     }
 
     // Build the DLL(s).
-    if !script_opts.single_binary {
+    if script_opts.dll {
         if !build_jdll("Game_Sound", "src/dlls/Game_Sound.jai", script_opts) {
             exit_with_error("Failed to build the DLL for '%'", "Game_Sound");
         }
-
-        apps_to_build: [..]string;
-        if script_opts.build_all_dlls {
-            array_add(*apps_to_build, ..APP_FILES);
-        } else {
-            array_add(*apps_to_build, app_filename);
-        }
-
         for apps_to_build {
             if !build_app(script_opts, app_filename=it) {
                 exit_with_error("Failed to build the app for '%'", it);
@@ -169,35 +137,49 @@ END;
 
     // Start the host if it's not already running.
     #if !BUILD_IS_FOR_IDE {
-        if !script_opts.run_program_after_build {
-            #if VERBOSE log("Not running the app, because -norun was passed.");
-        } else if host_was_running {
+        if !script_opts.run {
+            if script_opts.verbose log("Not running the app, because script_opts.run was false.");
+        } else if dll_host_was_running {
             log("Not running the app, because the host is already running.");
         } else {
-            #if VERBOSE log("Running the app...");
+            if script_opts.verbose log("Running the app...");
             abs_output_path := get_absolute_path(OUTPUT_PATH);
             if !abs_output_path exit_with_error("Failed to get absolute path of output path: '%'", OUTPUT_PATH);
             set_working_directory(abs_output_path);
-            path_to_host_exe := tprint("./%", HOST_OUTPUT_EXECUTABLE_NAME);
+
+            output_exe: string;
+            if script_opts.dll output_exe = LIVE_RELOAD_HOST_EXE_NAME;
+            else output_exe = String.path_strip_extension(String.path_filename(apps_to_build[0]));
+
+            path_to_host_exe := tprint("./%", output_exe);
             host_args: [..]string;
             array_add(*host_args, path_to_host_exe);
             if OS == .WINDOWS && module_paths_already_set_in_environment {
                 // If this build script is launching the host directly, we can tell the host to skip adding its own module paths, since we already had to add them for the build process (in case any compile time code wanted to call those DLLs).
                 array_add(*host_args, "--skip-path-setup");
             }
-            if !script_opts.single_binary {
+            if script_opts.dll {
+                app_filename := apps_to_build[0];
                 array_add(*host_args, "--app", get_output_dll_filename_for_main_app_source_file(app_filename));
             }
+            if script_opts.run_args {
+                args_splitted_by_space := String.split(script_opts.run_args, #char " ");
+                array_add(*host_args, ..args_splitted_by_space);
+            }
+            if script_opts.verbose {
+                log("RUNNING in %: %", abs_output_path, String.join(..host_args, separator=" "));
+            }
             res, stdout, stderr := run_command(..host_args);
-            #if VERBOSE log("App exited.");
-            if stderr log("Stderr: %", stderr);
-            if stdout log("Stdout: %", stdout);
+            if script_opts.verbose log("App exited.");
         }
     } else {
-        #if VERBOSE log("Not running the app, because we're building for the IDE.");
+        if script_opts.verbose log("Not running the app, because we're building for the IDE.");
+    }
+
+    if !script_opts.sub_build {
+        log("Built in % seconds.", to_float64_seconds(current_time_monotonic() - start_time));
     }
 }
-
 
 determine_current_macos_major_version :: () -> u8 {
     res, output_str, err_str := run_command("sw_vers", "--productVersion", capture_and_return_output = true);
@@ -226,7 +208,7 @@ common_options :: (workspace: Workspace, result_output_type: type_of(Build_Optio
 
     #if OS == .MACOS {
         modules_paths: [..]string;
-        array_add(*modules_paths, "modules/sgpu_metal/modules");
+        array_add(*modules_paths, "modules/sgpu/modules");
         array_add(*modules_paths, ..import_path);
         import_path = modules_paths;
     }
@@ -259,10 +241,8 @@ common_options :: (workspace: Workspace, result_output_type: type_of(Build_Optio
         if result_output_type == .EXECUTABLE {
             // Patch the output binary's rpaths so that it can find the dylibs we link to.
             linker_args: [..]string;
-
-            for get_dynamic_library_paths() {
-                array_add(*linker_args, "-rpath", it);
-            }
+            for get_dynamic_library_paths() array_add(*linker_args, "-rpath", it);
+            array_add(*linker_args, ..additional_linker_arguments);
             additional_linker_arguments = linker_args;
         }
     }
@@ -289,7 +269,7 @@ get_dynamic_library_paths :: () -> []string /* temp allocated */ {
     ];
 
     #if OS == .MACOS mac_specific_dylib_paths :: string.[
-        "sgpu_metal/modules/slang/mac",
+        //"sgpu/modules/slang/mac",
     ];
 
     results: [..]string;
@@ -331,23 +311,17 @@ get_dynamic_library_paths :: () -> []string /* temp allocated */ {
 }
 
 build_jdll :: (output_name: string, source_file: string, script_opts: Build_Script_Opts) -> (success: bool) {
-    begin := seconds_since_init();
-
     plugins: [..]*Metaprogram_Plugin;
+    add_common_plugins(*plugins, script_opts);
     check_for_unnecessary_build: bool;
 
     if BUILD_IS_FOR_IDE {
         check_for_unnecessary_build = false;
     } else {
-        check_for_unnecessary_build = true;
-
-        {
-            p := Build_Manifest.get_plugin();
-            array_add(*plugins, p);
-        }
-        {
-            array_add(*plugins, JDLL.get_plugin());
-        }
+        check_for_unnecessary_build = script_opts.dll;
+        array_add(*plugins, Build_Manifest.get_plugin());
+        // TODO: include JDLL source in build manifest implicit dependencies!
+        array_add(*plugins, JDLL.get_plugin());
     }
 
     result := build_artifact(
@@ -358,16 +332,33 @@ build_jdll :: (output_name: string, source_file: string, script_opts: Build_Scri
         source_file,
         tprint("modules/%/%", output_name, PLATFORM_DIR),
         script_opts,
-        check_for_unnecessary_build=true
+        check_for_unnecessary_build=check_for_unnecessary_build
     );
+    return result != .failed;
+}
 
-    ok := result != Build_Artifact_Result.failed;
-    if ok {
-        duration := seconds_since_init() - begin;
-        log("Build % (%)\t% seconds", output_name, result, duration);
+log_build_result :: (output_name: string, output_type: type_of(Build_Options.output_type), start_time: float64, result: Build_Artifact_Result) {
+    duration := seconds_since_init() - start_time;
+    duration_formatter := FormatFloat.{trailing_width = 3, value = duration};
+
+    ext := "";
+    if output_type == {
+    case .EXECUTABLE;
+        #if OS == .WINDOWS ext = ".exe";
+    case .DYNAMIC_LIBRARY;
+        ext = tprint(".%", DLL_EXTENSION);
+    case .NO_OUTPUT;
+        ext = "";
+    case;
+        exit_with_error(tprint("TODO: implement extension string for %", output_type));
     }
+    filename_on_disk := ifx output_type == .NO_OUTPUT then tprint("% (shader-only)", output_name) else tprint("%/%%", OUTPUT_PATH, output_name, ext);
 
-    return ok;
+    if #complete result == {
+    case .skipped; log      ("No build required for %", filename_on_disk);
+    case .failed;  log_error("Build FAILED for %", filename_on_disk);
+    case .success; log      ("Built %%% seconds", filename_on_disk, "\t", duration_formatter);
+    }
 }
 
 #if OS == {
@@ -378,12 +369,12 @@ build_jdll :: (output_name: string, source_file: string, script_opts: Build_Scri
 }
 
 get_output_dll_filename_for_main_app_source_file :: (source_file: string) -> string {
-    return tprint("%.%", String.path_strip_extension(source_file), DLL_EXTENSION);
+    return tprint("%.%", String.path_strip_extension(String.path_filename(source_file)), DLL_EXTENSION);
 }
 
-check_if_host_is_running :: () -> bool {
+check_if_host_is_running :: (script_opts: Build_Script_Opts, output_exe: string) -> bool {
     #if OS == .MACOS {
-        res, stdout, stderr, timeout := run_command("./tools/check_if_running.sh", HOST_OUTPUT_EXECUTABLE_NAME, capture_and_return_output = true);
+        res, stdout, stderr, timeout := run_command("./tools/check_if_running.sh", output_exe, capture_and_return_output = true);
         if timeout exit_with_error("Timeout reached while checking if host is running");
         if stderr print("stderr: %\n", stderr);
         //if stdout print("stdout: %", stdout);
@@ -391,12 +382,12 @@ check_if_host_is_running :: () -> bool {
         return res.exit_code == 0;
     } else #if OS == .WINDOWS {
         // @Perf - this is slow because of tasklist.exe. Maybe we should have the host grab a file lock.
-        res, stdout, stderr, timeout := run_command("tasklist", "/fi", tprint("IMAGENAME eq %", HOST_OUTPUT_EXECUTABLE_NAME), capture_and_return_output = true);
+        res, stdout, stderr, timeout := run_command("tasklist", "/fi", tprint("IMAGENAME eq %", output_exe), capture_and_return_output = true);
         if timeout exit_with_error("Timeout reached while checking if host is running");
         if stderr print("stderr: %\n", stderr);
         if String.find_index_from_left(stdout, "No tasks are running") != -1
             return false;
-        if String.find_index_from_left(stdout, HOST_OUTPUT_EXECUTABLE_NAME) == -1
+        if String.find_index_from_left(stdout, output_exe) == -1
             return true;
         if stdout print("stdout:\n%\n", stdout);
         if res.type != .EXITED exit_with_error("tasklist did not exit");
@@ -408,41 +399,42 @@ check_if_host_is_running :: () -> bool {
     }
 }
 
-
 add_host_plugins :: (plugins: *[..]*Metaprogram_Plugin, script_opts: Build_Script_Opts) {
-    #if !BUILD_IS_FOR_IDE {
-        build_manifest_plugin := Build_Manifest.get_plugin();
-        Build_Manifest.mark_dependency(build_manifest_plugin, THIS_SCRIPT_PATH);
-        build_manifest_plugin.on_event = host_build_manifest_event;
+    #if BUILD_IS_FOR_IDE return;
 
-        userdata := New(Build_Script_Opts);
-        userdata.* = script_opts;
-        build_manifest_plugin.on_event_userdata = userdata;
+    build_manifest_plugin := Build_Manifest.get_plugin();
+    Build_Manifest.mark_dependency(build_manifest_plugin, THIS_SCRIPT_PATH);
+    build_manifest_plugin.on_event = host_build_manifest_event;
 
-        array_add(plugins, build_manifest_plugin);
-    }
+    userdata := New(Build_Script_Opts);
+    userdata.* = script_opts;
+    build_manifest_plugin.on_event_userdata = userdata;
+
+    array_add(plugins, build_manifest_plugin);
 }
 
 host_build_manifest_event :: (p: *Build_Manifest.Build_Manifest_Metaprogram_Plugin, evt: Build_Manifest.Build_Manifest_Event, userdata: *void) {
     if evt == {
     case .Executable_Was_Built;
-        /* For Mac debug builds, we use `codesign` to sign the executable with entitlements allowing Instruments to mark allocations.
-        Here we add a "build dependency" on the entitlements file, and make sure the code signing happens before the Build_Manifest
-        plugin marks the modification time of the executable. */
+        // For Mac debug builds, we use `codesign` to sign the executable with
+        // entitlements allowing Instruments to mark allocations. Here we add a
+        // "build dependency" on the entitlements file, and make sure the code
+        // signing happens before the Build_Manifest plugin marks the
+        // modification time of the executable.
         #if OS == .MACOS {
-            if !userdata {
-                return;
-            }
+            if !userdata return;
 
             script_opts := cast(*Build_Script_Opts)userdata;
-            if script_opts.release return;
+            if script_opts.release return; // Codesigning as of now is for debug entitlements.
 
-            log("Codesigning host executable for get-tasks...");
-            output_exe := String.path_join(OUTPUT_PATH, HOST_OUTPUT_EXECUTABLE_NAME);
+            output_exe := String.path_join(OUTPUT_PATH, script_opts.output_exe);
+            if script_opts.verbose log("Codesigning host executable for get-tasks: %", output_exe);
             abs_entitlements_file := get_absolute_path(entitlements_file);
             assert(abs_entitlements_file != "", tprint("Could not resolve absolute path for entitlements file: %", entitlements_file));
-            res := run_command("codesign", "--force", "--sign", "-", "--entitlements", abs_entitlements_file, "--timestamp=none", output_exe);
+            res, stdout, stderr := run_command("codesign", "--force", "--sign", "-", "--entitlements", abs_entitlements_file, "--timestamp=none", output_exe, capture_and_return_output=true);
             if res.type != .EXITED || res.exit_code != 0 {
+                if stdout.count > 0 { log("%", stdout); }
+                if stderr.count > 0 { log_error("%", stderr); }
                 exit_with_error("codesign failed");
             }
             Build_Manifest.mark_dependency(p, abs_entitlements_file);
@@ -450,104 +442,103 @@ host_build_manifest_event :: (p: *Build_Manifest.Build_Manifest_Metaprogram_Plug
     }
 }
 
-add_app_plugins :: (plugins: *[..] *Metaprogram_Plugin, script_opts: Build_Script_Opts, app_filename: string) {
-    {
+add_common_plugins :: (plugins: *[..] *Metaprogram_Plugin, script_opts: Build_Script_Opts) {
+    if script_opts.perf {
+        PR :: #import "Performance_Report";
+        array_add(plugins, PR.get_plugin());
+    }
+}
+
+add_app_plugins :: (plugins: *[..] *Metaprogram_Plugin,
+    script_opts: Build_Script_Opts,
+    shader_entry_ids_filter: string = "",
+    shader_only := false, // true if we're doing a shader-only build
+) {
+    #if !BUILD_IS_FOR_IDE {
         // Notes globals in the game's dll so that we can reload them automatically when the dll is recompiled.
         Globals_Reload :: #import "Globals_Reload";
         p := Globals_Reload.get_plugin();
         array_add(plugins, p);
+
+        if script_opts.codex {
+            Codex :: #import "Codex";
+            array_add(plugins, Codex.get_plugin());
+        }
+        if script_opts.iprof {
+            IProf :: #import "Iprof";
+            array_add(plugins, IProf.get_plugin());
+        }
     }
     {
         Event_Functions_Metaprogram :: #import "Event_Functions_Metaprogram";
         array_add(plugins, Event_Functions_Metaprogram.get_plugin());
     }
-
-    #if !BUILD_IS_FOR_IDE {
-        // Notes jai structs marked with @ShaderType and generates shader code for them.
-        Shader_Metaprogram :: #import "Shader_Metaprogram";
-        shader_metaprogram_plugin := cast(*Shader_Metaprogram.Shader_Metaprogram_Plugin) Shader_Metaprogram.get_plugin();
-        shader_metaprogram_plugin.output_filename = tprint("%/shaders/shader_types{SUFFIX}.generated.hlsl", OUTPUT_PATH);
-        shader_metaprogram_plugin.empty_suffix = copy_string(String.path_strip_extension(app_filename));
-        array_add(plugins, shader_metaprogram_plugin);
-    }
-
-    if script_opts.codex {
-        Codex :: #import "Codex";
-        array_add(plugins, Codex.get_plugin());
-    }
-
-    if script_opts.iprof {
-        IProf :: #import "Iprof";
-        array_add(plugins, IProf.get_plugin());
+    {
+        JSL :: #import "Jai-Shader-Transpiler";
+        plugin := JSL.get_plugin();
+        // plugin.output_shaders = true;
+        // plugin.timings_enabled = true;
+        plugin.shader_entry_ids_filter = shader_entry_ids_filter;
+        array_add(plugins, plugin);
     }
 }
 
-build_host :: (script_opts: Build_Script_Opts, include_app_plugins_for_app_filename: string = "") -> bool {
-    begin := seconds_since_init();
-
+build_host :: (script_opts: Build_Script_Opts, include_app_plugins: bool = false, build_strings: []string = .[]) -> bool {
     plugins: [..] *Metaprogram_Plugin;
-
-    if include_app_plugins_for_app_filename {
-        // When building a single binary, we need to add the app plugins to the host.
-        add_app_plugins(*plugins, script_opts, include_app_plugins_for_app_filename);
-    }
-
+    add_common_plugins(*plugins, script_opts);
+    if include_app_plugins add_app_plugins(*plugins, script_opts);
     add_host_plugins(*plugins, script_opts);
 
-    result := build_artifact("Build host",
-        .EXECUTABLE, HOST_OUTPUT_EXECUTABLE_NAME, plugins, HOST_JAI_ROOT, OUTPUT_PATH, script_opts,
-        check_for_unnecessary_build=true,
-        build_strings=.[
-            {"HOST_OUTPUT_EXECUTABLE_NAME", HOST_OUTPUT_EXECUTABLE_NAME}
-        ]
-    );
-
-    ok := result != Build_Artifact_Result.failed;
-
-    if ok {
-        duration := seconds_since_init() - begin;
-        log("Build host (%)\t% seconds", result, duration);
+    local_build_strings: [..]string;
+    array_add(*local_build_strings, ..build_strings);
+    array_add(*local_build_strings, tprint("HOST_OUTPUT_EXECUTABLE_NAME :: \"%\";", script_opts.output_exe));
+    if !script_opts.dll {
+        array_add(*local_build_strings, tprint("APP_NAME :: \"%\";", script_opts.output_exe));
     }
 
-    return ok;
+    result := build_artifact("Build host",
+        .EXECUTABLE, script_opts.output_exe, plugins, HOST_JAI_ROOT, OUTPUT_PATH, script_opts,
+        check_for_unnecessary_build=script_opts.dll,
+        build_strings=local_build_strings);
+
+    return result != Build_Artifact_Result.failed;
 }
 
 build_app :: (script_opts: Build_Script_Opts, app_filename: string) -> bool {
-    begin := seconds_since_init();
-
-    #if VERBOSE {
-        log("Building app '%'", app_filename);
-        defer log("App built successfully.");
-    }
-
     // Since the build can generate a lot debug and temporary files if you use it a lot,
     // we do some clean up to not keep too much garbage.
     visit_files(OUTPUT_PATH, recursive = false, null, delete_app_files_visitor, visit_files = true, visit_directories = true);
 
     plugins: [..] *Metaprogram_Plugin;
-    add_app_plugins(*plugins, script_opts, app_filename);
+    plugins.allocator = temp;
+    add_common_plugins(*plugins, script_opts);
+    add_app_plugins(*plugins, script_opts);
 
-    path_to_app_source_root    := tprint("%/%", PATH_TO_APP_FILES, app_filename);
-    app_output_executable_name := String.path_strip_extension(app_filename);
+    app_output_executable_name := String.path_strip_extension(String.path_filename(app_filename));
 
-    ok := .failed != build_artifact(
+    build_strings: []string = .[tprint("APP_NAME :: \"%\";", app_filename)];
+    result := build_artifact(
         workspace_name = tprint("Build app %", app_output_executable_name),
-        .DYNAMIC_LIBRARY, app_output_executable_name, plugins, path_to_app_source_root, OUTPUT_PATH, script_opts);
+        .DYNAMIC_LIBRARY, app_output_executable_name, plugins, app_filename, OUTPUT_PATH, script_opts,
+        build_strings=build_strings);
 
-    if ok {
-        duration := seconds_since_init() - begin;
-        log("Build %\t% seconds", app_output_executable_name, duration);
-    }
-
-    return ok;
+    return result != .failed;
 };
 
-Build_Artifact_Result :: enum { success; skipped; failed; }
+build_shader_only :: (script_opts: Build_Script_Opts, app_filename: string) -> bool {
+    plugins: [..] *Metaprogram_Plugin;
+    plugins.allocator = temp;
+    add_common_plugins(*plugins, script_opts);
+    add_app_plugins(*plugins, script_opts, shader_entry_ids_filter=script_opts.shader_entry_ids, shader_only=true);
 
-Build_String :: struct {
-    name: string;
-    value: string;
+    app_name := String.path_strip_extension(String.path_filename(app_filename));
+    result := build_artifact(workspace_name = tprint("Build shaders %", app_name),
+        .NO_OUTPUT, app_name, plugins, app_filename, OUTPUT_PATH, script_opts);
+
+    return result != .failed;
 }
+
+Build_Artifact_Result :: enum { success; skipped; failed; }
 
 build_artifact :: (workspace_name: string,
                    output_type: type_of(Build_Options.output_type),
@@ -557,20 +548,25 @@ build_artifact :: (workspace_name: string,
                    output_dir: string = OUTPUT_PATH,
                    script_opts: Build_Script_Opts,
                    check_for_unnecessary_build := false,
-                   build_strings: []Build_String = .[],
+                   build_strings: []string = .[],
 )
 -> Build_Artifact_Result {
+    assert(output_filename != "");
+    result: Build_Artifact_Result = .failed;
+
+    begin := seconds_since_init();
+    defer log_build_result(output_filename, output_type, begin, result);
+
     workspace := compiler_create_workspace(workspace_name);
     defer compiler_destroy_workspace(workspace);
     //log("% - %", workspace_name, workspace);
 
-    File :: #import "File";
-    File.make_directory_if_it_does_not_exist(output_dir, recursive=true);
+    make_directory_if_it_does_not_exist(output_dir, recursive=true);
 
     {
-        options: Build_Options;
-        options = common_options(workspace, output_type, output_dir, script_opts);
+        options: Build_Options = common_options(workspace, output_type, output_dir, script_opts);
         options.output_executable_name = output_filename;
+        options.intermediate_path = sprint(".build/%", output_filename); // so parallel builds don't clobber each other.
         if script_opts.release {
             set_optimization(*options, .VERY_OPTIMIZED);
             options.array_bounds_check = .OFF;
@@ -579,8 +575,13 @@ build_artifact :: (workspace_name: string,
             set_optimization(*options, .DEBUG);
         }
         set_build_options(options, workspace);
-        if !BUILD_IS_FOR_IDE && check_for_unnecessary_build && Build_Manifest.can_skip_build(options) {
-            return .skipped;
+
+        // Now that we have the actual build options setup for the compiler, we
+        // can use them to ask Build_Manifest if we can skip the build.
+        if !BUILD_IS_FOR_IDE && check_for_unnecessary_build &&
+        Build_Manifest.can_skip_build(options) {
+            result = .skipped;
+            return result;
         }
     }
 
@@ -595,37 +596,26 @@ build_artifact :: (workspace_name: string,
         for plugins if it.shutdown it.shutdown(it);
     }
     for plugins      if it.add_source it.add_source(it);
-    add_build_string(tprint("SINGLE_BINARY :: %;\n", script_opts.single_binary), workspace);
+    add_build_string(tprint("SINGLE_BINARY :: %;\n", !script_opts.dll), workspace);
     add_build_string(tprint("RELEASE :: %;\n", script_opts.release), workspace);
     for build_strings {
-        add_build_string(tprint("% :: \"%\";\n", it.name, it.value), workspace);
+        add_build_string(it, workspace);
     }
-    if script_opts.single_binary
-        add_build_string(tprint("#load \"%/%\";\n", PATH_TO_APP_FILES, APP_FILES[0]), workspace);
     add_build_file(source_filename, workspace);
 
-    result: Build_Artifact_Result = .success;
     while true {
         message := compiler_wait_for_message();
         for plugins if it.message it.message(it, message);
         if message.kind == {
             case .COMPLETE; {
                 message_complete := cast(*Message_Complete) message;
-                if message_complete.error_code != .NONE {
-                    result = .failed;
-                }
+                result = ifx message_complete.error_code == .NONE then .success else .failed;
                 break;
             }
         }
     }
 
     return result;
-}
-
-exit_with_success :: (message: string = "") {
-    if message log(message);
-    compiler_set_workspace_status(.OK, get_current_workspace());
-    exit(0);
 }
 
 exit_with_error :: (message: string = "", fmt_args: ..Any) {
@@ -660,7 +650,7 @@ delete_app_files_visitor :: (info: *File_Visit_Info, user_data: *void) {
 
 set_release_build :: (using opts: *Build_Script_Opts) {
     release = true;
-    single_binary = true;
+    if dll exit_with_error("Cannot currently build a live-reload DLL in release mode.");
 }
 
 get_platform_dir :: (platform_tag: Operating_System_Tag) -> string {
@@ -674,12 +664,55 @@ get_shortened_platform_name_for_filesystem :: (platform_tag: Operating_System_Ta
     return name;
 }
 
+environment_specifies_release_build :: () -> bool {
+    #if OS == .MACOS {
+        using,only(getenv) POSIX :: #import "POSIX";
+        if getenv("XCODE_VERSION_MINOR") != null && getenv("TARGET_NAME") != null {
+            configuration := to_string(getenv("CONFIGURATION"));
+            if configuration == "Release" {
+                log("Building from XCode. CONFIGURATION=%, so setting release build.", configuration);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+parallel_build_all_and_exit :: (cmd_line_args: []string, script_opts: Build_Script_Opts) {
+    args_list: [..][]string;
+    for APP_FILES {
+        args: [..]string;
+        array_add(*args, "jai", "build.jai", "-", "-sub_build");
+        array_add(*args, ..cmd_line_args);
+        array_add(*args, tprint("%/%", APPS_DIR, it));
+
+        array_add(*args_list, args);
+    }
+
+    start_time := current_time_monotonic();
+    all_ok := parallel_run(args_list);
+    if all_ok {
+        // For now it doesn't make sense to log the build time if we're running everything at once, since
+        // we won't actually know the "finish" time until the last window is closed.
+        if !script_opts.run {
+            log("OK: Built everything in % seconds.", to_float64_seconds(current_time_monotonic() - start_time));
+        }
+
+        exit(0);
+    }
+
+    log_error("Parallel build failed.");
+    exit(1);
+}
+
 #import "Basic";
 #import "File";
 #import "Compiler";
 #import "File_Utilities"; // for visit_files
 #import "Process";
+#import "Parallel_Run";
 #import "Compile_Time_Shader_Build";
+Command_Line :: #import "Command_Line";
 String :: #import "String";
 #if OS == .WINDOWS #load "src/Windows_DLL_Paths.jai";
 Build_Manifest :: #import "Build_Manifest";
