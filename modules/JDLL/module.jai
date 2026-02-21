@@ -24,7 +24,7 @@ You get a generated module that can be used to call those functions:
 // add an option to mark the files as readonly since they bring some duplication into the tree
 //
 // install_name_tool to @loader_path/name.dylib on mac?
-//
+
 // @DLLBoundaryBug - we wrap exported functions in #c_call to work around compiler bugs
 // with jai ABI functions (reported, not fixed as of Feb 21 2026)
 
@@ -33,10 +33,19 @@ You get a generated module that can be used to call those functions:
 DEFAULT_VERBOSE :: false;
 LOG_ALL_GENERATED_CODE :: false;
 
+// Files written by this module will start with this string.
+GENERATED_MODULE_START_TAG :: "// Auto-generated";
+
 #scope_module
 
 get_plugin :: () -> *JDLL_Metaprogram_Plugin {
     return New(JDLL_Metaprogram_Plugin);
+}
+
+deinit :: (using plugin: *JDLL_Metaprogram_Plugin) {
+    array_free(*exported);
+    free(output.generated_module_filename);
+    plugin.* = {};
 }
 
 JDLL_Metaprogram_Plugin :: struct {
@@ -56,15 +65,15 @@ JDLL_Metaprogram_Plugin :: struct {
         generated_module_filename: string;
     }
 
+    // Internal state
     using compilation_state: struct {
+        did_generate: bool;
         exported: [..]struct {
             decl: *Code_Declaration;
             flags: enum_flags {
                 NEEDS_WRAPPER;
             };
         };
-
-        did_generate: bool;
     };
 }
 
@@ -82,12 +91,12 @@ on_compiler_message :: (_p: *Metaprogram_Plugin, compiler_message: *Message) {
                     continue;
                 }
 
-                if verbose log("found #program_export %", decl.name);
+                if verbose log("JDLL will bind to #program_export function '%'", decl.name);
                 array_add(*exported, .{ decl=decl });
             } else if decl.notes && options.export_note {
                 for decl.notes {
                     if it.text == options.export_note {
-                        if verbose log("found % %", options.export_note, decl.name);
+                        if verbose log("JDLL will bind to % function %", options.export_note, decl.name);
                         array_add(*exported, { decl, .NEEDS_WRAPPER });
                         emit_wrapper(p, decl);
                     }
@@ -112,15 +121,16 @@ emit_wrapper :: (p: *JDLL_Metaprogram_Plugin, decl: *Code_Declaration)  {
     assert(decl.expression.kind == .PROCEDURE_HEADER);
     proc_header := decl.expression.(*Code_Procedure_Header);
 
+    proc_header_copy := proc_header.*;
+    proc_header_copy.procedure_flags |= .C_CALL; // @DLLBoundaryBug - make sure the exported function is #c_call
+
     c: String_Builder;
 
-    // The wrapper line: a #program_export #c_call version of the function.
+    // Generate the function wrapper: a #program_export #c_call version of the original Jai function.
     pr(*c, "#program_export _jdll_% :: ", decl.name, newline=false);
-    proc_header_copy := proc_header.*;
-    proc_header_copy.procedure_flags |= .C_CALL; // @DLLBoundaryBug
     print_expression(*c, *proc_header_copy);
     pr(*c, " {");
-    pr(*c, "    push_context,defer_pop;");
+    pr(*c, "    push_context,defer_pop;"); // @DLLBoundaryBug
 
     // Generate the inner function call
     if proc_header.returns.count == 0 {
@@ -136,15 +146,11 @@ emit_wrapper :: (p: *JDLL_Metaprogram_Plugin, decl: *Code_Declaration)  {
         }
     }
     pr(*c, ");");
-
     pr(*c, "}");
 
+    // Finally, add the generated wrapper code to the same scope as the original function.
     build_string := builder_to_string(*c,, temp);
-
-    #if LOG_ALL_GENERATED_CODE {
-        log("%", build_string);
-    }
-
+    #if LOG_ALL_GENERATED_CODE log("%", build_string);
     add_build_string(build_string, p.workspace, decl.enclosing_load);
 }
 
@@ -166,7 +172,7 @@ generate_interface_module_output :: (using p: *JDLL_Metaprogram_Plugin) -> (ok: 
     File.make_directory_if_it_does_not_exist(module_dirname, recursive=true);
 
     sb: String_Builder;
-    append(*sb, tprint("// Auto-generated JDLL interface module '%'\n\n", interface_module_output));
+    print_to_builder(*sb, "% JDLL interface module '%'\n\n", GENERATED_MODULE_START_TAG, interface_module_output);
 
     scoped_program_print_procedure_bodies(false);
 
@@ -228,6 +234,10 @@ END, lib_name, interface_module_output));
         copy_file(it, tprint("%/%", module_dirname, String.path_filename(it)));
     }
 
+    if !check_if_file_is_ok_to_overwrite(filename) {
+        return false;
+    }
+
     if !File.write_entire_file(filename, builder_to_string(*sb)) {
         compiler_report(tprint("Failed to generate interface module '%'", interface_module_output));
         return false;
@@ -245,8 +255,8 @@ END, lib_name, interface_module_output));
 #import "Basic";
 #import "Program_Print";
 String :: #import "String";
-File :: #import "File";
-using,only(copy_file) File_Utilities :: #import "File_Utilities";
+using,only(file_open, file_read) File :: #import "File";
+using,only(file_exists, copy_file) File_Utilities :: #import "File_Utilities";
 pr :: (sb: *String_Builder, str: string, args: ..Any, newline := true) {
     final_str: string;
     if newline final_str = String.join(str, "\n",, temp);
@@ -258,4 +268,31 @@ scoped_program_print_procedure_bodies :: (enabled: bool) #expand {
     old_print_procedure_bodies := context.print_procedure_bodies;
     context.print_procedure_bodies = enabled;
     `defer context.print_procedure_bodies = old_print_procedure_bodies;
+}
+
+check_if_file_is_ok_to_overwrite :: (filename: string) -> bool {
+    if !file_exists(filename) {
+        return true;
+    }
+
+    file, ok := file_open(filename);
+    assert(ok);
+
+    // Make sure the file begins with our expected "// Auto-generated" comment.
+    buf: [GENERATED_MODULE_START_TAG.count + 1]u8;
+    success, total_read := file_read(file, buf.data, GENERATED_MODULE_START_TAG.count);
+    if total_read != GENERATED_MODULE_START_TAG.count {
+        compiler_report(tprint("Refusing to overwrite file named '%'. We could not read enough bytes to check if it was auto-generated.",
+            filename));
+        return false;
+    }
+
+    str := string.{ buf.count - 1, buf.data }; // Remove null byte
+    if str != GENERATED_MODULE_START_TAG {
+        compiler_report(tprint("Refusing to overwrite file named '%'. It does not start with our expected tag '%'.\nThe bytes we did read: \"%\"",
+            filename, GENERATED_MODULE_START_TAG, str));
+        return false;
+    }
+
+    return true;
 }
