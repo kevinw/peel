@@ -3,6 +3,7 @@
 game sounds
 
 */
+
 PLAY_MUSIC :: false;
 
 sounds: struct {
@@ -10,9 +11,7 @@ sounds: struct {
     music: Sound_Data;
 }
 
-#program_export
-load_sounds :: () #c_call {
-    push_context,defer_pop;
+load_sounds :: () {
     sound_player_init(.{});
 
     using sounds;
@@ -28,14 +27,12 @@ load_sounds :: () #c_call {
             start_playing(stream);
         }
     }
-}
+} @jdll_export
 
-#program_export
-deinit_sounds :: () #c_call {
-    push_context,defer_pop;
+deinit_sounds :: () {
     using sounds;
     sound_player_shutdown();
-}
+} @jdll_export
 
 stage_sound :: (data: *Sound_Data, category := Sound_Category.GENERAL_SFX, perturb := true) -> *Sound_Stream {
     stream := make_stream(data, category);
@@ -48,9 +45,7 @@ stage_sound :: (data: *Sound_Data, category := Sound_Category.GENERAL_SFX, pertu
     return stream;
 }
 
-#program_export
-trigger_sound :: (name: string) #c_call {
-    push_context,defer_pop;
+trigger_sound :: (name: string) {
     using sounds;
     sound_data: *Sound_Data;
     if name == {
@@ -69,13 +64,12 @@ trigger_sound :: (name: string) #c_call {
 
     stream := stage_sound(*footsteps, .GENERAL_SFX, true);
     start_playing(stream);
-}
+} @jdll_export
 
-#program_export
-per_frame_update :: () #c_call {
+per_frame_update :: () {
     push_context,defer_pop;
     Sound_Player.update();
-}
+} @jdll_export
 
 #scope_file
 using Sound_Player :: #import "Sound_Player";

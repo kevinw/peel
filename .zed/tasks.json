@@ -15,4 +15,8 @@
     "label": "textured_triangle_smoke",
     "command": "cd ~/src/peel && ./tools/textured_triangle_probe.sh",
   },
+  {
+    "label": "build ir_pipe",
+    "command": "cd ~/src/peel/modules/Jai-Shader-Transpiler && jai build_ir_pipe.jai",
+  },
 ]
