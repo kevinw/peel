@@ -87,8 +87,10 @@ on_compiler_message :: (_p: *Metaprogram_Plugin, compiler_message: *Message) {
 
             if flags & .PROGRAM_EXPORT != 0 {
                 // Ignore compiler-generated exports __jai_runtime_fini and __jai_runtime_init
-                if name.count > 5 && name[0] == #char "_" && String.starts_with(name, "__jai_") {
-                    continue;
+                if name.count > 5 && name[0] == #char "_" {
+                    if String.starts_with(name, "__jai_") || String.starts_with(name, "_jdll_") {
+                        continue;
+                    }
                 }
 
                 if verbose log("JDLL will bind to #program_export function '%'", decl.name);
