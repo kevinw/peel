@@ -13,10 +13,6 @@ raytracer_params_gpu: Gpu_Ptr;
 raytracer_shader_reload: SHR.Shader_Hot_Reload;
 RAYTRACER_ENTRY_ID :: "pair|METAL|raytracer_vertex_main|raytracer_fragment_main";
 
-dump_png_mode := false;
-dump_png_done := false;
-dump_png_auto_quit := false;
-dump_png_after_frame: s64 = 2;
 camera_pos := Vector3.{0.0, 0.75, 1.95};
 camera_speed: float = 3.0;
 
@@ -47,16 +43,10 @@ on_dll_init :: () {
     raytracer_params_cpu.* = .{
         resolution = .{1280.0, 720.0},
         mouse_uv = .{0.5, 0.5},
-        camera_pos = camera_pos,
+        camera_pos_xy = .{camera_pos.x, camera_pos.y},
+        camera_pos_z = camera_pos.z,
         time = 0.0,
     };
-
-    dump_png, _ := readback_stats_env_int("PEEL_RT_DUMP_PNG");
-    dump_png_mode = dump_png > 0;
-    dump_auto_quit, _ := readback_stats_env_int("PEEL_RT_DUMP_PNG_AUTO_QUIT");
-    dump_png_auto_quit = dump_auto_quit > 0;
-    dump_frame, dump_frame_set := readback_stats_env_int("PEEL_RT_DUMP_PNG_FRAME");
-    if dump_frame_set && dump_frame >= 0 dump_png_after_frame = dump_frame;
 
     gpu_commit_residency();
 } @on_dll_init
@@ -82,7 +72,7 @@ tick :: () {
     }
     yaw := (raytracer_params_cpu.mouse_uv.x - 0.5) * 0.9;
     move_forward := Vector3.{sin(yaw), 0.0, -cos(yaw)};
-    move_right := Vector3.{move_forward.z, 0.0, -move_forward.x};
+    move_right := Vector3.{-move_forward.z, 0.0, move_forward.x};
 
     move := Vector3.{0.0, 0.0, 0.0};
     if Input.input_button_states[cast(Input.Key_Code) #char "W"] & .DOWN move += move_forward;
@@ -95,7 +85,8 @@ tick :: () {
         move /= sqrt(move_len_sq);
         camera_pos += move * (camera_speed * dt);
     }
-    raytracer_params_cpu.camera_pos = camera_pos;
+    raytracer_params_cpu.camera_pos_xy = .{camera_pos.x, camera_pos.y};
+    raytracer_params_cpu.camera_pos_z = camera_pos.z;
     raytracer_params_cpu.time = cast(float) frame_count * (1.0 / 60.0);
 
     main_queue := gpu_get_queue(.MAIN, 0);
@@ -129,13 +120,6 @@ tick :: () {
         log_error("RAYTRACER_SHADER_RELOAD build succeeded but pipeline swap was partial; keeping remaining old pipelines.");
     }
 
-    if dump_png_mode && !dump_png_done && frame_num >= dump_png_after_frame {
-        out_path := tprint("./%_frame_%.png", APP_NAME, frame_num);
-        gpu_dump_to_bitmap(out_path);
-        log("RAYTRACER_PNG path=%", out_path);
-        dump_png_done = true;
-        if dump_png_auto_quit app_quit_requested = true;
-    }
 } @on_tick
 
 #scope_file

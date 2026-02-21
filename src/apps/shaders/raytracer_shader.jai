@@ -10,7 +10,8 @@ Raytracer_Vertex_Out :: struct {
 Raytracer_Params :: struct {
     resolution: Vector2;
     mouse_uv: Vector2;
-    camera_pos: Vector3;
+    camera_pos_xy: Vector2;
+    camera_pos_z: float;
     time: float;
 }
 
@@ -36,7 +37,7 @@ raytracer_fragment_main :: (using in: Raytracer_Vertex_Out, params: *Raytracer_P
     p.x *= aspect;
 
     yaw := (params.mouse_uv.x - 0.5) * 0.9;
-    ro := params.camera_pos;
+    ro := Vector3.{params.camera_pos_xy.x, params.camera_pos_xy.y, params.camera_pos_z};
     forward := Vector3.{sin(yaw), -0.18, -cos(yaw)};
     forward /= max(sqrt(dot(forward, forward)), 0.00001);
     right := cross(forward, Vector3.{0.0, 1.0, 0.0});
@@ -45,6 +46,10 @@ raytracer_fragment_main :: (using in: Raytracer_Vertex_Out, params: *Raytracer_P
     up /= max(sqrt(dot(up, up)), 0.00001);
     rd := forward + right * p.x * 0.85 + up * p.y * 0.85;
     rd /= max(sqrt(dot(rd, rd)), 0.00001);
+    // Small camera-relative avatar sphere. Offset mostly behind camera so it appears in reflections.
+    avatar_center := Vector3.{params.camera_pos_xy.x, params.camera_pos_xy.y, params.camera_pos_z} + right * 0.28 + up * 0.16 - forward * 0.22;
+    avatar_radius := 0.31;
+    avatar_color := Vector3.{0.92, 0.96, 1.00};
 
     accum := Vector3.{0.0, 0.0, 0.0};
     throughput := Vector3.{1.0, 1.0, 1.0};
@@ -112,6 +117,27 @@ raytracer_fragment_main :: (using in: Raytracer_Vertex_Out, params: *Raytracer_P
             hit_nrm /= max(sqrt(dot(hit_nrm, hit_nrm)), 0.00001);
             hit_albedo = sphere_colors[i];
             hit_refl = sphere_refl[i];
+        }
+
+        oc_avatar := ro - avatar_center;
+        b_avatar := dot(oc_avatar, rd);
+        c_avatar := dot(oc_avatar, oc_avatar) - avatar_radius * avatar_radius;
+        h_avatar := b_avatar * b_avatar - c_avatar;
+        if h_avatar >= 0.0 {
+            q_avatar := sqrt(h_avatar);
+            t0_avatar := -b_avatar - q_avatar;
+            t1_avatar := -b_avatar + q_avatar;
+            t_avatar := t0_avatar;
+            if t_avatar < 0.001 t_avatar = t1_avatar;
+            if t_avatar > 0.001 && t_avatar < best_t {
+                best_t = t_avatar;
+                hit_found = true;
+                hit_pos = ro + rd * t_avatar;
+                hit_nrm = hit_pos - avatar_center;
+                hit_nrm /= max(sqrt(dot(hit_nrm, hit_nrm)), 0.00001);
+                hit_albedo = avatar_color;
+                hit_refl = 0.96;
+            }
         }
 
         if !hit_found {
