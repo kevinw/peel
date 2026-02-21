@@ -38,3 +38,4 @@ dist/pbr
 dist/metal4_bindless_probe
 tools/metal4_bindless_native_test
 dist/*.temp.0
+dist/raytracer

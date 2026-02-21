@@ -453,12 +453,18 @@ add_app_plugins :: (plugins: *[..] *Metaprogram_Plugin,
     script_opts: Build_Script_Opts,
     shader_entry_ids_filter: string = "",
     shader_only := false, // true if we're doing a shader-only build
+    build_strings: *[..]string,
 ) {
-    #if !BUILD_IS_FOR_IDE {
+    if !shader_only && !BUILD_IS_FOR_IDE {
         // Notes globals in the game's dll so that we can reload them automatically when the dll is recompiled.
         Globals_Reload :: #import "Globals_Reload";
         p := Globals_Reload.get_plugin();
         array_add(plugins, p);
+        array_add(build_strings, "GLOBALS_RELOAD_PLUGIN_INCLUDED :: true;");
+    } else {
+        array_add(build_strings, "GLOBALS_RELOAD_PLUGIN_INCLUDED :: false;");
+    }
+    #if !BUILD_IS_FOR_IDE {
 
         if script_opts.codex {
             Codex :: #import "Codex";
@@ -484,12 +490,15 @@ add_app_plugins :: (plugins: *[..] *Metaprogram_Plugin,
 }
 
 build_host :: (script_opts: Build_Script_Opts, include_app_plugins: bool = false, build_strings: []string = .[]) -> bool {
+    local_build_strings: [..]string;
+
     plugins: [..] *Metaprogram_Plugin;
     add_common_plugins(*plugins, script_opts);
-    if include_app_plugins add_app_plugins(*plugins, script_opts);
+    if include_app_plugins {
+        add_app_plugins(*plugins, script_opts, build_strings=*local_build_strings);
+    }
     add_host_plugins(*plugins, script_opts);
 
-    local_build_strings: [..]string;
     array_add(*local_build_strings, ..build_strings);
     array_add(*local_build_strings, tprint("HOST_OUTPUT_EXECUTABLE_NAME :: \"%\";", script_opts.output_exe));
     if !script_opts.dll {
@@ -512,11 +521,13 @@ build_app :: (script_opts: Build_Script_Opts, app_filename: string) -> bool {
     plugins: [..] *Metaprogram_Plugin;
     plugins.allocator = temp;
     add_common_plugins(*plugins, script_opts);
-    add_app_plugins(*plugins, script_opts);
+
+    build_strings: [..]string;
+    array_add(*build_strings, sprint("APP_NAME :: \"%\";", app_filename));
+    add_app_plugins(*plugins, script_opts, build_strings=*build_strings);
 
     app_output_executable_name := String.path_strip_extension(String.path_filename(app_filename));
 
-    build_strings: []string = .[tprint("APP_NAME :: \"%\";", app_filename)];
     result := build_artifact(
         workspace_name = tprint("Build app %", app_output_executable_name),
         .DYNAMIC_LIBRARY, app_output_executable_name, plugins, app_filename, OUTPUT_PATH, script_opts,
@@ -529,11 +540,13 @@ build_shader_only :: (script_opts: Build_Script_Opts, app_filename: string) -> b
     plugins: [..] *Metaprogram_Plugin;
     plugins.allocator = temp;
     add_common_plugins(*plugins, script_opts);
-    add_app_plugins(*plugins, script_opts, shader_entry_ids_filter=script_opts.shader_entry_ids, shader_only=true);
+    build_strings: [..]string;
+    array_add(*build_strings, sprint("APP_NAME :: \"%\";", app_filename));
+    add_app_plugins(*plugins, script_opts, shader_entry_ids_filter=script_opts.shader_entry_ids, shader_only=true, build_strings=*build_strings);
 
     app_name := String.path_strip_extension(String.path_filename(app_filename));
     result := build_artifact(workspace_name = tprint("Build shaders %", app_name),
-        .NO_OUTPUT, app_name, plugins, app_filename, OUTPUT_PATH, script_opts);
+        .NO_OUTPUT, app_name, plugins, app_filename, OUTPUT_PATH, script_opts, build_strings=build_strings);
 
     return result != .failed;
 }
@@ -598,9 +611,7 @@ build_artifact :: (workspace_name: string,
     for plugins      if it.add_source it.add_source(it);
     add_build_string(tprint("SINGLE_BINARY :: %;\n", !script_opts.dll), workspace);
     add_build_string(tprint("RELEASE :: %;\n", script_opts.release), workspace);
-    for build_strings {
-        add_build_string(it, workspace);
-    }
+    for build_strings add_build_string(it, workspace);
     add_build_file(source_filename, workspace);
 
     while true {

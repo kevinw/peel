@@ -24,6 +24,8 @@ You get a generated module that can be used to call those functions:
 // add an option to mark the files as readonly since they bring some duplication into the tree
 //
 // install_name_tool to @loader_path/name.dylib on mac?
+//
+// sort #foreign decls so they are stable for version control and not dependent on random compiler ordering
 
 // @DLLBoundaryBug - we wrap exported functions in #c_call to work around compiler bugs
 // with jai ABI functions (reported, not fixed as of Feb 21 2026)

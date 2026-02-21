@@ -7,6 +7,7 @@ APP_FILES :: string.[
     "boids.jai",
     "reaction_diffusion.jai",
     "raymarch.jai",
+    "raytracer.jai",
     "fluid2d.jai",
 ];
 
