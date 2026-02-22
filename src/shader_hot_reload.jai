@@ -94,7 +94,7 @@ shader_hot_reload_tick :: (reload: *Shader_Hot_Reload, frame_num: s64) -> (did_r
             return true, false, false;
         }
 
-        _ = SRM.shader_reload_manifest_load_auto(*reload.watcher.manifest);
+        _ = SRM.shader_reload_manifest_load_with_context(*reload.watcher.manifest, *reload.watcher.paths);
         SRM.shader_reload_watcher_refresh_baseline(*reload.watcher);
 
         apply_ok := shader_hot_reload_apply_registered_pipelines(reload);
@@ -151,7 +151,7 @@ shader_hot_reload_apply_registered_pipelines :: (reload: *Shader_Hot_Reload) -> 
             continue;
         }
 
-        source_path, found := SRM.shader_reload_manifest_find_entry_source_auto(entry);
+        source_path, found := SRM.shader_reload_manifest_find_entry_source_for_manifest(*reload.watcher.manifest, entry, *reload.watcher.paths);
         if !found {
             log_error("% missing graphics source request=%", reload.log_prefix, entry.request_name);
             ok = false;
@@ -185,7 +185,7 @@ shader_hot_reload_apply_registered_pipelines :: (reload: *Shader_Hot_Reload) -> 
             continue;
         }
 
-        source_path, found := SRM.shader_reload_manifest_find_entry_source_auto(entry);
+        source_path, found := SRM.shader_reload_manifest_find_entry_source_for_manifest(*reload.watcher.manifest, entry, *reload.watcher.paths);
         if !found {
             log_error("% missing compute source request=%", reload.log_prefix, entry.request_name);
             ok = false;
@@ -281,7 +281,7 @@ shader_hot_reload_worker_proc :: (thread: *TH.Thread) -> s64 {
         reload.worker_build_in_flight = true;
         TH.unlock(*reload.worker_mutex);
 
-        build_ok := SRM.shader_reload_build_entry_ids(reload.watcher.app_source_file, ids_csv);
+        build_ok := SRM.shader_reload_build_entry_ids_with_context(*reload.watcher.paths, reload.watcher.app_source_file, ids_csv);
 
         TH.lock(*reload.worker_mutex);
         reload.worker_build_in_flight = false;

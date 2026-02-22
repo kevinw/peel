@@ -12,6 +12,8 @@ graphics_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
 pixel_params_cpu: *Textured_Triangle_Pixel_Params;
+textured_triangle_shader_reload: SHR.Shader_Hot_Reload;
+TEXTURED_TRIANGLE_ENTRY_ID :: "pair|METAL|textured_triangle_vertex_main|textured_triangle_fragment_main";
 
 noise_texture: Gpu_Texture;
 noise_texture_view: Gpu_Texture_View;
@@ -37,6 +39,16 @@ noise_fill_rgba8 :: (pixels: *[NOISE_BYTE_COUNT] u8) {
 }
 
 on_dll_init :: () {
+    hot_reload_enabled_by_default := true;
+    #if RELEASE hot_reload_enabled_by_default = false;
+    _ = SHR.shader_hot_reload_init_auto(*textured_triangle_shader_reload, "src/apps/textured_triangle.jai", poll_every_frames = 15, log_prefix = "TEXTURED_TRIANGLE_SHADER_RELOAD", enabled_by_default = hot_reload_enabled_by_default);
+    SHR.shader_hot_reload_register_graphics_pipeline(*textured_triangle_shader_reload, TEXTURED_TRIANGLE_ENTRY_ID, *graphics_pipeline, .{
+        cull = .NONE,
+        color_targets = .[
+            .{format = .B8G8R8A8_UNORM}
+        ],
+    });
+
     graphics_source := cast([]u8) get_transpiled(.METAL, textured_triangle_vertex_main, textured_triangle_fragment_main);
     assert(graphics_source.count > 0, "Transpilation failed for textured triangle shaders.");
 
@@ -108,10 +120,20 @@ tick :: () {
     assert(draw_result == .SUCCESS, tprint("Textured triangle draw failed: %", draw_result));
 
     gpu_submit_and_present(cmd_buff);
+
+    frame_num := cast(s64) frame_count;
+    did_rebuild, swapped_all, rebuild_ok := SHR.shader_hot_reload_tick(*textured_triangle_shader_reload, frame_num);
+    sgpu_set_debug_status(SHR.shader_hot_reload_status_line(*textured_triangle_shader_reload));
+    if did_rebuild && !rebuild_ok {
+        log_error("TEXTURED_TRIANGLE_SHADER_RELOAD build failed; keeping current runtime shaders.");
+    } else if did_rebuild && !swapped_all {
+        log_error("TEXTURED_TRIANGLE_SHADER_RELOAD build succeeded but pipeline swap was partial; keeping remaining old pipelines.");
+    }
 } @on_tick
 
 #scope_file
 #load "../SGPU_App_Common.jai";
 #import "Jai-Shader-Transpiler";
+SHR :: #import,file "../shader_hot_reload.jai";
 #load "shaders/textured_triangle_shader.jai";
 #import "Random";
