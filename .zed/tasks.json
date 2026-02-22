@@ -4,6 +4,10 @@
     "command": "jai ~/src/peel/build.jai - src/apps/particles.jai -run -dll",
   },
   {
+    "label": "textured_triangle",
+    "command": "jai ~/src/peel/build.jai - src/apps/textured_triangle.jai -run",
+  },
+  {
     "label": "boids",
     "command": "jai ~/src/peel/build.jai - src/apps/boids.jai -run -dll",
   },

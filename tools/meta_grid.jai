@@ -8,6 +8,7 @@ String  :: #import "String";
 File    :: #import "File";
 File_Utilities :: #import "File_Utilities";
 #import "stb_image";
+#import "stb_image_resize";
 #import "stb_image_write";
 
 Meta_Grid_Opts :: struct {
@@ -52,8 +53,8 @@ app_executable_name :: (app_file: string) -> string {
 }
 
 delete_old_snapshots_for_app :: (app_name: string) {
-    prefix := sprint("%_window_frame_", app_name);
-    suffix := ".jpeg";
+    prefix := sprint("%_snapshot_frame_", app_name);
+    suffix := ".ppm";
     for File_Utilities.file_list("dist", recursive = false, follow_directory_symlinks = false,, allocator = temp) {
         filename := String.path_filename(it);
         if !String.starts_with(filename, prefix) continue;
@@ -63,8 +64,8 @@ delete_old_snapshots_for_app :: (app_name: string) {
 }
 
 find_latest_snapshot_for_app :: (app_name: string) -> string {
-    prefix := sprint("%_window_frame_", app_name);
-    suffix := ".jpeg";
+    prefix := sprint("%_snapshot_frame_", app_name);
+    suffix := ".ppm";
 
     best_frame: s64 = -1;
     best_path := "";
@@ -86,12 +87,14 @@ find_latest_snapshot_for_app :: (app_name: string) -> string {
     return best_path;
 }
 
-run_capture_for_app :: (exe_name: string) -> bool {
+run_capture_for_app :: (exe_name: string, snapshot_w: s64, snapshot_h: s64) -> bool {
+    sw := sprint("%", max(1, snapshot_w));
+    sh := sprint("%", max(1, snapshot_h));
     #if OS == .WINDOWS {
-        cmd := sprint("set PEEL_WINDOW_SNAPSHOT=1&& \"%\" --max-frames 300", exe_name);
+        cmd := sprint("set PEEL_SNAPSHOT=1&& set PEEL_STATS_EVERY=1&& set PEEL_STATS_MAX=1&& set PEEL_SNAPSHOT_W=%&& set PEEL_SNAPSHOT_H=%&& \"%\" --max-frames 300", sw, sh, exe_name);
         return run_command_checked(sprint("Capture %", exe_name), .["cmd", "/C", cmd], working_directory = "dist", fail_on_error = false);
     } else {
-        return run_command_checked(sprint("Capture %", exe_name), .["env", "PEEL_WINDOW_SNAPSHOT=1", sprint("./%", exe_name), "--max-frames", "300"], working_directory = "dist", fail_on_error = false);
+        return run_command_checked(sprint("Capture %", exe_name), .["env", "PEEL_SNAPSHOT=1", "PEEL_STATS_EVERY=1", "PEEL_STATS_MAX=1", sprint("PEEL_SNAPSHOT_W=%", sw), sprint("PEEL_SNAPSHOT_H=%", sh), sprint("./%", exe_name), "--max-frames", "300"], working_directory = "dist", fail_on_error = false);
     }
 }
 
@@ -118,15 +121,15 @@ write_placeholder_capture :: (dest_path: string, w: s64, h: s64) {
     }
 
     _ = File.make_directory_if_it_does_not_exist(String.path_strip_filename(dest_path), recursive = true);
-    ok := stbi_write_jpg(temp_c_string(dest_path), cast(s32) ww, cast(s32) hh, 4, pixels.data, 90);
+    ok := stbi_write_png(temp_c_string(dest_path), cast(s32) ww, cast(s32) hh, 4, pixels.data, cast(s32) (ww * 4));
     if ok == 0 {
         log_error("Failed to write placeholder capture '%'.", dest_path);
         exit(1);
     }
 }
 
-blit_scaled_rgba8_nearest_fit :: (dst: []u8, dst_w: s64, dst_h: s64, dst_x: s64, dst_y: s64, dst_cell_w: s64, dst_cell_h: s64,
-                                  src: *u8, src_w: s64, src_h: s64) {
+blit_scaled_rgba8_high_quality_fit :: (dst: []u8, dst_w: s64, dst_h: s64, dst_x: s64, dst_y: s64, dst_cell_w: s64, dst_cell_h: s64,
+                                       src: *u8, src_w: s64, src_h: s64) {
     if dst_cell_w <= 0 || dst_cell_h <= 0 return;
     if src_w <= 0 || src_h <= 0 return;
 
@@ -143,28 +146,40 @@ blit_scaled_rgba8_nearest_fit :: (dst: []u8, dst_w: s64, dst_h: s64, dst_x: s64,
     ox := dst_x + (dst_cell_w - fit_w) / 2;
     oy := dst_y + (dst_cell_h - fit_h) / 2;
 
+    resized := NewArray(fit_w * fit_h * 4, u8);
+    // stb_image_resize defaults to Mitchell for downsampling in this module build.
+    resized_ok := stbir_resize_uint8_srgb(
+        input_pixels = src,
+        input_w = cast(s32) src_w,
+        input_h = cast(s32) src_h,
+        input_stride_in_bytes = cast(s32) (src_w * 4),
+        output_pixels = resized.data,
+        output_w = cast(s32) fit_w,
+        output_h = cast(s32) fit_h,
+        output_stride_in_bytes = cast(s32) (fit_w * 4),
+        num_channels = 4,
+        alpha_channel = STBIR_ALPHA_CHANNEL_NONE,
+        flags = cast(Resize_Flags) 0,
+    );
+    if resized_ok == 0 {
+        log_error("stb_image_resize failed while resizing tile from %x% to %x%.", src_w, src_h, fit_w, fit_h);
+        exit(1);
+    }
+
     for y: 0..fit_h-1 {
-        sy := (y * src_h) / fit_h;
-        if sy < 0 sy = 0;
-        if sy >= src_h sy = src_h - 1;
-
         for x: 0..fit_w-1 {
-            sx := (x * src_w) / fit_w;
-            if sx < 0 sx = 0;
-            if sx >= src_w sx = src_w - 1;
-
             dst_px := ox + x;
             dst_py := oy + y;
             if dst_px < 0 || dst_px >= dst_w continue;
             if dst_py < 0 || dst_py >= dst_h continue;
 
-            src_i := (sy * src_w + sx) * 4;
+            src_i := (y * fit_w + x) * 4;
             dst_i := (dst_py * dst_w + dst_px) * 4;
 
-            dst[dst_i + 0] = src[src_i + 0];
-            dst[dst_i + 1] = src[src_i + 1];
-            dst[dst_i + 2] = src[src_i + 2];
-            dst[dst_i + 3] = src[src_i + 3];
+            dst[dst_i + 0] = resized[src_i + 0];
+            dst[dst_i + 1] = resized[src_i + 1];
+            dst[dst_i + 2] = resized[src_i + 2];
+            dst[dst_i + 3] = resized[src_i + 3];
         }
     }
 }
@@ -215,8 +230,8 @@ compose_grid :: (capture_paths: []string, opts: Meta_Grid_Opts) {
         x := pad + col * (cell_w + pad);
         y := pad + row * (cell_h + pad);
 
-        blit_scaled_rgba8_nearest_fit(canvas, canvas_w, canvas_h, x, y, cell_w, cell_h,
-                                      pixels, cast(s64) w, cast(s64) h);
+        blit_scaled_rgba8_high_quality_fit(canvas, canvas_w, canvas_h, x, y, cell_w, cell_h,
+                                           pixels, cast(s64) w, cast(s64) h);
     }
 
     if !File.make_directory_if_it_does_not_exist(String.path_strip_filename(opts.out_grid), recursive = true) {
@@ -255,11 +270,13 @@ compose_grid :: (capture_paths: []string, opts: Meta_Grid_Opts) {
     for APP_FILES {
         app_name := app_output_name(it);
         exe_name := app_executable_name(it);
-        capture_dest := sprint("%/%_capture.jpeg", opts.out_dir, app_name);
+        capture_dest := sprint("%/%_capture", opts.out_dir, app_name);
 
         if !opts.skip_capture {
             delete_old_snapshots_for_app(app_name);
-            capture_ok := run_capture_for_app(exe_name);
+            snapshot_w := max(256, opts.cell_w * 2);
+            snapshot_h := max(256, opts.cell_h * 2);
+            capture_ok := run_capture_for_app(exe_name, snapshot_w, snapshot_h);
 
             newest := find_latest_snapshot_for_app(app_name);
             if capture_ok && newest {

@@ -50,27 +50,16 @@ on_dll_init :: () {
 
     gpu_arena = gpu_make_arena(1024 * 1024, label = "textured triangle arena");
 
-    #if OS == .MACOS {
-        noise_texture = gpu_create_texture(.{
-            dimensions = .[NOISE_W, NOISE_H, 1],
-            format = .B8G8R8A8_UNORM,
-            usage = .SAMPLED | .TRANSFER_DST,
-        });
-    } else {
-        texture_result: Gpu_Result;
-        texture_result, noise_texture = gpu_create_texture(.{
-            dimensions = .[NOISE_W, NOISE_H, 1],
-            format = .B8G8R8A8_UNORM,
-            usage = .SAMPLED | .TRANSFER_DST,
-        });
-        assert(texture_result == .SUCCESS, tprint("Textured triangle texture creation failed: %", texture_result));
-    }
+    texture_result, noise_texture= := gpu_create_texture({
+        dimensions = .[NOISE_W, NOISE_H, 1],
+        format = .B8G8R8A8_UNORM,
+        usage = .SAMPLED | .TRANSFER_DST,
+    });
+    assert(texture_result == .SUCCESS, tprint("Textured triangle texture creation failed: %", texture_result));
     assert(noise_texture != 0, "Textured triangle texture creation returned null handle.");
     noise_texture_view = gpu_texture_view(noise_texture);
     assert(noise_texture_view != 0, "Textured triangle texture-view creation failed.");
-    noise_sampler = gpu_create_sampler(.{
-        compare_op = .NEVER,
-    });
+    noise_sampler = gpu_create_sampler({ compare_op = .NEVER });
     assert(noise_sampler != 0, "Textured triangle sampler creation failed.");
 
     noise_pixels, _ := gpu_arena_alloc(*gpu_arena, [NOISE_BYTE_COUNT] u8);
@@ -125,3 +114,4 @@ tick :: () {
 #load "../SGPU_App_Common.jai";
 #import "Jai-Shader-Transpiler";
 #load "shaders/textured_triangle_shader.jai";
+#import "Random";
