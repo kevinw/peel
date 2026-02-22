@@ -13,7 +13,6 @@ gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
 pixel_params_cpu: *Textured_Triangle_Pixel_Params;
 textured_triangle_shader_reload: SHR.Shader_Hot_Reload;
-TEXTURED_TRIANGLE_ENTRY_ID :: "pair|METAL|textured_triangle_vertex_main|textured_triangle_fragment_main";
 
 noise_texture: Gpu_Texture;
 noise_texture_view: Gpu_Texture_View;
@@ -39,26 +38,20 @@ noise_fill_rgba8 :: (pixels: *[NOISE_BYTE_COUNT] u8) {
 }
 
 on_dll_init :: () {
+    graphics_source := cast([]u8) get_transpiled(.METAL, textured_triangle_vertex_main, textured_triangle_fragment_main);
+    assert(graphics_source.count > 0, "Transpilation failed for textured triangle shaders.");
+    raster_desc: Gpu_Raster_Desc = .{
+        cull = .NONE,
+        color_targets = .[
+            .{format = .B8G8R8A8_UNORM}
+        ],
+    };
+
     hot_reload_enabled_by_default := true;
     #if RELEASE hot_reload_enabled_by_default = false;
     _ = SHR.shader_hot_reload_init_auto(*textured_triangle_shader_reload, "src/apps/textured_triangle.jai", poll_every_frames = 15, log_prefix = "TEXTURED_TRIANGLE_SHADER_RELOAD", enabled_by_default = hot_reload_enabled_by_default);
-    SHR.shader_hot_reload_register_graphics_pipeline(*textured_triangle_shader_reload, TEXTURED_TRIANGLE_ENTRY_ID, *graphics_pipeline, .{
-        cull = .NONE,
-        color_targets = .[
-            .{format = .B8G8R8A8_UNORM}
-        ],
-    });
-
-    graphics_source := cast([]u8) get_transpiled(.METAL, textured_triangle_vertex_main, textured_triangle_fragment_main);
-    assert(graphics_source.count > 0, "Transpilation failed for textured triangle shaders.");
-
-    graphics_pipeline = gpu_create_graphics_pipeline(graphics_source, .{
-        cull = .NONE,
-        color_targets = .[
-            .{format = .B8G8R8A8_UNORM}
-        ],
-    });
-    assert(graphics_pipeline != 0, "Textured triangle graphics pipeline creation failed.");
+    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*textured_triangle_shader_reload, *graphics_pipeline, graphics_source, raster_desc, .METAL, textured_triangle_vertex_main, textured_triangle_fragment_main);
+    assert(graphics_ok, "Textured triangle graphics pipeline creation failed.");
 
     gpu_arena = gpu_make_arena(1024 * 1024, label = "textured triangle arena");
 

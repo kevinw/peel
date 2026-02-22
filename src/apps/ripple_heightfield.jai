@@ -19,8 +19,6 @@ compute_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
 ripple_shader_reload: SHR.Shader_Hot_Reload;
-RIPPLE_GRAPHICS_ENTRY_ID :: "pair|METAL|ripple_vertex_main|ripple_fragment_main";
-RIPPLE_COMPUTE_ENTRY_ID  :: "single|METAL|compute|ripple_step_compute";
 
 ripple_state_storage_gpu: Gpu_Ptr;
 ripple_state_storage_cpu: *[RIPPLE_CELL_COUNT * 2] Vector2;
@@ -33,28 +31,23 @@ on_dll_init :: () {
     assert(compute_source.count > 0, "Compute transpilation failed (ripple_step_compute).");
     graphics_source := cast([]u8) get_transpiled(.METAL, ripple_vertex_main, ripple_fragment_main);
     assert(graphics_source.count > 0, "Graphics transpilation failed (ripple shaders).");
+    raster_desc: Gpu_Raster_Desc = {
+        cull = .CW,
+        color_targets = .[
+            .{format = .B8G8R8A8_UNORM}
+        ],
+    };
 
     compute_pipeline = gpu_create_compute_pipeline(compute_source);
     assert(compute_pipeline != 0, "Ripple compute pipeline creation failed.");
 
-    graphics_pipeline = gpu_create_graphics_pipeline(graphics_source, {
-        cull = .CW,
-        color_targets = .[
-            .{format = .B8G8R8A8_UNORM}
-        ],
-    });
-    assert(graphics_pipeline != 0, "Ripple graphics pipeline creation failed.");
-
     hot_reload_enabled_by_default := true;
     #if RELEASE hot_reload_enabled_by_default = false;
     _ = SHR.shader_hot_reload_init_auto(*ripple_shader_reload, "src/apps/ripple_heightfield.jai", poll_every_frames = 15, log_prefix = "RIPPLE_SHADER_RELOAD", enabled_by_default = hot_reload_enabled_by_default);
-    SHR.shader_hot_reload_register_graphics_pipeline(*ripple_shader_reload, RIPPLE_GRAPHICS_ENTRY_ID, *graphics_pipeline, {
-        cull = .CW,
-        color_targets = .[
-            .{format = .B8G8R8A8_UNORM}
-        ],
-    });
-    SHR.shader_hot_reload_register_compute_pipeline(*ripple_shader_reload, RIPPLE_COMPUTE_ENTRY_ID, *compute_pipeline);
+    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*ripple_shader_reload, *graphics_pipeline, graphics_source, raster_desc, .METAL, ripple_vertex_main, ripple_fragment_main);
+    assert(graphics_ok, "Ripple graphics pipeline creation failed.");
+    compute_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*ripple_shader_reload, *compute_pipeline, compute_source, .METAL, ripple_step_compute);
+    assert(compute_ok, "Ripple compute pipeline creation failed.");
 
     gpu_arena = gpu_make_arena(1024 * 1024 * 8, label = "ripple arena");
 

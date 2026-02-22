@@ -188,22 +188,12 @@ load_texture_rgba8 :: (path: string) -> Gpu_Texture, Gpu_Texture_View {
 
     assert(pixels != null && width > 0 && height > 0, tprint("Failed to load texture: %", path));
 
-    texture: Gpu_Texture;
-    #if OS == .MACOS {
-        texture = gpu_create_texture(.{
-            dimensions = .[cast(u32) width, cast(u32) height, 1],
-            format = .B8G8R8A8_UNORM,
-            usage = .SAMPLED | .TRANSFER_DST,
-        });
-    } else {
-        texture_result: Gpu_Result;
-        texture_result, texture = gpu_create_texture(.{
-            dimensions = .[cast(u32) width, cast(u32) height, 1],
-            format = .B8G8R8A8_UNORM,
-            usage = .SAMPLED | .TRANSFER_DST,
-        });
-        assert(texture_result == .SUCCESS, tprint("Texture creation failed for %: %", path, texture_result));
-    }
+    texture_result, texture := gpu_create_texture(.{
+        dimensions = .[cast(u32) width, cast(u32) height, 1],
+        format = .B8G8R8A8_UNORM,
+        usage = .SAMPLED | .TRANSFER_DST,
+    });
+    assert(texture_result == .SUCCESS, tprint("Texture creation failed for %: %", path, texture_result));
 
     assert(texture != 0, tprint("Texture handle invalid for %", path));
     gpu_copy_to_texture(texture, pixels);
@@ -218,11 +208,12 @@ ensure_depth_target :: (width: u32, height: u32) {
     if width == 0 || height == 0 return;
     if pbr_depth_view != 0 && pbr_depth_w == width && pbr_depth_h == height return;
 
-    pbr_depth_texture = gpu_create_texture(.{
+    res, pbr_depth_texture= := gpu_create_texture(.{
         dimensions = .[width, height, 1],
         format = .D32_SFLOAT,
         usage = .DEPTH_STENCIL_ATTACHMENT,
     });
+    assert(res == .SUCCESS);
     assert(pbr_depth_texture != 0, "PBR depth texture creation failed.");
 
     pbr_depth_view = gpu_texture_view(pbr_depth_texture);

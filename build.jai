@@ -135,6 +135,10 @@ PLATFORM_DIR :: #run get_platform_dir(OS); // win, macos, linux
         }
     }
 
+    if !script_opts.sub_build {
+        log("Built in % seconds.", to_float64_seconds(current_time_monotonic() - start_time));
+    }
+
     // Start the host if it's not already running.
     #if !BUILD_IS_FOR_IDE {
         if !script_opts.run {
@@ -174,10 +178,6 @@ PLATFORM_DIR :: #run get_platform_dir(OS); // win, macos, linux
         }
     } else {
         if script_opts.verbose log("Not running the app, because we're building for the IDE.");
-    }
-
-    if !script_opts.sub_build {
-        log("Built in % seconds.", to_float64_seconds(current_time_monotonic() - start_time));
     }
 }
 

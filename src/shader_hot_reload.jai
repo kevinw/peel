@@ -10,9 +10,9 @@ Shader_Hot_Reload :: struct {
     last_event_frame: s64;
     last_result: Shader_Hot_Reload_Last_Result;
     worker_started: bool;
-    worker_thread: TH.Thread;
-    worker_wake: TH.Semaphore;
-    worker_mutex: TH.Mutex;
+    worker_thread: Thread;
+    worker_wake: Semaphore;
+    worker_mutex: Mutex;
     worker_should_exit: bool;
     worker_has_pending: bool;
     worker_pending_ids_csv: string;
@@ -64,12 +64,55 @@ shader_hot_reload_register_graphics_pipeline :: (reload: *Shader_Hot_Reload, ent
     });
 }
 
+shader_hot_reload_create_and_register_graphics_pipeline_with_entry_id :: (reload: *Shader_Hot_Reload, entry_id: string, pipeline: *Gpu_Pipeline, source: []u8, raster_desc: Gpu_Raster_Desc) -> bool {
+    if entry_id.count == 0 || !pipeline || source.count == 0 return false;
+
+    new_pipeline := gpu_create_graphics_pipeline(source, raster_desc);
+    if new_pipeline == 0 return false;
+
+    old_pipeline := pipeline.*;
+    pipeline.* = new_pipeline;
+    if old_pipeline != 0 gpu_free_pipeline(old_pipeline);
+
+    shader_hot_reload_register_graphics_pipeline(reload, entry_id, pipeline, raster_desc);
+    return true;
+}
+
+shader_hot_reload_create_and_register_graphics_pipeline :: (reload: *Shader_Hot_Reload, pipeline: *Gpu_Pipeline, source: []u8, raster_desc: Gpu_Raster_Desc, target: JTS.Transpiled_Target, $vertex_shader: $VERTEX_SHADER, $fragment_shader: $FRAGMENT_SHADER, call: Code = #caller_code) -> bool #expand {
+    vertex_name := #run shader_hot_reload_proc_name_from_caller_arg_compile_time(call, 5);
+    fragment_name := #run shader_hot_reload_proc_name_from_caller_arg_compile_time(call, 6);
+    target_name := tprint("%", target);
+    entry_id := tprint("pair|%|%|%", target_name, vertex_name, fragment_name);
+    return shader_hot_reload_create_and_register_graphics_pipeline_with_entry_id(reload, entry_id, pipeline, source, raster_desc);
+}
+
 shader_hot_reload_register_compute_pipeline :: (reload: *Shader_Hot_Reload, entry_id: string, pipeline: *Gpu_Pipeline) {
     if entry_id.count == 0 || !pipeline return;
     array_add(*reload.compute_targets, .{
         entry_id = copy_string(entry_id),
         pipeline = pipeline,
     });
+}
+
+shader_hot_reload_create_and_register_compute_pipeline_with_entry_id :: (reload: *Shader_Hot_Reload, entry_id: string, pipeline: *Gpu_Pipeline, source: []u8) -> bool {
+    if entry_id.count == 0 || !pipeline || source.count == 0 return false;
+
+    new_pipeline := gpu_create_compute_pipeline(source);
+    if new_pipeline == 0 return false;
+
+    old_pipeline := pipeline.*;
+    pipeline.* = new_pipeline;
+    if old_pipeline != 0 gpu_free_pipeline(old_pipeline);
+
+    shader_hot_reload_register_compute_pipeline(reload, entry_id, pipeline);
+    return true;
+}
+
+shader_hot_reload_create_and_register_compute_pipeline :: (reload: *Shader_Hot_Reload, pipeline: *Gpu_Pipeline, source: []u8, target: JTS.Transpiled_Target, $compute_shader: $COMPUTE_SHADER, call: Code = #caller_code) -> bool #expand {
+    compute_name := #run shader_hot_reload_proc_name_from_caller_arg_compile_time(call, 4);
+    target_name := tprint("%", target);
+    entry_id := tprint("single|%|compute|%", target_name, compute_name);
+    return shader_hot_reload_create_and_register_compute_pipeline_with_entry_id(reload, entry_id, pipeline, source);
 }
 
 shader_hot_reload_tick :: (reload: *Shader_Hot_Reload, frame_num: s64) -> (did_rebuild: bool, swapped_all: bool, build_ok: bool) {
@@ -116,58 +159,62 @@ shader_hot_reload_tick :: (reload: *Shader_Hot_Reload, frame_num: s64) -> (did_r
     return true, apply_ok, true;
 }
 
-shader_hot_reload_status_line :: (reload: *Shader_Hot_Reload, max_ids_chars: s64 = 72) -> string {
-    if !reload.enabled return "shader_reload=off";
+shader_hot_reload_status_line :: (using reload: *Shader_Hot_Reload, max_ids_chars: s64 = 72) -> string {
+    if !enabled return "shader_reload=off";
 
-    ids := reload.watcher.last_changed_entry_ids_csv;
+    ids := watcher.last_changed_entry_ids_csv;
     ids_short := ids;
     if max_ids_chars > 0 && ids_short.count > max_ids_chars {
         ids_short.count = max_ids_chars;
         ids_short = tprint("%...", ids_short);
     }
 
-    result_text := "idle";
-    if reload.last_result == .BUILD_QUEUED result_text = "queued";
-    else if reload.last_result == .BUILD_RUNNING result_text = "building";
-    else if reload.last_result == .BUILD_FAILED result_text = "build_failed";
-    else if reload.last_result == .SWAP_PARTIAL result_text = "swap_partial";
-    else if reload.last_result == .SWAP_OK result_text = "ok";
-
+    result_text := tprint("%", last_result);
     if reload.last_event_frame < 0 return tprint("shader_reload=on status=%", result_text);
-    if ids_short.count == 0 return tprint("shader_reload=on status=% frame=%", result_text, reload.last_event_frame);
-    return tprint("shader_reload=on status=% frame=% ids=%", result_text, reload.last_event_frame, ids_short);
+    if ids_short.count == 0 return tprint("shader_reload=on status=% frame=%", result_text, last_event_frame);
+    return tprint("shader_reload=on status=% frame=% ids=%", result_text, last_event_frame, ids_short);
 }
 
 #scope_file
 
-shader_hot_reload_apply_registered_pipelines :: (reload: *Shader_Hot_Reload) -> bool {
+shader_hot_reload_proc_name_from_caller_arg_compile_time :: (call: Code, arg_index: s64) -> string {
+    root, _ := compiler_get_nodes(call);
+    if !root || root.kind != .PROCEDURE_CALL return "";
+    pc := cast(*Code_Procedure_Call) root;
+    if arg_index < 0 || arg_index >= pc.arguments_unsorted.count return "";
+    arg := pc.arguments_unsorted[arg_index].expression;
+    if !arg || arg.kind != .IDENT return "";
+    return (cast(*Code_Ident) arg).name;
+}
+
+shader_hot_reload_apply_registered_pipelines :: (using reload: *Shader_Hot_Reload) -> bool {
     ok := true;
 
-    for reload.graphics_targets {
-        entry := SRM.shader_reload_manifest_find_entry(*reload.watcher.manifest, it.entry_id);
+    for graphics_targets {
+        entry := SRM.shader_reload_manifest_find_entry(*watcher.manifest, it.entry_id);
         if !entry {
-            log_error("% missing graphics entry id=%", reload.log_prefix, it.entry_id);
+            log_error("% missing graphics entry id=%", log_prefix, it.entry_id);
             ok = false;
             continue;
         }
 
-        source_path, found := SRM.shader_reload_manifest_find_entry_source_for_manifest(*reload.watcher.manifest, entry, *reload.watcher.paths);
+        source_path, found := SRM.shader_reload_manifest_find_entry_source_for_manifest(*watcher.manifest, entry, *reload.watcher.paths);
         if !found {
-            log_error("% missing graphics source request=%", reload.log_prefix, entry.request_name);
+            log_error("% missing graphics source request=%", log_prefix, entry.request_name);
             ok = false;
             continue;
         }
 
         source, read_ok := File.read_entire_file(source_path);
         if !read_ok || source.count == 0 {
-            log_error("% failed reading graphics source path=%", reload.log_prefix, source_path);
+            log_error("% failed reading graphics source path=%", log_prefix, source_path);
             ok = false;
             continue;
         }
 
         new_pipeline := gpu_create_graphics_pipeline(cast([]u8) source, it.raster_desc);
         if new_pipeline == 0 {
-            log_error("% graphics pipeline recreation failed path=%", reload.log_prefix, source_path);
+            log_error("% graphics pipeline recreation failed path=%", log_prefix, source_path);
             ok = false;
             continue;
         }
@@ -177,31 +224,31 @@ shader_hot_reload_apply_registered_pipelines :: (reload: *Shader_Hot_Reload) -> 
         if old_pipeline != 0 gpu_free_pipeline(old_pipeline);
     }
 
-    for reload.compute_targets {
-        entry := SRM.shader_reload_manifest_find_entry(*reload.watcher.manifest, it.entry_id);
+    for compute_targets {
+        entry := SRM.shader_reload_manifest_find_entry(*watcher.manifest, it.entry_id);
         if !entry {
-            log_error("% missing compute entry id=%", reload.log_prefix, it.entry_id);
+            log_error("% missing compute entry id=%", log_prefix, it.entry_id);
             ok = false;
             continue;
         }
 
-        source_path, found := SRM.shader_reload_manifest_find_entry_source_for_manifest(*reload.watcher.manifest, entry, *reload.watcher.paths);
+        source_path, found := SRM.shader_reload_manifest_find_entry_source_for_manifest(*watcher.manifest, entry, *watcher.paths);
         if !found {
-            log_error("% missing compute source request=%", reload.log_prefix, entry.request_name);
+            log_error("% missing compute source request=%", log_prefix, entry.request_name);
             ok = false;
             continue;
         }
 
         source, read_ok := File.read_entire_file(source_path);
         if !read_ok || source.count == 0 {
-            log_error("% failed reading compute source path=%", reload.log_prefix, source_path);
+            log_error("% failed reading compute source path=%", log_prefix, source_path);
             ok = false;
             continue;
         }
 
         new_pipeline := gpu_create_compute_pipeline(cast([]u8) source);
         if new_pipeline == 0 {
-            log_error("% compute pipeline recreation failed path=%", reload.log_prefix, source_path);
+            log_error("% compute pipeline recreation failed path=%", log_prefix, source_path);
             ok = false;
             continue;
         }
@@ -211,84 +258,84 @@ shader_hot_reload_apply_registered_pipelines :: (reload: *Shader_Hot_Reload) -> 
         if old_pipeline != 0 gpu_free_pipeline(old_pipeline);
     }
 
-    if ok log("% swapped pipelines for ids=%", reload.log_prefix, reload.watcher.last_changed_entry_ids_csv);
+    if ok log("% swapped pipelines for ids=%", log_prefix, watcher.last_changed_entry_ids_csv);
     return ok;
 }
 
-shader_hot_reload_start_worker_thread :: (reload: *Shader_Hot_Reload) {
-    TH.init(*reload.worker_wake, 0);
-    TH.init(*reload.worker_mutex, "shader_hot_reload");
-    ok := TH.thread_init(*reload.worker_thread, shader_hot_reload_worker_proc);
+shader_hot_reload_start_worker_thread :: (using reload: *Shader_Hot_Reload) {
+    init(*worker_wake, 0);
+    init(*worker_mutex, "shader_hot_reload");
+    ok := thread_init(*worker_thread, shader_hot_reload_worker_proc);
     if !ok {
-        log_error("% failed to start worker thread; using synchronous reload path.", reload.log_prefix);
-        reload.worker_started = false;
-        reload.use_background_thread = false;
+        log_error("% failed to start worker thread; using synchronous reload path.", log_prefix);
+        worker_started = false;
+        use_background_thread = false;
         return;
     }
-    reload.worker_thread.data = reload;
-    TH.thread_start(*reload.worker_thread);
-    reload.worker_started = true;
+    worker_thread.data = reload;
+    thread_start(*worker_thread);
+    worker_started = true;
 }
 
-shader_hot_reload_queue_background_build :: (reload: *Shader_Hot_Reload, changed_ids_csv: string) {
-    if !reload.worker_started return;
-    TH.lock(*reload.worker_mutex);
-    defer TH.unlock(*reload.worker_mutex);
+shader_hot_reload_queue_background_build :: (using reload: *Shader_Hot_Reload, changed_ids_csv: string) {
+    if !worker_started return;
+    lock(*worker_mutex);
+    defer unlock(*worker_mutex);
 
-    if reload.worker_build_in_flight {
-        reload.last_result = .BUILD_RUNNING;
+    if worker_build_in_flight {
+        last_result = .BUILD_RUNNING;
     } else {
-        reload.last_result = .BUILD_QUEUED;
+        last_result = .BUILD_QUEUED;
     }
-    assign_string(*reload.worker_pending_ids_csv, changed_ids_csv);
-    reload.worker_has_pending = true;
-    TH.signal(*reload.worker_wake);
+    assign_string(*worker_pending_ids_csv, changed_ids_csv);
+    worker_has_pending = true;
+    signal(*worker_wake);
 }
 
-shader_hot_reload_take_background_completion :: (reload: *Shader_Hot_Reload, completed_ok: *bool, completed_ids_csv: *string) -> bool {
-    if !reload.worker_started return false;
-    TH.lock(*reload.worker_mutex);
-    defer TH.unlock(*reload.worker_mutex);
+shader_hot_reload_take_background_completion :: (using reload: *Shader_Hot_Reload, completed_ok: *bool, completed_ids_csv: *string) -> bool {
+    if !worker_started return false;
+    lock(*worker_mutex);
+    defer unlock(*worker_mutex);
 
-    if !reload.worker_has_completed return false;
-    reload.worker_has_completed = false;
-    completed_ok.* = reload.worker_completed_ok;
-    completed_ids_csv.* = reload.worker_completed_ids_csv;
-    reload.worker_completed_ids_csv = "";
+    if !worker_has_completed return false;
+    worker_has_completed = false;
+    completed_ok.* = worker_completed_ok;
+    completed_ids_csv.* = worker_completed_ids_csv;
+    worker_completed_ids_csv = "";
     return true;
 }
 
-shader_hot_reload_worker_proc :: (thread: *TH.Thread) -> s64 {
-    reload := cast(*Shader_Hot_Reload) thread.data;
+shader_hot_reload_worker_proc :: (thread: *Thread) -> s64 {
+    using reload := cast(*Shader_Hot_Reload) thread.data;
     if !reload return 0;
 
     while true {
-        _ = TH.wait_for(*reload.worker_wake);
+        _ = wait_for(*worker_wake);
 
         ids_csv: string;
-        TH.lock(*reload.worker_mutex);
-        if reload.worker_should_exit {
-            TH.unlock(*reload.worker_mutex);
+        lock(*worker_mutex);
+        if worker_should_exit {
+            unlock(*worker_mutex);
             break;
         }
-        if !reload.worker_has_pending {
-            TH.unlock(*reload.worker_mutex);
+        if !worker_has_pending {
+            unlock(*worker_mutex);
             continue;
         }
-        ids_csv = reload.worker_pending_ids_csv;
-        reload.worker_pending_ids_csv = "";
-        reload.worker_has_pending = false;
-        reload.worker_build_in_flight = true;
-        TH.unlock(*reload.worker_mutex);
+        ids_csv = worker_pending_ids_csv;
+        worker_pending_ids_csv = "";
+        worker_has_pending = false;
+        worker_build_in_flight = true;
+        unlock(*worker_mutex);
 
-        build_ok := SRM.shader_reload_build_entry_ids_with_context(*reload.watcher.paths, reload.watcher.app_source_file, ids_csv);
+        build_ok := SRM.shader_reload_build_entry_ids_with_context(*watcher.paths, watcher.app_source_file, ids_csv);
 
-        TH.lock(*reload.worker_mutex);
-        reload.worker_build_in_flight = false;
-        reload.worker_completed_ok = build_ok;
-        assign_string(*reload.worker_completed_ids_csv, ids_csv);
-        reload.worker_has_completed = true;
-        TH.unlock(*reload.worker_mutex);
+        lock(*worker_mutex);
+        worker_build_in_flight = false;
+        worker_completed_ok = build_ok;
+        assign_string(*worker_completed_ids_csv, ids_csv);
+        worker_has_completed = true;
+        unlock(*worker_mutex);
         if ids_csv.count != 0 free(ids_csv);
     }
 
@@ -304,6 +351,8 @@ assign_string :: (dst: *string, src: string) {
 }
 
 #import "Basic";
+#import "Compiler";
 #import "sgpu";
 File :: #import "File";
-TH :: #import "Thread";
+#import "Thread";
+JTS :: #import "Jai-Shader-Transpiler";

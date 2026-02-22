@@ -11,29 +11,22 @@ gpu_arena: Gpu_Arena;
 raymarch_params_cpu: *Raymarch_Params;
 raymarch_params_gpu: Gpu_Ptr;
 raymarch_shader_reload: SHR.Shader_Hot_Reload;
-RAYMARCH_ENTRY_ID :: "pair|METAL|raymarch_vertex_main|raymarch_fragment_main";
 
 on_dll_init :: () {
+    graphics_source := cast([]u8) get_transpiled(.METAL, raymarch_vertex_main, raymarch_fragment_main);
+    assert(graphics_source.count > 0, "Transpilation failed for raymarch graphics shaders.");
+    raster_desc: Gpu_Raster_Desc = {
+        cull = .CW,
+        color_targets = .[
+            .{format = .B8G8R8A8_UNORM}
+        ],
+    };
+
     hot_reload_enabled_by_default := true;
     #if RELEASE hot_reload_enabled_by_default = false;
     _ = SHR.shader_hot_reload_init_auto(*raymarch_shader_reload, "src/apps/raymarch.jai", poll_every_frames = 15, log_prefix = "RAYMARCH_SHADER_RELOAD", enabled_by_default = hot_reload_enabled_by_default);
-    SHR.shader_hot_reload_register_graphics_pipeline(*raymarch_shader_reload, RAYMARCH_ENTRY_ID, *graphics_pipeline, {
-        cull = .CW,
-        color_targets = .[
-            .{format = .B8G8R8A8_UNORM}
-        ],
-    });
-
-    graphics_source := cast([]u8) get_transpiled(.METAL, raymarch_vertex_main, raymarch_fragment_main);
-    assert(graphics_source.count > 0, "Transpilation failed for raymarch graphics shaders.");
-
-    graphics_pipeline = gpu_create_graphics_pipeline(graphics_source, {
-        cull = .CW,
-        color_targets = .[
-            .{format = .B8G8R8A8_UNORM}
-        ],
-    });
-    assert(graphics_pipeline != 0, "Raymarch graphics pipeline creation failed.");
+    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*raymarch_shader_reload, *graphics_pipeline, graphics_source, raster_desc, .METAL, raymarch_vertex_main, raymarch_fragment_main);
+    assert(graphics_ok, "Raymarch graphics pipeline creation failed.");
 
     gpu_arena = gpu_make_arena(64 * 1024, label = "raymarch arena");
     raymarch_params_cpu, raymarch_params_gpu = gpu_arena_alloc(*gpu_arena, Raymarch_Params);

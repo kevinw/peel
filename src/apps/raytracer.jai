@@ -11,32 +11,25 @@ gpu_arena: Gpu_Arena;
 raytracer_params_cpu: *Raytracer_Params;
 raytracer_params_gpu: Gpu_Ptr;
 raytracer_shader_reload: SHR.Shader_Hot_Reload;
-RAYTRACER_ENTRY_ID :: "pair|METAL|raytracer_vertex_main|raytracer_fragment_main";
 
 camera_pos := Vector3.{0.0, 0.75, 1.95};
 camera_speed: float = 3.0;
 
 on_dll_init :: () {
+    graphics_source := cast([]u8) get_transpiled(.METAL, raytracer_vertex_main, raytracer_fragment_main);
+    assert(graphics_source.count > 0, "Transpilation failed for raytracer graphics shaders.");
+    raster_desc: Gpu_Raster_Desc = .{
+        cull = .CW,
+        color_targets = .[
+            .{format = .B8G8R8A8_UNORM}
+        ],
+    };
+
     hot_reload_enabled_by_default := true;
     #if RELEASE hot_reload_enabled_by_default = false;
     _ = SHR.shader_hot_reload_init_auto(*raytracer_shader_reload, "src/apps/raytracer.jai", poll_every_frames = 15, log_prefix = "RAYTRACER_SHADER_RELOAD", enabled_by_default = hot_reload_enabled_by_default);
-    SHR.shader_hot_reload_register_graphics_pipeline(*raytracer_shader_reload, RAYTRACER_ENTRY_ID, *graphics_pipeline, {
-        cull = .CW,
-        color_targets = .[
-            .{format = .B8G8R8A8_UNORM}
-        ],
-    });
-
-    graphics_source := cast([]u8) get_transpiled(.METAL, raytracer_vertex_main, raytracer_fragment_main);
-    assert(graphics_source.count > 0, "Transpilation failed for raytracer graphics shaders.");
-
-    graphics_pipeline = gpu_create_graphics_pipeline(graphics_source, .{
-        cull = .CW,
-        color_targets = .[
-            .{format = .B8G8R8A8_UNORM}
-        ],
-    });
-    assert(graphics_pipeline != 0, "Raytracer graphics pipeline creation failed.");
+    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*raytracer_shader_reload, *graphics_pipeline, graphics_source, raster_desc, .METAL, raytracer_vertex_main, raytracer_fragment_main);
+    assert(graphics_ok, "Raytracer graphics pipeline creation failed.");
 
     gpu_arena = gpu_make_arena(64 * 1024, label = "raytracer arena");
     raytracer_params_cpu, raytracer_params_gpu = gpu_arena_alloc(*gpu_arena, Raytracer_Params);
