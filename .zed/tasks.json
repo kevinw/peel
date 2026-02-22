@@ -27,4 +27,8 @@
     "label": "build ALL",
     "command": "cd ~/src/peel && jai build.jai",
   },
+  {
+    "label": "compute_semantics_runner",
+    "command": "~/src/peel/modules/Jai-Shader-Transpiler/headless_ir/test_ir_compute_semantics.sh",
+  },
 ]

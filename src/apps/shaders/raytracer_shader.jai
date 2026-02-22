@@ -10,8 +10,7 @@ Raytracer_Vertex_Out :: struct {
 Raytracer_Params :: struct {
     resolution: Vector2;
     mouse_uv: Vector2;
-    camera_pos_xy: Vector2;
-    camera_pos_z: float;
+    camera_pos: Vector3;
     time: float;
 }
 
@@ -37,8 +36,11 @@ raytracer_fragment_main :: (using in: Raytracer_Vertex_Out, params: *Raytracer_P
     p.x *= aspect;
 
     yaw := (params.mouse_uv.x - 0.5) * 0.9;
-    ro := Vector3.{params.camera_pos_xy.x, params.camera_pos_xy.y, params.camera_pos_z};
-    forward := Vector3.{sin(yaw), -0.18, -cos(yaw)};
+    pitch := (0.0 + params.mouse_uv.y) * 1.1;
+    pitch = clamp(pitch, -1.2, 1.2);
+    cos_pitch := cos(pitch);
+    ro := params.camera_pos;
+    forward := Vector3.{sin(yaw) * cos_pitch, sin(pitch), -cos(yaw) * cos_pitch};
     forward /= max(sqrt(dot(forward, forward)), 0.00001);
     right := cross(forward, Vector3.{0.0, 1.0, 0.0});
     right /= max(sqrt(dot(right, right)), 0.00001);
@@ -47,7 +49,7 @@ raytracer_fragment_main :: (using in: Raytracer_Vertex_Out, params: *Raytracer_P
     rd := forward + right * p.x * 0.85 + up * p.y * 0.85;
     rd /= max(sqrt(dot(rd, rd)), 0.00001);
     // Small camera-relative avatar sphere. Offset mostly behind camera so it appears in reflections.
-    avatar_center := Vector3.{params.camera_pos_xy.x, params.camera_pos_xy.y, params.camera_pos_z} + right * 0.28 + up * 0.16 - forward * 0.22;
+    avatar_center := params.camera_pos + right * 0.28 + up * 0.16 - forward * 0.22;
     avatar_radius := 0.31;
     avatar_color := Vector3.{0.92, 0.96, 1.00};
 

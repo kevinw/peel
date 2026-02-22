@@ -39,3 +39,5 @@ dist/metal4_bindless_probe
 tools/metal4_bindless_native_test
 dist/*.temp.0
 dist/raytracer
+dist/ripple_heightfield
+dist/raytracer.dylib

@@ -43,8 +43,7 @@ on_dll_init :: () {
     raytracer_params_cpu.* = .{
         resolution = .{1280.0, 720.0},
         mouse_uv = .{0.5, 0.5},
-        camera_pos_xy = .{camera_pos.x, camera_pos.y},
-        camera_pos_z = camera_pos.z,
+        camera_pos = camera_pos,
         time = 0.0,
     };
 
@@ -85,8 +84,7 @@ tick :: () {
         move /= sqrt(move_len_sq);
         camera_pos += move * (camera_speed * dt);
     }
-    raytracer_params_cpu.camera_pos_xy = .{camera_pos.x, camera_pos.y};
-    raytracer_params_cpu.camera_pos_z = camera_pos.z;
+    raytracer_params_cpu.camera_pos = camera_pos;
     raytracer_params_cpu.time = cast(float) frame_count * (1.0 / 60.0);
 
     main_queue := gpu_get_queue(.MAIN, 0);

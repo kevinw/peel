@@ -104,9 +104,9 @@ app_update :: (update_ctx: *App_Update_Ctx) {
     #if !RELEASE {
         if window && frame_count % 10 == 0 {
             mem_text := human_readable_bytes(current_memory_usage_bytes(),, temp);
-            title := mem_text;
+            title := tprint("% | %", APP_NAME, mem_text);
             if sgpu_debug_status.count != 0 {
-                title = tprint("% | %", mem_text, sgpu_debug_status);
+                title = tprint("% | % | %", APP_NAME, mem_text, sgpu_debug_status);
             }
             set_window_title(window, title);
         }
