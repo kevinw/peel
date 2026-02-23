@@ -227,7 +227,7 @@ wrapper instead.
 
 #scope_file
 #if OS == .MACOS   %1 :: #library,no_static_library "macos/%2";
-#if OS == .WINDOWS %1 :: #library,no_static_library "win/%2";
+#if OS == .WINDOWS %1 :: #library,no_static_library "windows/%2";
 END, lib_name, interface_module_output));
 
     filename := sprint("%/module.jai", module_dirname);
@@ -242,9 +242,14 @@ END, lib_name, interface_module_output));
         return false;
     }
 
-    if !File.write_entire_file(filename, builder_to_string(*sb)) {
-        compiler_report(tprint("Failed to generate interface module '%'", interface_module_output));
-        return false;
+    make_directory_if_it_does_not_exist(String.path_strip_filename(filename), recursive=true);
+    contents, ok := File.read_entire_file(filename);
+    new_contents := builder_to_string(*sb);
+    if ok && contents != new_contents {
+        if !File.write_entire_file(filename, *sb) {
+            compiler_report(tprint("Error writing file '%'", filename));
+            return false;
+        }
     }
 
     if verbose {
@@ -255,12 +260,6 @@ END, lib_name, interface_module_output));
 }
 
 #scope_file
-#import "Compiler";
-#import "Basic";
-#import "Program_Print";
-String :: #import "String";
-using,only(file_open, file_read) File :: #import "File";
-using,only(file_exists, copy_file) File_Utilities :: #import "File_Utilities";
 pr :: (sb: *String_Builder, str: string, args: ..Any, newline := true) {
     final_str: string;
     if newline final_str = String.join(str, "\n",, temp);
@@ -300,3 +299,10 @@ check_if_file_is_ok_to_overwrite :: (filename: string) -> bool {
 
     return true;
 }
+
+#import "Compiler";
+#import "Basic";
+#import "Program_Print";
+String :: #import "String";
+using,only(file_open, file_read, make_directory_if_it_does_not_exist) File :: #import "File";
+using,only(file_exists, copy_file) File_Utilities :: #import "File_Utilities";
