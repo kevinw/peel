@@ -89,6 +89,8 @@ sgpu_set_debug_status :: (status: string) {
     if status.count != 0 sgpu_debug_status = copy_string(status);
 }
 
+APP_FILENAME :: #run String.path_strip_extension(String.path_filename(APP_NAME));
+
 app_update :: (update_ctx: *App_Update_Ctx) {
     auto_release_temp();
 
@@ -104,9 +106,9 @@ app_update :: (update_ctx: *App_Update_Ctx) {
     #if !RELEASE {
         if window && frame_count % 10 == 0 {
             mem_text := human_readable_bytes(current_memory_usage_bytes(),, temp);
-            title := tprint("% | %", APP_NAME, mem_text);
+            title := tprint("% | %", APP_FILENAME, mem_text);
             if sgpu_debug_status.count != 0 {
-                title = tprint("% | % | %", APP_NAME, mem_text, sgpu_debug_status);
+                title = tprint("% | % | %", APP_FILENAME, mem_text, sgpu_debug_status);
             }
             set_window_title(window, title);
         }
@@ -244,3 +246,4 @@ Input :: #import "Input";
 #scope_file
 #load "readback_stats.jai";
 #import "Window_Creation";
+String :: #import "String";

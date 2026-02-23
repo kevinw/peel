@@ -1,0 +1,12 @@
+[
+  {
+    "label": "debug textured_triangle",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/textured_triangle.jai",
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "~/src/peel/dist/textured_triangle",
+    "adapter": "CodeLLDB",
+  },
+]

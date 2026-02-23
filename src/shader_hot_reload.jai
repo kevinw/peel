@@ -160,14 +160,16 @@ shader_hot_reload_tick :: (reload: *Shader_Hot_Reload, frame_num: s64) -> (did_r
 }
 
 shader_hot_reload_status_line :: (using reload: *Shader_Hot_Reload, max_ids_chars: s64 = 72) -> string {
-    if !enabled return "shader_reload=off";
+    if !enabled return "";
 
+    if last_result == .NONE return "";
     ids := watcher.last_changed_entry_ids_csv;
     ids_short := ids;
     if max_ids_chars > 0 && ids_short.count > max_ids_chars {
         ids_short.count = max_ids_chars;
         ids_short = tprint("%...", ids_short);
     }
+
 
     result_text := tprint("%", last_result);
     if reload.last_event_frame < 0 return tprint("shader_reload=on status=%", result_text);
