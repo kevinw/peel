@@ -12,6 +12,7 @@ graphics_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
 pixel_params_cpu: *Textured_Triangle_Pixel_Params;
+textured_triangle_shader_reload: SHR.Shader_Hot_Reload;
 
 noise_texture: Gpu_Texture;
 noise_texture_view: Gpu_Texture_View;
@@ -39,38 +40,31 @@ noise_fill_rgba8 :: (pixels: *[NOISE_BYTE_COUNT] u8) {
 on_dll_init :: () {
     graphics_source := cast([]u8) get_transpiled(.METAL, textured_triangle_vertex_main, textured_triangle_fragment_main);
     assert(graphics_source.count > 0, "Transpilation failed for textured triangle shaders.");
-
-    graphics_pipeline = gpu_create_graphics_pipeline(graphics_source, .{
+    raster_desc: Gpu_Raster_Desc = .{
         cull = .NONE,
         color_targets = .[
             .{format = .B8G8R8A8_UNORM}
         ],
-    });
-    assert(graphics_pipeline != 0, "Textured triangle graphics pipeline creation failed.");
+    };
+
+    hot_reload_enabled_by_default := true;
+    #if RELEASE hot_reload_enabled_by_default = false;
+    _ = SHR.shader_hot_reload_init_auto(*textured_triangle_shader_reload, "src/apps/textured_triangle.jai", poll_every_frames = 15, log_prefix = "TEXTURED_TRIANGLE_SHADER_RELOAD", enabled_by_default = hot_reload_enabled_by_default);
+    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*textured_triangle_shader_reload, *graphics_pipeline, graphics_source, raster_desc, .METAL, textured_triangle_vertex_main, textured_triangle_fragment_main);
+    assert(graphics_ok, "Textured triangle graphics pipeline creation failed.");
 
     gpu_arena = gpu_make_arena(1024 * 1024, label = "textured triangle arena");
 
-    #if OS == .MACOS {
-        noise_texture = gpu_create_texture(.{
-            dimensions = .[NOISE_W, NOISE_H, 1],
-            format = .B8G8R8A8_UNORM,
-            usage = .SAMPLED | .TRANSFER_DST,
-        });
-    } else {
-        texture_result: Gpu_Result;
-        texture_result, noise_texture = gpu_create_texture(.{
-            dimensions = .[NOISE_W, NOISE_H, 1],
-            format = .B8G8R8A8_UNORM,
-            usage = .SAMPLED | .TRANSFER_DST,
-        });
-        assert(texture_result == .SUCCESS, tprint("Textured triangle texture creation failed: %", texture_result));
-    }
+    texture_result, noise_texture= := gpu_create_texture({
+        dimensions = .[NOISE_W, NOISE_H, 1],
+        format = .B8G8R8A8_UNORM,
+        usage = .SAMPLED | .TRANSFER_DST,
+    });
+    assert(texture_result == .SUCCESS, tprint("Textured triangle texture creation failed: %", texture_result));
     assert(noise_texture != 0, "Textured triangle texture creation returned null handle.");
     noise_texture_view = gpu_texture_view(noise_texture);
     assert(noise_texture_view != 0, "Textured triangle texture-view creation failed.");
-    noise_sampler = gpu_create_sampler(.{
-        compare_op = .NEVER,
-    });
+    noise_sampler = gpu_create_sampler({ compare_op = .NEVER });
     assert(noise_sampler != 0, "Textured triangle sampler creation failed.");
 
     noise_pixels, _ := gpu_arena_alloc(*gpu_arena, [NOISE_BYTE_COUNT] u8);
@@ -119,9 +113,20 @@ tick :: () {
     assert(draw_result == .SUCCESS, tprint("Textured triangle draw failed: %", draw_result));
 
     gpu_submit_and_present(cmd_buff);
+
+    frame_num := cast(s64) frame_count;
+    did_rebuild, swapped_all, rebuild_ok := SHR.shader_hot_reload_tick(*textured_triangle_shader_reload, frame_num);
+    sgpu_set_debug_status(SHR.shader_hot_reload_status_line(*textured_triangle_shader_reload));
+    if did_rebuild && !rebuild_ok {
+        log_error("TEXTURED_TRIANGLE_SHADER_RELOAD build failed; keeping current runtime shaders.");
+    } else if did_rebuild && !swapped_all {
+        log_error("TEXTURED_TRIANGLE_SHADER_RELOAD build succeeded but pipeline swap was partial; keeping remaining old pipelines.");
+    }
 } @on_tick
 
 #scope_file
 #load "../SGPU_App_Common.jai";
 #import "Jai-Shader-Transpiler";
+SHR :: #import,file "../shader_hot_reload.jai";
 #load "shaders/textured_triangle_shader.jai";
+#import "Random";

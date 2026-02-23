@@ -7,7 +7,9 @@ APP_FILES :: string.[
     "boids.jai",
     "reaction_diffusion.jai",
     "raymarch.jai",
+    "raytracer.jai",
     "fluid2d.jai",
+    "ripple_heightfield.jai",
 ];
 
 active_app_filename :: () -> string {

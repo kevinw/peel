@@ -25,10 +25,14 @@ on_host_message :: (message: Host_Message) -> App_Return_Message {
 get_globals :: () -> []Global_Entry {
     push_remapped_context_without_stack_trace();
 
-    G: [..]Global_Entry;
-    #import "Reload_Common";
-    get_all_globals(*G);
-    return G;
+    #if GLOBALS_RELOAD_PLUGIN_INCLUDED {
+        G: [..]Global_Entry;
+        #import "Reload_Common";
+        get_all_globals(*G);
+        return G;
+    } else {
+        return .[];
+    }
 
     // @Leak
 }

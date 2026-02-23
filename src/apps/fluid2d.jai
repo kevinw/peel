@@ -19,8 +19,6 @@ compute_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
 fluid_shader_reload: SHR.Shader_Hot_Reload;
-FLUID_GRAPHICS_ENTRY_ID :: "pair|METAL|fluid_vertex_main|fluid_fragment_main";
-FLUID_COMPUTE_ENTRY_ID  :: "single|METAL|compute|fluid_step_compute";
 
 fluid_state_storage_gpu: Gpu_Ptr;
 fluid_state_storage_cpu: *[FLUID_CELL_COUNT * 2] Vector4;
@@ -57,28 +55,23 @@ on_dll_init :: () {
     assert(compute_source.count > 0, "Compute transpilation failed (fluid_step_compute).");
     graphics_source := cast([]u8) get_transpiled(.METAL, fluid_vertex_main, fluid_fragment_main);
     assert(graphics_source.count > 0, "Graphics transpilation failed (fluid shaders).");
+    raster_desc: Gpu_Raster_Desc = {
+        cull = .CW,
+        color_targets = .[
+            .{format = .B8G8R8A8_UNORM}
+        ],
+    };
 
     compute_pipeline = gpu_create_compute_pipeline(compute_source);
     assert(compute_pipeline != 0, "Fluid2D compute pipeline creation failed.");
 
-    graphics_pipeline = gpu_create_graphics_pipeline(graphics_source, {
-        cull = .CW,
-        color_targets = .[
-            .{format = .B8G8R8A8_UNORM}
-        ],
-    });
-    assert(graphics_pipeline != 0, "Fluid2D graphics pipeline creation failed.");
-
     hot_reload_enabled_by_default := true;
     #if RELEASE hot_reload_enabled_by_default = false;
     _ = SHR.shader_hot_reload_init_auto(*fluid_shader_reload, "src/apps/fluid2d.jai", poll_every_frames = 15, log_prefix = "FLUID2D_SHADER_RELOAD", enabled_by_default = hot_reload_enabled_by_default);
-    SHR.shader_hot_reload_register_graphics_pipeline(*fluid_shader_reload, FLUID_GRAPHICS_ENTRY_ID, *graphics_pipeline, {
-        cull = .CW,
-        color_targets = .[
-            .{format = .B8G8R8A8_UNORM}
-        ],
-    });
-    SHR.shader_hot_reload_register_compute_pipeline(*fluid_shader_reload, FLUID_COMPUTE_ENTRY_ID, *compute_pipeline);
+    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*fluid_shader_reload, *graphics_pipeline, graphics_source, raster_desc, .METAL, fluid_vertex_main, fluid_fragment_main);
+    assert(graphics_ok, "Fluid2D graphics pipeline creation failed.");
+    compute_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*fluid_shader_reload, *compute_pipeline, compute_source, .METAL, fluid_step_compute);
+    assert(compute_ok, "Fluid2D compute pipeline creation failed.");
 
     gpu_arena = gpu_make_arena(1024 * 1024 * 12, label = "fluid2d arena");
 

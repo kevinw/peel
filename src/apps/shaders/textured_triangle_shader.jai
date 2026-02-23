@@ -55,5 +55,8 @@ textured_triangle_fragment_main :: (using in: Textured_Triangle_Fragment_In, par
     if (params[0].debug_mode & 1) != 0 {
         return debug;
     }
+    if false {
+        return Vector4.{uv.x, uv.y, 0, 1};
+    }
     return sample_2d(params[0].texture_index, params[0].sampler_index, uv);
 } @fragment_shader

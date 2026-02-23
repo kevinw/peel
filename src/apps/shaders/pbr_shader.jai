@@ -175,11 +175,11 @@ pbr_fragment_main :: (using in: PBR_Fragment_In, params: *PBR_Params) -> Vector4
     }
 
     uv_tiled: Vector2 = .{uv.x * p.uv_scale, uv.y * p.uv_scale};
-    albedo_srgb := sample_2d(p.albedo_index, p.sampler_index, uv_tiled);
-    normal_tex := sample_2d(p.normal_index, p.sampler_index, uv_tiled);
+    albedo_srgb   := sample_2d(p.albedo_index, p.sampler_index, uv_tiled);
+    normal_tex    := sample_2d(p.normal_index, p.sampler_index, uv_tiled);
     roughness_tex := sample_2d(p.roughness_index, p.sampler_index, uv_tiled);
-    ao_tex := sample_2d(p.ao_index, p.sampler_index, uv_tiled);
-    disp_tex := sample_2d(p.displacement_index, p.sampler_index, uv_tiled);
+    ao_tex        := sample_2d(p.ao_index, p.sampler_index, uv_tiled);
+    disp_tex      := sample_2d(p.displacement_index, p.sampler_index, uv_tiled);
 
     base_n := normalize(world_pos);
     tangent := normalize(cross(Vector3.{0.0, 1.0, 0.0}, base_n));

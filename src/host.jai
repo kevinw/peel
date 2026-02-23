@@ -54,22 +54,17 @@ main :: () {
 
     USAGE_MESSAGE :: #run sprint("usage: % --app app_name", HOST_OUTPUT_EXECUTABLE_NAME);
 
-    screenshot_filename := "";
     library_filename := "";
     max_frames: int = 0;
 
     // parse args
     {
         next_is_app_dll := false;
-        next_is_screenshot_filename := false;
         next_is_max_frames := false;
         for args {
             if next_is_app_dll {
                 library_filename = copy_string(it);
                 next_is_app_dll = false;
-            } else if next_is_screenshot_filename {
-                screenshot_filename = it;
-                next_is_screenshot_filename = false;
             } else if next_is_max_frames {
                 max_frames = String.string_to_int(it);
                 next_is_max_frames = false;
@@ -84,8 +79,6 @@ main :: () {
                         exit(1);
                     }
                     next_is_app_dll = true;
-                case "--screenshot";
-                    next_is_screenshot_filename = true;
                 case "--max-frames";
                     next_is_max_frames = true;
             }
@@ -141,12 +134,6 @@ main :: () {
 
     while true {
         ctx: App_Update_Ctx;
-        if screenshot_filename {
-            ctx.host_flags |= .Take_Sync_Screenshot;
-            ctx.host_data.screenshot_filename = screenshot_filename;
-            screenshot_filename = "";
-        }
-
         app.on_host_message(.{type = .Update, update_ctx = *ctx});
 
         if ctx.app_return_flags & .Quit

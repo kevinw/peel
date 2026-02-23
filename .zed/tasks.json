@@ -4,6 +4,10 @@
     "command": "jai ~/src/peel/build.jai - src/apps/particles.jai -run -dll",
   },
   {
+    "label": "textured_triangle",
+    "command": "jai ~/src/peel/build.jai - src/apps/textured_triangle.jai -run",
+  },
+  {
     "label": "boids",
     "command": "jai ~/src/peel/build.jai - src/apps/boids.jai -run -dll",
   },
@@ -14,5 +18,21 @@
   {
     "label": "textured_triangle_smoke",
     "command": "cd ~/src/peel && ./tools/textured_triangle_probe.sh",
+  },
+  {
+    "label": "raytracer",
+    "command": "jai ~/src/peel/build.jai - src/apps/raytracer.jai -run -dll",
+  },
+  {
+    "label": "build ir_pipe",
+    "command": "cd ~/src/peel/modules/Jai-Shader-Transpiler && jai build_ir_pipe.jai",
+  },
+  {
+    "label": "build ALL",
+    "command": "cd ~/src/peel && jai build.jai",
+  },
+  {
+    "label": "compute_semantics_runner",
+    "command": "~/src/peel/modules/Jai-Shader-Transpiler/headless_ir/test_ir_compute_semantics.sh",
   },
 ]
