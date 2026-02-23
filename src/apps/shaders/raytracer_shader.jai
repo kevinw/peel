@@ -36,7 +36,7 @@ raytracer_fragment_main :: (using in: Raytracer_Vertex_Out, params: *Raytracer_P
     p.x *= aspect;
 
     yaw := (params.mouse_uv.x - 0.5) * 0.9;
-    pitch := (0.0 + params.mouse_uv.y) * 1.1;
+    pitch := (-0.5 + params.mouse_uv.y) * 1.1;
     pitch = clamp(pitch, -1.2, 1.2);
     cos_pitch := cos(pitch);
     ro := params.camera_pos;
