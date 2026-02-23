@@ -1,5 +1,7 @@
 # peel
 
+![Screenshots of apps](screenshots/screenshot_grid.jpg)
+
 Minimal games and graphics prototyping framework built on SGPU.
 
 ## Important submodules:

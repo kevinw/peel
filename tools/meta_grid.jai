@@ -2,14 +2,7 @@
 
 #load "../src/app_list.jai";
 
-#import "Basic";
-Process :: #import "Process";
-String  :: #import "String";
-File    :: #import "File";
-File_Utilities :: #import "File_Utilities";
-#import "stb_image";
-#import "stb_image_resize";
-#import "stb_image_write";
+DELETE_INTERMEDIATE_FILES :: true;
 
 Meta_Grid_Opts :: struct {
     skip_build: bool;      @"?Skip 'jai build.jai -'"
@@ -18,8 +11,8 @@ Meta_Grid_Opts :: struct {
     cell_w: s64 = 640;     @"?Cell width in pixels"
     cell_h: s64 = 360;     @"?Cell height in pixels"
     padding: s64 = 16;     @"?Padding around and between cells"
-    out_dir: string = "dist/meta";                @"?Capture output directory"
-    out_grid: string = "dist/meta/meta_grid.png"; @"?Composited grid image path"
+    out_dir: string = ".build/screenshots";                @"?Capture output directory"
+    out_grid: string = "screenshots/screenshot_grid.jpg"; @"?Composited grid image path"
 }
 
 run_command_checked :: (label: string, args: []string, working_directory := "", fail_on_error := true) -> bool {
@@ -121,7 +114,7 @@ write_placeholder_capture :: (dest_path: string, w: s64, h: s64) {
     }
 
     _ = File.make_directory_if_it_does_not_exist(String.path_strip_filename(dest_path), recursive = true);
-    ok := stbi_write_png(temp_c_string(dest_path), cast(s32) ww, cast(s32) hh, 4, pixels.data, cast(s32) (ww * 4));
+    ok := stbi_write_jpg(temp_c_string(dest_path), cast(s32) ww, cast(s32) hh, 4, pixels.data, cast(s32) (ww * 4));
     if ok == 0 {
         log_error("Failed to write placeholder capture '%'.", dest_path);
         exit(1);
@@ -223,6 +216,7 @@ compose_grid :: (capture_paths: []string, opts: Meta_Grid_Opts) {
             exit(1);
         }
         defer stbi_image_free(pixels);
+        #if DELETE_INTERMEDIATE_FILES File.file_delete(it);
 
         idx := cast(s64) it_index;
         col := idx % cols;
@@ -239,7 +233,8 @@ compose_grid :: (capture_paths: []string, opts: Meta_Grid_Opts) {
         exit(1);
     }
 
-    ok := stbi_write_png(temp_c_string(opts.out_grid), cast(s32) canvas_w, cast(s32) canvas_h, 4, canvas.data, cast(s32) (canvas_w * 4));
+
+    ok := stbi_write_jpg(temp_c_string(opts.out_grid), xx canvas_w, xx canvas_h, 4, canvas.data, quality=75);
     if ok == 0 {
         log_error("Failed to write grid image to '%'.", opts.out_grid);
         exit(1);
@@ -248,7 +243,7 @@ compose_grid :: (capture_paths: []string, opts: Meta_Grid_Opts) {
     log("Wrote meta grid: % (%x%, cells=% columns=%)", opts.out_grid, canvas_w, canvas_h, count, cols);
 }
 
-#run,stallable {
+capture_and_save_grid :: () {
     tool_dir := String.path_strip_filename(#filepath);
     repo_root := String.path_join(tool_dir, "..");
     set_working_directory(repo_root);
@@ -260,7 +255,10 @@ compose_grid :: (capture_paths: []string, opts: Meta_Grid_Opts) {
         exit(1);
     }
 
+    log("Capturing frames from % apps for a grid image...", APP_FILES.count);
+
     if !opts.skip_build {
+        log("Building all apps...");
         _ = run_command_checked("Build all apps", .["jai", "build.jai", "-"]);
     }
 
@@ -276,6 +274,7 @@ compose_grid :: (capture_paths: []string, opts: Meta_Grid_Opts) {
             delete_old_snapshots_for_app(app_name);
             snapshot_w := max(256, opts.cell_w * 2);
             snapshot_h := max(256, opts.cell_h * 2);
+            log("  capturing '%'...", exe_name);
             capture_ok := run_capture_for_app(exe_name, snapshot_w, snapshot_h);
 
             newest := find_latest_snapshot_for_app(app_name);
@@ -307,3 +306,19 @@ compose_grid :: (capture_paths: []string, opts: Meta_Grid_Opts) {
         exit(1);
     }
 }
+
+#run,stallable {
+    set_build_options_dc(.{ do_output = false });
+    capture_and_save_grid();
+}
+
+#scope_file
+#import "Basic";
+#import "Compiler";
+Process :: #import "Process";
+String  :: #import "String";
+File    :: #import "File";
+File_Utilities :: #import "File_Utilities";
+#import "stb_image";
+#import "stb_image_resize";
+#import "stb_image_write";
