@@ -269,9 +269,9 @@ pr :: (sb: *String_Builder, str: string, args: ..Any, newline := true) {
 };
 
 scoped_program_print_procedure_bodies :: (enabled: bool) #expand {
-    old_print_procedure_bodies := context.print_procedure_bodies;
-    context.print_procedure_bodies = enabled;
-    `defer context.print_procedure_bodies = old_print_procedure_bodies;
+    old_print_procedure_bodies := print_procedure_bodies;
+    print_procedure_bodies = enabled;
+    `defer print_procedure_bodies = old_print_procedure_bodies;
 }
 
 check_if_file_is_ok_to_overwrite :: (filename: string) -> bool {
