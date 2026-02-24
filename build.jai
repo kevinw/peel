@@ -1,17 +1,17 @@
 // Builds and optionally runs a peel "app".
 
 Build_Script_Opts :: struct {
-    run                     : bool;         @"?Run after building"
-    run_args                : string;       @"?Args to pass to app run after building (in quotes)"
-    dll                     : bool;         @"?Build app code as a split binary live reload DLL"
-    shader_only             : bool;         @"?Typecheck + transpile shaders only (no binary output)"
-    shader_entry_ids        : string;       @"?Comma-separated manifest entry ids to transpile (use with -shader_only)"
-    release                 : bool;         @"?Build in release mode with optimizations"
-    codex                   : bool;         @"?Add the Codex metaprogram plugin"
-    iprof                   : bool;         @"?Add the IProf metaprogram plugin"
-    verbose                 : bool;         @"?Print verbose output for the build process"
-    perf                    : bool;         @"?Show a compiler performance report"
-    timings                 : bool;         @"?Show extra timings"
+    run                     : bool;   @"?Run after building"
+    run_args                : string; @"?Args to pass to app run after building (in quotes)"
+    dll                     : bool;   @"?Build app code as a split binary live reload DLL"
+    shader_only             : bool;   @"?Typecheck + transpile shaders only (no binary output)"
+    shader_entry_ids        : string; @"?Comma-separated manifest entry ids to transpile (use with -shader_only)"
+    release                 : bool;   @"?Build in release mode with optimizations"
+    codex                   : bool;   @"?Add the Codex metaprogram plugin"
+    iprof                   : bool;   @"?Add the IProf metaprogram plugin"
+    verbose                 : bool;   @"?Print verbose output for the build process"
+    perf                    : bool;   @"?Show a compiler performance report"
+    timings                 : bool;   @"?Show extra timings"
 
     // used internally (todo: move elsewhere)
     sub_build               : bool;

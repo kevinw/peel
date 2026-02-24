@@ -24,11 +24,12 @@ ui_get_sync_semaphore :: () -> Gpu_Semaphore {
     return ui_sync_semaphore;
 }
 
+// Per frame UI info to be passed from ui_render_pre to ui_render
 UI_Render_Frame_Info :: struct {
 
-#if OS == .MACOS {
-    pass: *MTLRenderPassDescriptor;
-}
+    #if OS == .MACOS {
+        pass: *MTLRenderPassDescriptor;
+    }
 
 }
 
@@ -96,9 +97,8 @@ ui_render :: (wait_value: u64, signal_value: u64, ui_render_frame_info: UI_Rende
     release(ui_render_frame_info.pass);
 }
 }
-dummy_on_ui :: () {
 
-} @on_ui
+dummy_on_ui :: () { } @on_ui
 
 #scope_file
 using ImGui :: #import "ImGui";

@@ -278,12 +278,14 @@ check_if_file_is_ok_to_overwrite :: (filename: string) -> bool {
         return true;
     }
 
+
     file, ok := file_open(filename);
     assert(ok);
 
     // Make sure the file begins with our expected "// Auto-generated" comment.
     buf: [GENERATED_MODULE_START_TAG.count + 1]u8;
     success, total_read := file_read(file, buf.data, GENERATED_MODULE_START_TAG.count);
+    assert(success);
     if total_read != GENERATED_MODULE_START_TAG.count {
         compiler_report(tprint("Refusing to overwrite file named '%'. We could not read enough bytes to check if it was auto-generated.",
             filename));

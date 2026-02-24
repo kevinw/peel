@@ -89,7 +89,7 @@ on_dll_init :: () {
 } @on_dll_init
 
 tick :: () {
-    result, swapchain_image := gpu_swapchain_acquire();
+    result, swapchain_image := app_swapchain_acquire();
     assert(result == .SUCCESS);
     if !swapchain_image return;
 
