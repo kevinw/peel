@@ -43,7 +43,7 @@
       allowLocationSimulation = "YES">
       <PathRunnable
          runnableDebuggingMode = "0"
-         FilePath = "/Users/kev/src/peel/dist/peel">
+         FilePath = "/Users/kev/src/peel/dist/boids">
       </PathRunnable>
    </LaunchAction>
    <ProfileAction

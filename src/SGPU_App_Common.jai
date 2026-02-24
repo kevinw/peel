@@ -16,6 +16,7 @@ frame_count: int;
 last_window_size: V2(u32);
 window: *void; // TODO
 sgpu_debug_status: string;
+ui_timeline_value: u64 = 0;
 
 #import "sgpu"()(SLANG_COMPILER=false);
 
@@ -90,6 +91,22 @@ sgpu_set_debug_status :: (status: string) {
 }
 
 APP_FILENAME :: #run String.path_strip_extension(String.path_filename(APP_NAME));
+
+submit_and_present_with_ui :: (cmd_buff: Gpu_Command_Buffer) {
+    //
+    // interleave metal and metal4 here. todo: we can go back to a more normal
+    // "flow" once we make a Metal4 imgui backend.
+    //
+    boids_done_value := ui_timeline_value + 1;
+    ui_done_value := ui_timeline_value + 2;
+    ui_semaphore := ui_get_sync_semaphore();
+    assert(ui_semaphore != 0, "UI sync semaphore not initialized.");
+
+    gpu_submit_swapchain_no_present(cmd_buff, signals=.[.{ui_semaphore, boids_done_value}]);
+    ui_render(boids_done_value, ui_done_value);
+    gpu_present_current_swapchain(waits=.[.{ui_semaphore, ui_done_value}]);
+    ui_timeline_value = ui_done_value;
+}
 
 app_update :: (update_ctx: *App_Update_Ctx) {
     auto_release_temp();

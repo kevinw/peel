@@ -30,7 +30,6 @@ boids_control_ring_cpu: *[SGPU_FRAMES_IN_FLIGHT] Boids_Control;
 boids_control_ring_gpu: Gpu_Ptr;
 
 boids_shader_reload: SHR.Shader_Hot_Reload;
-ui_timeline_value: u64 = 0;
 
 app_vec2_length :: (v: Vector2) -> float { // TODO
     return sqrt(v.x * v.x + v.y * v.y);
@@ -194,15 +193,7 @@ tick :: () {
     using draw_data;
     gpu_draw_indexed_instanced(cmd_buff, vertex_params_gpu, pixel_gpu, index_gpu, num_vertices, num_instances);
 
-    boids_done_value := ui_timeline_value + 1;
-    ui_done_value := ui_timeline_value + 2;
-    ui_semaphore := ui_get_sync_semaphore();
-    assert(ui_semaphore != 0, "UI sync semaphore not initialized.");
-
-    gpu_submit_swapchain_no_present(cmd_buff, signals=.[.{ui_semaphore, boids_done_value}]);
-    ui_render(boids_done_value, ui_done_value);
-    gpu_present_current_swapchain(waits=.[.{ui_semaphore, ui_done_value}]);
-    ui_timeline_value = ui_done_value;
+    submit_and_present_with_ui(cmd_buff);
 
     did_rebuild, swapped_all, rebuild_ok := SHR.shader_hot_reload_tick(*boids_shader_reload, cast(s64)frame_count);
     sgpu_set_debug_status(SHR.shader_hot_reload_status_line(*boids_shader_reload));

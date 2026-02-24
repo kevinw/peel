@@ -2,7 +2,10 @@
 
 # Path setup
 
+# TODO: replace this script with a function in generate.jai! this version should
+# be kept in sync with generate.jai's IMGUI_PATH
 VERSION=1.92.6
+
 ZIP_URL=https://github.com/ocornut/imgui/archive/refs/tags/v$VERSION.zip
 SCRIPTDIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
@@ -16,7 +19,7 @@ if [ ! -d "src/imgui-$VERSION" ]; then
     rm $ZIPFILE
     popd
 else
-    echo "ImGui source found, using it."
+    echo "ImGui source found, using it: src/imgui-$VERSION"
 fi
 
 # Compile it and move the output to the macos directory

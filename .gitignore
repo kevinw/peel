@@ -41,3 +41,5 @@ dist/*.temp.0
 dist/raytracer
 dist/ripple_heightfield
 dist/raytracer.dylib
+modules/ImGui/example
+imgui.ini
