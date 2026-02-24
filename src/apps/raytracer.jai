@@ -100,7 +100,7 @@ tick :: () {
     draw_result := gpu_draw_instanced(cmd_buff, 0, raytracer_params_gpu, 3, 1);
     assert(draw_result == .SUCCESS, tprint("Raytracer draw failed: %", draw_result));
 
-    gpu_submit_and_present(cmd_buff);
+    submit_and_present_with_ui(cmd_buff);
 
     frame_num := cast(s64) frame_count;
     did_rebuild, swapped_all, rebuild_ok := SHR.shader_hot_reload_tick(*raytracer_shader_reload, frame_num);

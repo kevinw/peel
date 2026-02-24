@@ -18,6 +18,7 @@ window: *void; // TODO
 sgpu_debug_status: string;
 ui_timeline_value: u64 = 0;
 
+
 #import "sgpu"()(SLANG_COMPILER=false);
 
 SGPU_FRAMES_IN_FLIGHT :: 3;
@@ -97,13 +98,13 @@ submit_and_present_with_ui :: (cmd_buff: Gpu_Command_Buffer) {
     // interleave metal and metal4 here. todo: we can go back to a more normal
     // "flow" once we make a Metal4 imgui backend.
     //
-    boids_done_value := ui_timeline_value + 1;
+    app_done_value := ui_timeline_value + 1;
     ui_done_value := ui_timeline_value + 2;
     ui_semaphore := ui_get_sync_semaphore();
     assert(ui_semaphore != 0, "UI sync semaphore not initialized.");
 
-    gpu_submit_swapchain_no_present(cmd_buff, signals=.[.{ui_semaphore, boids_done_value}]);
-    ui_render(boids_done_value, ui_done_value);
+    gpu_submit_swapchain_no_present(cmd_buff, signals=.[.{ui_semaphore, app_done_value}]);
+    ui_render(app_done_value, ui_done_value);
     gpu_present_current_swapchain(waits=.[.{ui_semaphore, ui_done_value}]);
     ui_timeline_value = ui_done_value;
 }
@@ -119,16 +120,21 @@ app_update :: (update_ctx: *App_Update_Ctx) {
     time = seconds_since_init();
     dt = cast(float)(time - last_time);
     last_time = time;
+    perf_push_cpu_frame_ms(dt * 1000.0);
 
-    #if !RELEASE {
-        if window && frame_count % 10 == 0 {
+    if window && frame_count % PERF_TITLE_UPDATE_EVERY_FRAMES == 0 {
+        perf_text := perf_title_text();
+        title := tprint("% | %", APP_FILENAME, perf_text);
+
+        #if !RELEASE {
             mem_text := human_readable_bytes(current_memory_usage_bytes(),, temp);
-            title := tprint("% | %", APP_FILENAME, mem_text);
+            title = tprint("% | % | %", APP_FILENAME, perf_text, mem_text);
             if sgpu_debug_status.count != 0 {
-                title = tprint("% | % | %", APP_FILENAME, mem_text, sgpu_debug_status);
+                title = tprint("% | % | % | %", APP_FILENAME, perf_text, mem_text, sgpu_debug_status);
             }
-            set_window_title(window, title);
         }
+
+        set_window_title(window, title);
     }
 
     frame_count += 1;
@@ -261,6 +267,7 @@ Input :: #import "Input";
 
 #load "App_Common.jai";
 #load "ui.jai";
+#load "measure_fps.jai";
 #scope_file
 #load "readback_stats.jai";
 #import "Window_Creation";

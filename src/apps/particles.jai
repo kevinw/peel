@@ -124,8 +124,7 @@ tick :: () {
     draw_result := gpu_draw_instanced_direct(render_cmd, vertex_params_gpu, num_vertices, num_instances);
     assert(draw_result == .SUCCESS);
 
-    gpu_submit_and_present(render_cmd);
-    gpu_wait_idle(); // TODO: remove this
+    submit_and_present_with_ui(render_cmd);
 } @on_tick
 
 #scope_file
