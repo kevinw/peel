@@ -5,10 +5,6 @@ SGPU_FRAMES_IN_FLIGHT :: 3;
 // APP_STEM is like boids
 APP_STEM :: #run String.path_strip_extension(String.path_filename(APP_NAME));
 
-#if READBACK_ENABLED {
-    readback_stats: Readback_Stats;
-}
-
 app_needs_recompile: string;
 app_quit_requested := false;
 did_init := false;
@@ -24,6 +20,9 @@ sgpu_debug_status: string;
 ui_timeline_value: u64 = 0;
 shader_reload_ctx: SHR.Shader_Hot_Reload;
 max_frames: int = 0;
+#if READBACK_ENABLED {
+    readback_stats: Readback_Stats;
+}
 
 #import "sgpu"()(SLANG_COMPILER=false);
 
@@ -238,12 +237,14 @@ host_init :: (init_ctx: Init_Ctx) -> bool {
 
     create_window_and_init_sgpu();
 
-    #if READBACK_ENABLED frame_debug_init(*readback_stats);
+    #if READBACK_ENABLED {
+        frame_debug_init(*readback_stats);
+    }
 
-    _ = SHR.shader_hot_reload_init_auto(*shader_reload_ctx,
-        APP_NAME,
+    SHR.shader_hot_reload_init_auto(*shader_reload_ctx,
+        app_source_file = APP_NAME,
         poll_every_frames = 15,
-        log_prefix = "BOIDS_SHADER_RELOAD",
+        log_prefix = "SHADER_RELOAD",
         enabled_by_default = !RELEASE);
 
     call_event_functions(.dll_init);
