@@ -16,6 +16,10 @@
     "command": "jai ~/src/peel/build.jai - src/apps/raymarch.jai -run -dll",
   },
   {
+    "label": "ripple_heightfield",
+    "command": "jai ~/src/peel/build.jai - src/apps/ripple_heightfield.jai -run -dll",
+  },
+  {
     "label": "textured_triangle_smoke",
     "command": "cd ~/src/peel && ./tools/textured_triangle_probe.sh",
   },

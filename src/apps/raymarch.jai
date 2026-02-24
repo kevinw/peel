@@ -10,7 +10,6 @@ graphics_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 raymarch_params_cpu: *Raymarch_Params;
 raymarch_params_gpu: Gpu_Ptr;
-raymarch_shader_reload: SHR.Shader_Hot_Reload;
 
 on_dll_init :: () {
     graphics_source := cast([]u8) get_transpiled(.METAL, raymarch_vertex_main, raymarch_fragment_main);
@@ -22,10 +21,7 @@ on_dll_init :: () {
         ],
     };
 
-    hot_reload_enabled_by_default := true;
-    #if RELEASE hot_reload_enabled_by_default = false;
-    _ = SHR.shader_hot_reload_init_auto(*raymarch_shader_reload, "src/apps/raymarch.jai", poll_every_frames = 15, log_prefix = "RAYMARCH_SHADER_RELOAD", enabled_by_default = hot_reload_enabled_by_default);
-    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*raymarch_shader_reload, *graphics_pipeline, graphics_source, raster_desc, .METAL, raymarch_vertex_main, raymarch_fragment_main);
+    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, raymarch_vertex_main, raymarch_fragment_main);
     assert(graphics_ok, "Raymarch graphics pipeline creation failed.");
 
     gpu_arena = gpu_make_arena(64 * 1024, label = "raymarch arena");
@@ -82,15 +78,6 @@ tick :: () {
     assert(draw_result == .SUCCESS, tprint("Raymarch draw failed: %", draw_result));
 
     gpu_submit_and_present(cmd_buff);
-
-    frame_num := cast(s64) frame_count;
-    did_rebuild, swapped_all, rebuild_ok := SHR.shader_hot_reload_tick(*raymarch_shader_reload, frame_num);
-    sgpu_set_debug_status(SHR.shader_hot_reload_status_line(*raymarch_shader_reload));
-    if did_rebuild && !rebuild_ok {
-        log_error("RAYMARCH_SHADER_RELOAD build failed; keeping current runtime shaders.");
-    } else if did_rebuild && !swapped_all {
-        log_error("RAYMARCH_SHADER_RELOAD build succeeded but pipeline swap was partial; keeping remaining old pipelines.");
-    }
 } @on_tick
 
 #scope_file

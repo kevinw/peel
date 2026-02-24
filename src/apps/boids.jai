@@ -1,11 +1,6 @@
 WRITE_SHADER_OUTPUT :: true;
 NUM_INSTANCES :: BOIDS_COUNT;
 
-#load "../SGPU_App_Common.jai";
-#import "Jai-Shader-Transpiler";
-SHR :: #import,file "../shader_hot_reload.jai";
-#load "shaders/boids_shader.jai";
-
 Draw_Data :: struct {
     vertex_params_gpu: Gpu_Ptr;
     pixel_gpu:         Gpu_Ptr;
@@ -29,18 +24,6 @@ vertex_params_b_gpu: Gpu_Ptr;
 boids_control_ring_cpu: *[SGPU_FRAMES_IN_FLIGHT] Boids_Control;
 boids_control_ring_gpu: Gpu_Ptr;
 
-boids_shader_reload: SHR.Shader_Hot_Reload;
-
-app_vec2_length :: (v: Vector2) -> float { // TODO
-    return sqrt(v.x * v.x + v.y * v.y);
-}
-
-app_vec2_normalize_or_zero :: (v: Vector2) -> Vector2 { // TODO
-    len := app_vec2_length(v);
-    if len < 0.000001 return .{0, 0};
-    inv := 1.0 / len;
-    return .{v.x * inv, v.y * inv};
-}
 
 on_dll_init :: () {
     graphics_source := cast([]u8) get_transpiled(.METAL, boids_vertex_main, boids_frag_main); assert(graphics_source.count > 0);
@@ -56,12 +39,10 @@ on_dll_init :: () {
     compute_pipeline = gpu_create_compute_pipeline(compute_source);
     assert(compute_pipeline != 0, "Compute pipeline creation failed.");
 
-    hot_reload_enabled_by_default := true;
-    #if RELEASE hot_reload_enabled_by_default = false;
-    _ = SHR.shader_hot_reload_init_auto(*boids_shader_reload, "src/apps/boids.jai", poll_every_frames = 15, log_prefix = "BOIDS_SHADER_RELOAD", enabled_by_default = hot_reload_enabled_by_default);
-    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*boids_shader_reload, *graphics_pipeline, graphics_source, raster_desc, .METAL, boids_vertex_main, boids_frag_main);
+    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, boids_vertex_main, boids_frag_main);
     assert(graphics_ok, "Pipeline creation failed.");
-    compute_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*boids_shader_reload, *compute_pipeline, compute_source, .METAL, boids_step_compute);
+
+    compute_ok  := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_pipeline, compute_source, .METAL, boids_step_compute);
     assert(compute_ok, "Compute pipeline creation failed.");
 
     gpu_arena = gpu_make_arena(1024 * 1024, label = "boids arena");
@@ -94,7 +75,7 @@ on_dll_init :: () {
     for 0..NUM_INSTANCES-1 {
         pos := Vector2.{random_get_within_range(-0.62, 0.62), random_get_within_range(-0.62, 0.62)};
         dir := Vector2.{random_get_within_range(-1.0, 1.0), random_get_within_range(-1.0, 1.0)};
-        dir = app_vec2_normalize_or_zero(dir);
+        normalize(*dir);
         speed := random_get_within_range(BOIDS_MIN_SPEED, BOIDS_MAX_SPEED);
         vel := Vector2.{dir.x * speed, dir.y * speed};
         palette_idx := cast(s64) floor(random_get_within_range(0.0, cast(float) palette.count));
@@ -195,16 +176,12 @@ tick :: () {
 
     submit_and_present_with_ui(cmd_buff);
 
-    did_rebuild, swapped_all, rebuild_ok := SHR.shader_hot_reload_tick(*boids_shader_reload, cast(s64)frame_count);
-    sgpu_set_debug_status(SHR.shader_hot_reload_status_line(*boids_shader_reload));
-    if did_rebuild && !rebuild_ok {
-        log_error("BOIDS_SHADER_RELOAD build failed; keeping current runtime shaders.");
-    } else if did_rebuild && !swapped_all {
-        log_error("BOIDS_SHADER_RELOAD build succeeded but pipeline swap was partial.");
-    }
 } @on_tick
 
 #scope_file
+#load "../SGPU_App_Common.jai";
+#import "Jai-Shader-Transpiler";
+#load "shaders/boids_shader.jai";
 #import "Window_Creation";
-#import "Math";
 #import "Random";
+SHR :: #import,file "../shader_hot_reload.jai";

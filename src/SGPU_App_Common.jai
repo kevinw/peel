@@ -1,4 +1,9 @@
 READBACK_ENABLED :: !RELEASE;
+SGPU_FRAMES_IN_FLIGHT :: 3;
+
+// APP_NAME is like src/apps/boids.jai
+// APP_STEM is like boids
+APP_STEM :: #run String.path_strip_extension(String.path_filename(APP_NAME));
 
 #if READBACK_ENABLED {
     readback_stats: Readback_Stats;
@@ -17,11 +22,10 @@ last_window_size: V2(u32);
 window: *void; // TODO
 sgpu_debug_status: string;
 ui_timeline_value: u64 = 0;
-
+shader_reload_ctx: SHR.Shader_Hot_Reload;
+max_frames: int = 0;
 
 #import "sgpu"()(SLANG_COMPILER=false);
-
-SGPU_FRAMES_IN_FLIGHT :: 3;
 
 AB_Buffer :: struct($T: Type) {
     a_cpu: *T;
@@ -91,7 +95,6 @@ sgpu_set_debug_status :: (status: string) {
     if status.count != 0 sgpu_debug_status = copy_string(status);
 }
 
-APP_FILENAME :: #run String.path_strip_extension(String.path_filename(APP_NAME));
 
 submit_and_present_with_ui :: (cmd_buff: Gpu_Command_Buffer) {
     //
@@ -99,8 +102,8 @@ submit_and_present_with_ui :: (cmd_buff: Gpu_Command_Buffer) {
     // "flow" once we make a Metal4 imgui backend.
     //
     app_done_value := ui_timeline_value + 1;
-    ui_done_value := ui_timeline_value + 2;
-    ui_semaphore := ui_get_sync_semaphore();
+    ui_done_value  := ui_timeline_value + 2;
+    ui_semaphore   := ui_get_sync_semaphore();
     assert(ui_semaphore != 0, "UI sync semaphore not initialized.");
 
     gpu_submit_swapchain_no_present(cmd_buff, signals=.[.{ui_semaphore, app_done_value}]);
@@ -124,13 +127,13 @@ app_update :: (update_ctx: *App_Update_Ctx) {
 
     if window && frame_count % PERF_TITLE_UPDATE_EVERY_FRAMES == 0 {
         perf_text := perf_title_text();
-        title := tprint("% | %", APP_FILENAME, perf_text);
+        title := tprint("% | %", APP_STEM, perf_text);
 
         #if !RELEASE {
             mem_text := human_readable_bytes(current_memory_usage_bytes(),, temp);
-            title = tprint("% | % | %", APP_FILENAME, perf_text, mem_text);
+            title = tprint("% | % | %", APP_STEM, perf_text, mem_text);
             if sgpu_debug_status.count != 0 {
-                title = tprint("% | % | % | %", APP_FILENAME, perf_text, mem_text, sgpu_debug_status);
+                title = tprint("% | % | % | %", APP_STEM, perf_text, mem_text, sgpu_debug_status);
             }
         }
 
@@ -145,6 +148,7 @@ app_update :: (update_ctx: *App_Update_Ctx) {
             gpu_swapchain_resize();
         }
     }
+
     for Input.events_this_frame {
         if it.type == {
             case .QUIT;
@@ -155,6 +159,7 @@ app_update :: (update_ctx: *App_Update_Ctx) {
                 }
         }
     }
+
     if app_quit_requested {
         update_ctx.app_return_flags |= .Quit;
         return;
@@ -162,6 +167,18 @@ app_update :: (update_ctx: *App_Update_Ctx) {
 
     {
         call_event_functions(.tick);
+
+        // tick shader reload
+        {
+            did_rebuild, swapped_all, rebuild_ok := SHR.shader_hot_reload_tick(*shader_reload_ctx, cast(s64)frame_count);
+            sgpu_set_debug_status(SHR.shader_hot_reload_status_line(*shader_reload_ctx));
+            if did_rebuild && !rebuild_ok {
+                log_error("SHADER_RELOAD build failed; keeping current runtime shaders.");
+            } else if did_rebuild && !swapped_all {
+                log_error("SHADER_RELOAD build succeeded but pipeline swap was partial.");
+            }
+        }
+
         #if READBACK_ENABLED {
             swapchain_image := gpu_current_swapchain_view();
             if swapchain_image == 0 {
@@ -197,8 +214,6 @@ host_quit :: (quit_ctx: Quit_Ctx) {
     }
 }
 
-max_frames: int = 0;
-
 host_init :: (init_ctx: Init_Ctx) -> bool {
     #if !RELEASE && OS == .MACOS {
         using,only(setenv) POSIX :: #import "POSIX";
@@ -224,6 +239,13 @@ host_init :: (init_ctx: Init_Ctx) -> bool {
     create_window_and_init_sgpu();
 
     #if READBACK_ENABLED frame_debug_init(*readback_stats);
+
+    _ = SHR.shader_hot_reload_init_auto(*shader_reload_ctx,
+        APP_NAME,
+        poll_every_frames = 15,
+        log_prefix = "BOIDS_SHADER_RELOAD",
+        enabled_by_default = !RELEASE);
+
     call_event_functions(.dll_init);
 
     return true;
@@ -232,6 +254,7 @@ host_init :: (init_ctx: Init_Ctx) -> bool {
 dummy_on_resize :: () {  } @on_window_resize
 
 #scope_file
+
 #if OS == .WINDOWS  #import "Windows_Utils";
 else #if OS == .MACOS #import "MacOS_Tools";
 #import "General_Utils";
@@ -272,3 +295,4 @@ Input :: #import "Input";
 #load "readback_stats.jai";
 #import "Window_Creation";
 String :: #import "String";
+SHR :: #import,file "shader_hot_reload.jai";

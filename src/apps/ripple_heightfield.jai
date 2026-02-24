@@ -18,7 +18,6 @@ graphics_pipeline: Gpu_Pipeline;
 compute_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
-ripple_shader_reload: SHR.Shader_Hot_Reload;
 
 ripple_state_storage_gpu: Gpu_Ptr;
 ripple_state_storage_cpu: *[RIPPLE_CELL_COUNT * 2] Vector2;
@@ -41,12 +40,9 @@ on_dll_init :: () {
     compute_pipeline = gpu_create_compute_pipeline(compute_source);
     assert(compute_pipeline != 0, "Ripple compute pipeline creation failed.");
 
-    hot_reload_enabled_by_default := true;
-    #if RELEASE hot_reload_enabled_by_default = false;
-    _ = SHR.shader_hot_reload_init_auto(*ripple_shader_reload, "src/apps/ripple_heightfield.jai", poll_every_frames = 15, log_prefix = "RIPPLE_SHADER_RELOAD", enabled_by_default = hot_reload_enabled_by_default);
-    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*ripple_shader_reload, *graphics_pipeline, graphics_source, raster_desc, .METAL, ripple_vertex_main, ripple_fragment_main);
+    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, ripple_vertex_main, ripple_fragment_main);
     assert(graphics_ok, "Ripple graphics pipeline creation failed.");
-    compute_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*ripple_shader_reload, *compute_pipeline, compute_source, .METAL, ripple_step_compute);
+    compute_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_pipeline, compute_source, .METAL, ripple_step_compute);
     assert(compute_ok, "Ripple compute pipeline creation failed.");
 
     gpu_arena = gpu_make_arena(1024 * 1024 * 8, label = "ripple arena");
@@ -149,16 +145,7 @@ tick :: () {
     draw_result := gpu_draw_instanced_direct(cmd_buff, vertex_params_gpu, num_vertices, num_instances);
     assert(draw_result == .SUCCESS, tprint("Ripple draw failed: %", draw_result));
 
-    gpu_submit_and_present(cmd_buff);
-
-    frame_num := cast(s64) frame_count;
-    did_rebuild, swapped_all, rebuild_ok := SHR.shader_hot_reload_tick(*ripple_shader_reload, frame_num);
-    sgpu_set_debug_status(SHR.shader_hot_reload_status_line(*ripple_shader_reload));
-    if did_rebuild && !rebuild_ok {
-        log_error("RIPPLE_SHADER_RELOAD build failed; keeping current runtime shaders.");
-    } else if did_rebuild && !swapped_all {
-        log_error("RIPPLE_SHADER_RELOAD build succeeded but pipeline swap was partial.");
-    }
+    submit_and_present_with_ui(cmd_buff);
 } @on_tick
 
 #scope_file
