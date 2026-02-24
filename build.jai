@@ -260,7 +260,7 @@ get_dynamic_library_paths :: () -> []string /* temp allocated */ {
     local_module_dll_paths :: string.[
         //"ImGui",
         //"SDL3/lib",
-        //"assimp/lib",
+        "assimp/lib",
         //"JoltC/lib",
         //"SDL_gpu_ext/lib",
         //"ImGuizmo/lib",
