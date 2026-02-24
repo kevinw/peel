@@ -243,6 +243,7 @@ Input :: #import "Input";
 }
 
 #load "App_Common.jai";
+#load "ui.jai";
 #scope_file
 #load "readback_stats.jai";
 #import "Window_Creation";
