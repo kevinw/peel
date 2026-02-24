@@ -41,3 +41,7 @@ perf_title_text :: () -> string {
         return tprint("fps=% cpu=%ms", f(avg_fps), f(avg_cpu_ms));
     }
 }
+
+perf_set_latest_gpu_frame_ms :: (gpu_ms: float) {
+    perf_last_gpu_frame_ms = gpu_ms;
+}

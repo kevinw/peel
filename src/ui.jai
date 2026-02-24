@@ -24,12 +24,23 @@ ui_get_sync_semaphore :: () -> Gpu_Semaphore {
     return ui_sync_semaphore;
 }
 
-ui_render :: (wait_value: u64, signal_value: u64) {
+UI_Render_Frame_Info :: struct {
+
+#if OS == .MACOS {
+    pass: *MTLRenderPassDescriptor;
+}
+
+}
+
+current_ui_render_frame: UI_Render_Frame_Info;
+
+ui_render_pre :: () -> UI_Render_Frame_Info {
+    frame_info: UI_Render_Frame_Info;
+#if OS == .MACOS {
     ns_window := cast(*NSWindow)window;
     view := NSWindow.contentView(ns_window);
     ImGui.ImplOSX_NewFrame(view);
     pass := objc_new(MTLRenderPassDescriptor);
-    defer release(pass);
     color_attachments := pass.colorAttachments(pass);
     {
         drawable_texture := gpu_get_native_texture(gpu_current_swapchain_view());
@@ -40,7 +51,6 @@ ui_render :: (wait_value: u64, signal_value: u64) {
         setStoreAction(color_attachment, .Store);
     }
 
-    ImGui.ImplMetal_NewFrame(pass);
     // Keep boids color output intact and overlay UI in a second pass.
     {
         color_attachments := pass.colorAttachments(pass);
@@ -48,18 +58,30 @@ ui_render :: (wait_value: u64, signal_value: u64) {
         setLoadAction (color_attachment, .Load);
         setStoreAction(color_attachment, .Store);
     }
+    ImGui.ImplMetal_NewFrame(pass);
+    frame_info.pass = pass;
+} else {
+    log("TODO: ui render setup for this platform");
+}
     NewFrame();
+    return frame_info;
+}
+
+ui_render :: (wait_value: u64, signal_value: u64, ui_render_frame_info: UI_Render_Frame_Info) {
     ShowDemoWindow(null);
+    call_event_functions(.ui);
     Render();
 
     // encode gpu commands
     command_buffer := ui_command_queue.commandBuffer(ui_command_queue);
     assert(command_buffer != null);
+
+#if OS == .MACOS {
     sync_event := gpu_get_native_shared_event(ui_sync_semaphore);
     assert(sync_event != null);
     command_buffer.encodeWaitForEvent(command_buffer, sync_event, wait_value);
 
-    render_encoder := command_buffer.renderCommandEncoderWithDescriptor(command_buffer, pass);
+    render_encoder := command_buffer.renderCommandEncoderWithDescriptor(command_buffer, ui_render_frame_info.pass);
     {
         render_encoder.pushDebugGroup(render_encoder, to_temp_nsstring("ImGui render"));
         defer render_encoder.popDebugGroup(render_encoder);
@@ -70,7 +92,13 @@ ui_render :: (wait_value: u64, signal_value: u64) {
 
     command_buffer.encodeSignalEvent(command_buffer, sync_event, signal_value);
     command_buffer.commit(command_buffer);
+
+    release(ui_render_frame_info.pass);
 }
+}
+dummy_on_ui :: () {
+
+} @on_ui
 
 #scope_file
 using ImGui :: #import "ImGui";

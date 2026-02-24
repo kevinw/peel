@@ -94,7 +94,6 @@ sgpu_set_debug_status :: (status: string) {
     if status.count != 0 sgpu_debug_status = copy_string(status);
 }
 
-
 submit_and_present_with_ui :: (cmd_buff: Gpu_Command_Buffer) {
     //
     // interleave metal and metal4 here. todo: we can go back to a more normal
@@ -106,9 +105,20 @@ submit_and_present_with_ui :: (cmd_buff: Gpu_Command_Buffer) {
     assert(ui_semaphore != 0, "UI sync semaphore not initialized.");
 
     gpu_submit_swapchain_no_present(cmd_buff, signals=.[.{ui_semaphore, app_done_value}]);
-    ui_render(app_done_value, ui_done_value);
+
+    ui_render(app_done_value, ui_done_value, current_ui_render_frame);
+    current_ui_render_frame = {};
+
     gpu_present_current_swapchain(waits=.[.{ui_semaphore, ui_done_value}]);
+
     ui_timeline_value = ui_done_value;
+}
+
+app_swapchain_acquire :: () -> Gpu_Result, Gpu_Texture_View {
+    result, swapchain_image := gpu_swapchain_acquire();
+    assert(result == .SUCCESS);
+    current_ui_render_frame = ui_render_pre();
+    return result, swapchain_image;
 }
 
 app_update :: (update_ctx: *App_Update_Ctx) {
@@ -123,6 +133,7 @@ app_update :: (update_ctx: *App_Update_Ctx) {
     dt = cast(float)(time - last_time);
     last_time = time;
     perf_push_cpu_frame_ms(dt * 1000.0);
+    perf_set_latest_gpu_frame_ms(gpu_last_frame_gpu_ms());
 
     if window && frame_count % PERF_TITLE_UPDATE_EVERY_FRAMES == 0 {
         perf_text := perf_title_text();

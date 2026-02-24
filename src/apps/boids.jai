@@ -24,6 +24,16 @@ vertex_params_b_gpu: Gpu_Ptr;
 boids_control_ring_cpu: *[SGPU_FRAMES_IN_FLIGHT] Boids_Control;
 boids_control_ring_gpu: Gpu_Ptr;
 
+build_ui :: () {
+    using,except(Viewport) _ :: #import "ImGui";
+    open: bool = true;
+    window_flags: WindowFlags = .NoDecoration | .AlwaysAutoResize | .NoSavedSettings | .NoFocusOnAppearing | .NoNav;
+    if Begin("Boids", *open, window_flags) {
+        Text("Simple overlay");
+        Separator();
+    }
+    End();
+}
 
 on_dll_init :: () {
     graphics_source := cast([]u8) get_transpiled(.METAL, boids_vertex_main, boids_frag_main); assert(graphics_source.count > 0);
@@ -127,9 +137,11 @@ on_dll_init :: () {
 } @on_dll_init
 
 tick :: () {
-    result, swapchain_image := gpu_swapchain_acquire();
+    result, swapchain_image := app_swapchain_acquire();
     assert(result == .SUCCESS);
     if !swapchain_image return;
+
+    build_ui();
 
     mx, my, mouse_ok := get_mouse_pointer_position(true);
     _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
@@ -173,9 +185,7 @@ tick :: () {
 
     using draw_data;
     gpu_draw_indexed_instanced(cmd_buff, vertex_params_gpu, pixel_gpu, index_gpu, num_vertices, num_instances);
-
     submit_and_present_with_ui(cmd_buff);
-
 } @on_tick
 
 #scope_file
