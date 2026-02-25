@@ -177,8 +177,8 @@ rd_vertex_main :: (using in: RD_Vertex_In, state: *[RD_CELL_COUNT] Vector2) -> R
     return out;
 } @vertex_shader
 
-rd_fragment_main :: (using in: RD_Fragment_In, state: *[RD_CELL_COUNT] Vector2) -> struct { out_color: Vector4; } {
-    if RD_DEBUG_SHOW_UV {
+rd_fragment_main :: (using in: RD_Fragment_In, state: *[RD_CELL_COUNT] Vector2) -> Vector4 @SV_Target {
+    #if RD_DEBUG_SHOW_UV {
         return .{
             out_color = .{
                 uv.x,
@@ -223,12 +223,5 @@ rd_fragment_main :: (using in: RD_Fragment_In, state: *[RD_CELL_COUNT] Vector2) 
     green = rd_clamp01(green + edge * 0.02);
     blue = rd_clamp01(blue + edge * 0.01);
 
-    return .{
-        out_color = .{
-            red,
-            green,
-            blue,
-            1.0,
-        }
-    };
+    return { red, green, blue, 1.0, };
 } @fragment_shader

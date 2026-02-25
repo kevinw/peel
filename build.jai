@@ -258,7 +258,7 @@ get_dynamic_library_paths :: () -> []string /* temp allocated */ {
 
     // cross platform--needs a "win" or "linux" or "macos" directory on the end of these. see platform_dir below.
     local_module_dll_paths :: string.[
-        //"ImGui",
+        "ImGui",
         //"SDL3/lib",
         "assimp/lib",
         //"JoltC/lib",

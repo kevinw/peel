@@ -176,7 +176,7 @@ tick :: () {
     draw_result := gpu_draw_instanced_direct(cmd_buff, draw_data.params_gpu, draw_data.num_vertices, draw_data.num_instances);
     assert(draw_result == .SUCCESS, tprint("PBR draw failed: %", draw_result));
 
-    gpu_submit_and_present(cmd_buff);
+    submit_and_present_with_ui(cmd_buff);
 } @on_tick
 
 #scope_file

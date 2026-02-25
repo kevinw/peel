@@ -267,5 +267,5 @@ File_Utilities :: #import "File_Utilities";
 case .WINDOWS; #load "./Windows_DLL_Paths.jai";
 case .MACOS;   #import "Objective_C";
 }
-Debug :: #import "Debug";
+Debug :: #import "Debug"(USE_GRAPHICS=false);
 did_render_first_frame := false;

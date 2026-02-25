@@ -10,7 +10,6 @@ graphics_pipeline: Gpu_Pipeline;
 compute_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
-rd_shader_reload: SHR.Shader_Hot_Reload;
 
 state_storage_gpu: Gpu_Ptr;
 state_storage_cpu: *[RD_CELL_COUNT * 2] Vector2;
@@ -92,12 +91,9 @@ on_dll_init :: () {
     compute_pipeline = gpu_create_compute_pipeline(compute_source);
     assert(compute_pipeline != 0, "Compute pipeline creation failed.");
 
-    hot_reload_enabled_by_default := true;
-    #if RELEASE hot_reload_enabled_by_default = false;
-    _ = SHR.shader_hot_reload_init_auto(*rd_shader_reload, "src/apps/reaction_diffusion.jai", poll_every_frames = 15, log_prefix = "RD_SHADER_RELOAD", enabled_by_default = hot_reload_enabled_by_default);
-    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*rd_shader_reload, *graphics_pipeline, graphics_source, raster_desc, .METAL, rd_vertex_main, rd_fragment_main);
+    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, rd_vertex_main, rd_fragment_main);
     assert(graphics_ok, "Graphics pipeline creation failed.");
-    compute_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*rd_shader_reload, *compute_pipeline, compute_source, .METAL, rd_step_compute);
+    compute_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_pipeline, compute_source, .METAL, rd_step_compute);
     assert(compute_ok, "Compute pipeline creation failed.");
 
     gpu_arena = gpu_make_arena(1024 * 1024 * 8, label = "reaction diffusion arena");
@@ -198,17 +194,7 @@ tick :: () {
     draw_result := gpu_draw_instanced_direct(render_cmd, vertex_params_gpu, num_vertices, num_instances);
     assert(draw_result == .SUCCESS, tprint("RD draw failed: %", draw_result));
 
-    gpu_submit_and_present(render_cmd);
-    gpu_wait_idle();
-
-    frame_num := cast(s64) frame_count;
-    did_rebuild, swapped_all, rebuild_ok := SHR.shader_hot_reload_tick(*rd_shader_reload, frame_num);
-    sgpu_set_debug_status(SHR.shader_hot_reload_status_line(*rd_shader_reload));
-    if did_rebuild && !rebuild_ok {
-        log_error("RD_SHADER_RELOAD build failed; keeping current runtime shaders.");
-    } else if did_rebuild && !swapped_all {
-        log_error("RD_SHADER_RELOAD build succeeded but pipeline swap was partial.");
-    }
+    submit_and_present_with_ui(render_cmd);
 } @on_tick
 
 #scope_file
