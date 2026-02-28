@@ -22,6 +22,9 @@ Terrain_Render_Context :: struct {
     params_gpu: Gpu_Ptr;
     view_projection_cpu: *Matrix4;
     view_projection_gpu: Gpu_Ptr;
+
+    uploaded_vertex_count: u32;
+    upload_valid: bool;
 }
 
 init :: (ctx: *Terrain_Render_Context, max_vertices: s64 = 1200000) -> bool {
@@ -110,15 +113,19 @@ upload :: (ctx: *Terrain_Render_Context, terrain: *Terrain_Voxel.Terrain_Voxel_C
 
         copy_count := m.vertex_count;
         if copy_count > remain copy_count = remain;
-
-        for i: 0..copy_count - 1 {
-            ctx.positions_cpu[out_count + i] = m.positions[i];
-            ctx.normals_cpu[out_count + i] = m.normals[i];
+        if copy_count > 0 {
+            memcpy(ctx.positions_cpu.data + out_count, m.positions.data, copy_count * size_of(Vector3));
+            memcpy(ctx.normals_cpu.data + out_count, m.normals.data, copy_count * size_of(Vector3));
         }
         out_count += copy_count;
     }
 
     return cast(u32) out_count;
+}
+
+mark_mesh_dirty :: (ctx: *Terrain_Render_Context) {
+    if !ctx.initialized return;
+    ctx.upload_valid = false;
 }
 
 draw_uploaded :: (ctx: *Terrain_Render_Context, cmd: Gpu_Command_Buffer, vertex_count: u32, depth_mode: Terrain_Render_Depth_Mode = .TEST) -> Gpu_Result {
@@ -139,9 +146,12 @@ draw_uploaded :: (ctx: *Terrain_Render_Context, cmd: Gpu_Command_Buffer, vertex_
     return gpu_draw_instanced_direct(cmd, ctx.params_gpu, vertex_count, 1);
 }
 
-draw :: (ctx: *Terrain_Render_Context, cmd: Gpu_Command_Buffer, terrain: *Terrain_Voxel.Terrain_Voxel_Context, depth_mode: Terrain_Render_Depth_Mode = .TEST) -> Gpu_Result {
-    vertex_count := upload(ctx, terrain);
-    return draw_uploaded(ctx, cmd, vertex_count, depth_mode);
+draw :: (ctx: *Terrain_Render_Context, cmd: Gpu_Command_Buffer, terrain: *Terrain_Voxel.Terrain_Voxel_Context, depth_mode: Terrain_Render_Depth_Mode = .TEST, force_upload := false) -> Gpu_Result {
+    if !ctx.upload_valid || force_upload {
+        ctx.uploaded_vertex_count = upload(ctx, terrain);
+        ctx.upload_valid = true;
+    }
+    return draw_uploaded(ctx, cmd, ctx.uploaded_vertex_count, depth_mode);
 }
 
 #scope_file
@@ -197,15 +207,23 @@ static inline float hash12(float2 p) {
     return fract((p3.x + p3.y) * p3.z);
 }
 
+// #define COLOR_CHUNKS_DIFFERENTLY 1
+
 static inline float3 sample_plane(float2 uv) {
     float2 suv = uv * 0.8;
     float2 cell = floor(suv);
+    #ifdef COLOR_CHUNKS_DIFFERENTLY
     float n = hash12(cell);
+    #else
+    float n = 1;
+    #endif
     float c = fmod(cell.x + cell.y, 2.0);
     float3 a = float3(0.22, 0.20, 0.18);
     float3 b = float3(0.43, 0.40, 0.35);
     float3 stone = mix(a, b, n * 0.75 + 0.25);
+    #ifdef COLOR_CHUNKS_DIFFERENTLY
     stone *= mix(0.9, 1.15, c);
+    #endif
     return stone;
 }
 

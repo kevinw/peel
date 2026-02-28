@@ -60,8 +60,8 @@ deinit :: (ctx: *Terrain_Mesh_Compute_Context) {
     ctx.* = .{};
 }
 
-rebuild_dirty_meshes :: (ctx: *Terrain_Mesh_Compute_Context, terrain: *Terrain_Voxel.Terrain_Voxel_Context, max_chunks: s64 = 0) {
-    if !ctx.initialized return;
+rebuild_dirty_meshes :: (ctx: *Terrain_Mesh_Compute_Context, terrain: *Terrain_Voxel.Terrain_Voxel_Context, max_chunks: s64 = 0) -> s64 {
+    if !ctx.initialized return 0;
 
     queue := gpu_get_queue(.MAIN, 0);
     rebuilt: s64 = 0;
@@ -108,11 +108,14 @@ rebuild_dirty_meshes :: (ctx: *Terrain_Mesh_Compute_Context, terrain: *Terrain_V
         it.mesh.dirty = false;
         it.dirty = false;
 
+        rebuilt += 1;
+
         if max_chunks > 0 {
-            rebuilt += 1;
             if rebuilt >= max_chunks break;
         }
     }
+
+    return rebuilt;
 }
 
 #scope_file

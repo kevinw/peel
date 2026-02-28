@@ -20,8 +20,12 @@ terrain_have_prev_mouse := false;
 
 terrain_fly_speed: float = 8.0;
 terrain_mouse_sensitivity: float = 0.0032;
-terrain_auto_orbit_delay_sec: float64 = 1.6;
+terrain_auto_orbit_delay_sec: float64 = 7.6;
 terrain_orbit_blend_speed: float = 3.5;
+terrain_dig_radius: float = 0.94;
+terrain_dig_strength: float = 2.4;
+terrain_ray_max_dist: float = 80.0;
+terrain_ray_step: float = 0.21;
 
 terrain_forward_from_angles :: (yaw: float, pitch: float) -> Vector3 {
     cp := cos(pitch);
@@ -36,6 +40,125 @@ terrain_angles_from_forward :: (forward: Vector3) -> (yaw: float, pitch: float) 
     n := forward;
     normalize(*n, fallback = .{0.0, 0.0, -1.0});
     return atan2(n.x, -n.z), asin(clamp(n.y, -1.0, 1.0));
+}
+
+terrain_sample_index :: inline (x: s64, y: s64, z: s64) -> s64 {
+    return x + y * Terrain_Voxel.Sample_Res + z * Terrain_Voxel.Sample_Res * Terrain_Voxel.Sample_Res;
+}
+
+terrain_sample_density_trilinear :: (chunk: *Terrain_Voxel.Chunk, p: Vector3, out_density: *float) -> bool {
+    min_b := chunk.origin;
+    max_b := chunk.origin + Vector3.{Terrain_Voxel.Chunk_World_Size, Terrain_Voxel.Chunk_World_Size, Terrain_Voxel.Chunk_World_Size};
+    if p.x < min_b.x || p.y < min_b.y || p.z < min_b.z return false;
+    if p.x > max_b.x || p.y > max_b.y || p.z > max_b.z return false;
+
+    local := p - chunk.origin;
+    gx := clamp(local.x / Terrain_Voxel.Voxel_Size, 0.0, cast(float) (Terrain_Voxel.Sample_Res - 1));
+    gy := clamp(local.y / Terrain_Voxel.Voxel_Size, 0.0, cast(float) (Terrain_Voxel.Sample_Res - 1));
+    gz := clamp(local.z / Terrain_Voxel.Voxel_Size, 0.0, cast(float) (Terrain_Voxel.Sample_Res - 1));
+
+    x0 := cast(s64) floor(gx);
+    y0 := cast(s64) floor(gy);
+    z0 := cast(s64) floor(gz);
+    x1 := min(x0 + 1, Terrain_Voxel.Sample_Res - 1);
+    y1 := min(y0 + 1, Terrain_Voxel.Sample_Res - 1);
+    z1 := min(z0 + 1, Terrain_Voxel.Sample_Res - 1);
+
+    tx := gx - cast(float) x0;
+    ty := gy - cast(float) y0;
+    tz := gz - cast(float) z0;
+
+    d000 := cast(float) chunk.density[terrain_sample_index(x0, y0, z0)] / Terrain_Voxel.Density_Scale;
+    d100 := cast(float) chunk.density[terrain_sample_index(x1, y0, z0)] / Terrain_Voxel.Density_Scale;
+    d010 := cast(float) chunk.density[terrain_sample_index(x0, y1, z0)] / Terrain_Voxel.Density_Scale;
+    d110 := cast(float) chunk.density[terrain_sample_index(x1, y1, z0)] / Terrain_Voxel.Density_Scale;
+    d001 := cast(float) chunk.density[terrain_sample_index(x0, y0, z1)] / Terrain_Voxel.Density_Scale;
+    d101 := cast(float) chunk.density[terrain_sample_index(x1, y0, z1)] / Terrain_Voxel.Density_Scale;
+    d011 := cast(float) chunk.density[terrain_sample_index(x0, y1, z1)] / Terrain_Voxel.Density_Scale;
+    d111 := cast(float) chunk.density[terrain_sample_index(x1, y1, z1)] / Terrain_Voxel.Density_Scale;
+
+    c00 := d000 + (d100 - d000) * tx;
+    c10 := d010 + (d110 - d010) * tx;
+    c01 := d001 + (d101 - d001) * tx;
+    c11 := d011 + (d111 - d011) * tx;
+    c0 := c00 + (c10 - c00) * ty;
+    c1 := c01 + (c11 - c01) * ty;
+    out_density.* = c0 + (c1 - c0) * tz;
+    return true;
+}
+
+terrain_density_at_world :: (ctx: *Terrain_Voxel.Terrain_Voxel_Context, p: Vector3, out_density: *float) -> bool {
+    for *ctx.chunks {
+        if terrain_sample_density_trilinear(it, p, out_density) return true;
+    }
+    return false;
+}
+
+terrain_mouse_world_ray :: (mouse_x: float, mouse_y: float, viewport: Vector2, camera_pos: Vector3, yaw: float, pitch: float) -> (origin: Vector3, dir: Vector3, ok: bool) {
+    if viewport.x <= 1.0 || viewport.y <= 1.0 return camera_pos, .{0.0, 0.0, -1.0}, false;
+
+    nx := (mouse_x / viewport.x) * 2.0 - 1.0;
+    ny := (mouse_y / viewport.y) * 2.0 - 1.0;
+
+    forward := terrain_forward_from_angles(yaw, pitch);
+    up_axis := Vector3.{0.0, 1.0, 0.0};
+    right := cross(forward, up_axis);
+    normalize(*right, fallback = .{1.0, 0.0, 0.0});
+    cam_up := cross(right, forward);
+    normalize(*cam_up, fallback = .{0.0, 1.0, 0.0});
+
+    fov_y := PI / 3.2;
+    tan_half_fov := tan(fov_y * 0.5);
+    aspect := viewport.x / viewport.y;
+
+    dir := forward + right * (nx * aspect * tan_half_fov) + cam_up * (ny * tan_half_fov);
+    normalize(*dir, fallback = forward);
+    return camera_pos, dir, true;
+}
+
+terrain_raycast_surface :: (ctx: *Terrain_Voxel.Terrain_Voxel_Context, origin: Vector3, dir: Vector3, max_dist: float, step: float) -> (hit: bool, p: Vector3) {
+    t0: float = 0.0;
+    prev_p := origin;
+    prev_d: float = 0.0;
+    prev_ok := terrain_density_at_world(ctx, prev_p, *prev_d);
+    if prev_ok && prev_d <= Terrain_Voxel.Iso_Level return true, prev_p;
+
+    while t0 < max_dist {
+        t0 += step;
+        p := origin + dir * t0;
+        d: float = 0.0;
+        ok := terrain_density_at_world(ctx, p, *d);
+        if !ok {
+            prev_ok = false;
+            continue;
+        }
+
+        if prev_ok && prev_d > Terrain_Voxel.Iso_Level && d <= Terrain_Voxel.Iso_Level {
+            lo := prev_p;
+            hi := p;
+            dlo := prev_d;
+            dhi := d;
+            for 0..5 {
+                mid := (lo + hi) * 0.5;
+                dm: float = 0.0;
+                if !terrain_density_at_world(ctx, mid, *dm) break;
+                if dlo > Terrain_Voxel.Iso_Level && dm <= Terrain_Voxel.Iso_Level {
+                    hi = mid;
+                    dhi = dm;
+                } else {
+                    lo = mid;
+                    dlo = dm;
+                }
+            }
+            return true, (lo + hi) * 0.5;
+        }
+
+        prev_ok = true;
+        prev_p = p;
+        prev_d = d;
+    }
+
+    return false, origin;
 }
 
 ensure_depth_target :: (width: u32, height: u32) {
@@ -96,6 +219,7 @@ tick :: () {
     mx, my, mouse_ok := get_mouse_pointer_position(true);
     has_dims := dims_ok && win_w > 0 && win_h > 0;
 
+    left_mouse_down := Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_LEFT] & .DOWN;
     right_mouse_down := Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_RIGHT] & .DOWN;
     keyboard_move := false;
     move := Vector3.{0.0, 0.0, 0.0};
@@ -155,7 +279,7 @@ tick :: () {
         terrain_camera_pos += move * (terrain_fly_speed * dt);
     }
 
-    if keyboard_move || used_mouse_look || right_mouse_down {
+    if keyboard_move || used_mouse_look || right_mouse_down || left_mouse_down {
         terrain_last_manual_time = time;
     }
 
@@ -169,8 +293,19 @@ tick :: () {
     }
 
     Terrain_Voxel.update_streaming(*terrain_voxel_ctx, terrain_camera_pos);
+
+    if left_mouse_down && mouse_ok && has_dims {
+        ray_origin, ray_dir, ray_ok := terrain_mouse_world_ray(cast(float) mx, cast(float) my, viewport, terrain_camera_pos, terrain_camera_yaw, terrain_camera_pitch);
+        if ray_ok {
+            hit, hit_p := terrain_raycast_surface(*terrain_voxel_ctx, ray_origin, ray_dir, terrain_ray_max_dist, terrain_ray_step);
+            if hit {
+                Terrain_Voxel.carve_sphere(*terrain_voxel_ctx, hit_p, terrain_dig_radius, terrain_dig_strength);
+            }
+        }
+    }
+
     Terrain_Voxel.tick_demo_deform(*terrain_voxel_ctx, dt, t);
-    Terrain_Mesh_Compute.rebuild_dirty_meshes(*terrain_mesh_compute_ctx, *terrain_voxel_ctx);
+    rebuilt_chunks := Terrain_Mesh_Compute.rebuild_dirty_meshes(*terrain_mesh_compute_ctx, *terrain_voxel_ctx);
 
     aspect := viewport.x / max(viewport.y, 1.0);
     view_forward := terrain_forward_from_angles(terrain_camera_yaw, terrain_camera_pitch);
@@ -207,7 +342,7 @@ tick :: () {
         }
     });
 
-    draw_result := Terrain_Render.draw(*terrain_render_ctx, cmd_buff, *terrain_voxel_ctx, depth_mode = .TEST);
+    draw_result := Terrain_Render.draw(*terrain_render_ctx, cmd_buff, *terrain_voxel_ctx, depth_mode = .TEST, force_upload = rebuilt_chunks > 0);
     assert(draw_result == .SUCCESS, tprint("Terrain draw failed: %", draw_result));
 
     submit_and_present_with_ui(cmd_buff);
