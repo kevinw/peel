@@ -46,3 +46,4 @@ imgui.ini
 dist/ripple_heightfield.dylib
 dist/gizmos_test
 dist/gizmos_test.dylib
+dist/physics_test

@@ -3,32 +3,22 @@ gizmo_render_ctx: Gizmo_Render.Gizmo_Render_Context;
 
 build_demo_gizmos :: () {
     t := cast(float) time;
-    orbit := Vector3.{cos(t * 1.2) * 0.85, 0.2 + sin(t * 0.9) * 0.25, sin(t * 1.2) * 0.85};
-    //box_center := Vector3.{sin(t * 0.7) * 0.65, -0.15, cos(t * 0.7) * 0.65};
-    box_center := Vector3.{};
-    
     Gizmo.begin_frame(*gizmo_ctx);
-    using Gizmo;
-    #if 0 {
+    #if 1 {
         // axes
-        draw_line(*gizmo_ctx, {0, 0, 0}, {0, 1, 0}, color=.{0, 1, 0, 1}, thickness=2);
-        draw_line(*gizmo_ctx, {0, 0, 0}, {1, 0, 0}, color=.{1, 0, 0, 1}, thickness=2);
-        draw_line(*gizmo_ctx, {0, 0, 0}, {0, 0, 1}, color=.{0, 0, 1, 1}, thickness=2);
+        Gizmo.draw_line(*gizmo_ctx, {0, 0, 0}, {0, 1, 0}, color=.{0, 1, 0, 1}, thickness=2);
+        Gizmo.draw_line(*gizmo_ctx, {0, 0, 0}, {1, 0, 0}, color=.{1, 0, 0, 1}, thickness=2);
+        Gizmo.draw_line(*gizmo_ctx, {0, 0, 0}, {0, 0, 1}, color=.{0, 0, 1, 1}, thickness=2);
     }
-
-    draw_grid_xz(*gizmo_ctx,
+    Gizmo.draw_grid_xz(*gizmo_ctx,
         center = .{0.0, 0.0, 0.0},
         half_extent = 2.4,
         spacing = 0.2,
         major_every = 5,
         line_thickness = 1.0);
-
-    draw_arrow(*gizmo_ctx, .{0.0, 0.0, 0.0}, orbit, .{0.96, 0.74, 0.30, 1.0}, 3.0, 0.12);
-    draw_sphere(*gizmo_ctx, orbit, 0.22, .{0.35, 0.82, 0.96, 1.0}, 2.0, 32);
-    draw_triangle(*gizmo_ctx, .{-0.45, -0.05, 0.10}, .{-0.10, 0.38, -0.05}, .{0.12, -0.10, -0.12}, .{0.22, 0.72, 0.95, 0.55});
-    draw_triangle(*gizmo_ctx, .{0.30, 0.05, 0.32}, .{0.55, 0.38, 0.20}, .{0.72, 0.02, 0.08}, .{0.96, 0.88, 0.25, 1.0}, filled = false, thickness = 2.0);
-    draw_box(*gizmo_ctx, box_center, .{0.22, 0.18, 0.22}, .{0.94, 0.42, 0.42, 1.0}, 3.0);
-    draw_handle(*gizmo_ctx, .{0.0, 0.0, 0.0}, 0.12, .{0.92, 0.92, 0.92, 1.0}, 2.0);
+    for Physics.world.spheres {
+        Gizmo.draw_sphere(*gizmo_ctx, it.pos, it.radius, color=.{1, 0, 1, 1}, thickness=2.0, rotation=it.rot);
+    }
 }
 
 on_dll_init :: () {
@@ -36,6 +26,8 @@ on_dll_init :: () {
     render_ok := Gizmo_Render.init(*gizmo_render_ctx, max_lines = 65536);
     assert(render_ok, "Failed to initialize Gizmo_Render module.");
     Gizmo_Render.bind_gizmo(*gizmo_render_ctx, *gizmo_ctx);
+    
+    Physics.init();
 } @on_dll_init
 
 on_unload :: () {
@@ -44,6 +36,8 @@ on_unload :: () {
 } @on_unload
 
 tick :: () {
+    Physics.tick(dt);
+    
     result, swapchain_image := app_swapchain_acquire();
     assert(result == .SUCCESS);
     if !swapchain_image return;
@@ -96,3 +90,4 @@ Gizmo :: #import "Gizmo";
 Gizmo_Render :: #import "Gizmo_Render";
 #import "Math";
 #import "Window_Creation";
+Physics :: #import "Physics";
