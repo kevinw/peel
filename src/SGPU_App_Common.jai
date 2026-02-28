@@ -1,5 +1,6 @@
 READBACK_ENABLED :: !RELEASE;
 SGPU_FRAMES_IN_FLIGHT :: 3;
+LIVE_RELOAD_ENABLED :: !RELEASE;
 
 // APP_NAME is like src/apps/boids.jai
 // APP_STEM is like boids
@@ -297,6 +298,37 @@ Input :: #import "Input";
         content_view := NSWindow.contentView(window);
         // TODO: on debug builds, check that it's actually an instance of CAMetalLayer.
         return cast(*CAMetalLayer)content_view.layer(content_view);
+    }
+    
+    #if LIVE_RELOAD_ENABLED {
+    #scope_export
+    reload_stdlib :: () {
+        log("------ dll_unload -----");
+        init_all_objective_c_selector_structs();
+        if window {
+            // Recreate the window delegate so the new DLL's function pointers get called instead of the old ones.
+            NSWindow.setDelegate(window, context._macos_create_window_delegate());
+        }
+    } @on_reload
+    
+    dll_unload :: () {
+        log("------ dll_unload -----");
+        // This is a hack to get live reloading working with Jai's Input module's NSApplication and NSWindow delegates.
+        if window NSWindow.setDelegate(window, null);
+        NSApplication.setDelegate(NSApp, null);
+    
+        remove_old_objc_class("App_Delegate");
+        remove_old_objc_class("Window_Delegate");
+    } @on_unload
+    }
+    
+    
+    #scope_file
+    remove_old_objc_class :: (name: *u8) {
+        old_class := objc_getClass(name);
+        if old_class {
+            objc_disposeClassPair(old_class);
+        }
     }
 }
 
