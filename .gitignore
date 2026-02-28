@@ -47,3 +47,4 @@ dist/ripple_heightfield.dylib
 dist/gizmos_test
 dist/gizmos_test.dylib
 dist/physics_test
+modules/JDLL/examples/example_jai_dynamic_library.dylib
