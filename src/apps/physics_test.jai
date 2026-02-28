@@ -23,11 +23,12 @@ build_demo_gizmos :: () {
 
 on_dll_init :: () {
     Gizmo.init(*gizmo_ctx);
-    render_ok := Gizmo_Render.init(*gizmo_render_ctx, max_lines = 65536);
+    render_ok := Gizmo_Render.init(*gizmo_render_ctx, max_lines = 65536*10);
     assert(render_ok, "Failed to initialize Gizmo_Render module.");
     Gizmo_Render.bind_gizmo(*gizmo_render_ctx, *gizmo_ctx);
     
     Physics.init();
+    Physics.debug_draw_enabled = true;
 } @on_dll_init
 
 on_unload :: () {
@@ -36,13 +37,13 @@ on_unload :: () {
 } @on_unload
 
 tick :: () {
-    Physics.tick(dt);
     
     result, swapchain_image := app_swapchain_acquire();
     assert(result == .SUCCESS);
     if !swapchain_image return;
 
     build_demo_gizmos();
+    Physics.tick(dt);
 
     _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
     viewport := Vector2.{2000.0, 1500.0};

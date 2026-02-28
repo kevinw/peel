@@ -45,7 +45,7 @@ Gizmo_Render_Context :: struct {
     viewport_size_gpu: Gpu_Ptr;
 }
 
-init :: (ctx: *Gizmo_Render_Context, max_lines: s64 = 64000) -> bool {
+init :: (ctx: *Gizmo_Render_Context, max_lines: s64 = 200000) -> bool {
     ctx.* = .{};
     if max_lines <= 0 max_lines = 1024;
     ctx.max_lines = max_lines;
@@ -209,17 +209,13 @@ gizmo_render_draw_uploaded :: (ctx: *Gizmo_Render_Context, cmd: Gpu_Command_Buff
     }
 
     if counts.triangle_count > 0 {
-        pipeline_result := gpu_set_pipeline(cmd, triangle_pipeline);
-        if pipeline_result != .SUCCESS return pipeline_result;
-        draw_result := gpu_draw_instanced_direct(cmd, ctx.triangle_params_gpu, 3, counts.triangle_count);
-        if draw_result != .SUCCESS return draw_result;
+        pipeline_result := gpu_set_pipeline(cmd, triangle_pipeline); assert(pipeline_result == .SUCCESS);
+        draw_result := gpu_draw_instanced_direct(cmd, ctx.triangle_params_gpu, 3, counts.triangle_count); assert(draw_result == .SUCCESS);
     }
 
     if counts.line_count > 0 {
-        pipeline_result := gpu_set_pipeline(cmd, line_pipeline);
-        if pipeline_result != .SUCCESS return pipeline_result;
-        draw_result := gpu_draw_instanced_direct(cmd, ctx.params_gpu, 6, counts.line_count);
-        if draw_result != .SUCCESS return draw_result;
+        pipeline_result := gpu_set_pipeline(cmd, line_pipeline); assert(pipeline_result == .SUCCESS);
+        draw_result := gpu_draw_instanced_direct(cmd, ctx.params_gpu, 6, counts.line_count); assert(draw_result == .SUCCESS);
     }
 
     return .SUCCESS;

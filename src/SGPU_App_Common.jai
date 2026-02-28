@@ -303,7 +303,6 @@ Input :: #import "Input";
     #if LIVE_RELOAD_ENABLED {
     #scope_export
     reload_stdlib :: () {
-        log("------ dll_unload -----");
         init_all_objective_c_selector_structs();
         if window {
             // Recreate the window delegate so the new DLL's function pointers get called instead of the old ones.
@@ -312,7 +311,6 @@ Input :: #import "Input";
     } @on_reload
     
     dll_unload :: () {
-        log("------ dll_unload -----");
         // This is a hack to get live reloading working with Jai's Input module's NSApplication and NSWindow delegates.
         if window NSWindow.setDelegate(window, null);
         NSApplication.setDelegate(NSApp, null);
@@ -334,8 +332,8 @@ Input :: #import "Input";
 
 #load "App_Common.jai";
 #load "ui.jai";
-#load "measure_fps.jai";
 #scope_file
+#load "measure_fps.jai";
 #load "readback_stats.jai";
 #import "Window_Creation";
 String :: #import "String";

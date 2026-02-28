@@ -1,5 +1,6 @@
 # TODO
 
+- a "noisy" mode for sgpu where all non-success results are logged
 - fix jai build.jai - -dll (parallel builds need to build only dylibs)
 - add "capture screen" app which saves a grid of images from all the examples
 - remove IR_PLAN

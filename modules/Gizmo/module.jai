@@ -7,12 +7,12 @@ line :: (a: Vector3, b: Vector3, color: Vector4, thickness: float = 0) {
     draw_line(g_ctx, a, b, pack_color_rgba8(color), thickness);
 }
 
-triangle :: inline (a: Vector3, b: Vector3, c: Vector3, color: u32 = 0) {
-    draw_triangle(g_ctx, a, b, c, color);
+triangle :: inline (a: Vector3, b: Vector3, c: Vector3, color: u32 = 0, filled := false) {
+    draw_triangle(g_ctx, a, b, c, color, filled=filled);
 }
 
-triangle :: inline (a: Vector3, b: Vector3, c: Vector3, color: Vector4) {
-    draw_triangle(g_ctx, a, b, c, pack_color_rgba8(color));
+triangle :: inline (a: Vector3, b: Vector3, c: Vector3, color: Vector4, filled := false) {
+    draw_triangle(g_ctx, a, b, c, pack_color_rgba8(color), filled=false);
 }
 
 Gizmo_Line :: struct {
@@ -264,6 +264,7 @@ draw_triangle :: (
     filled: bool = true,
     thickness: float = 0.0,
 ) {
+    assert(ctx != null);
     tri_color := color;
     if tri_color == 0 tri_color = ctx.default_color;
 
@@ -276,7 +277,7 @@ draw_triangle :: (
 
     ensure_triangle_sink_bound(ctx);
     if ctx.triangle_count >= ctx.max_triangles {
-        log_error("max_triangles hit");
+        log_error("max_triangles hit: %", ctx.max_triangles);
         return;
     }
         

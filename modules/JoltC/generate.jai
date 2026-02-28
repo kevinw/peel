@@ -29,7 +29,7 @@ CMAKE_BUILD_TYPE :: "Release"; // TODO: Maybe build both and make it a module pa
         will_print_bindings = joltc_will_print_bindings;
         array_add(*strip_prefixes, "JPH_");
     };
-    ok, result := build_and_generate_bindings(*project, .{
+    ok, result := build_and_generate_bindings(project, .{
         cmake_build_type=CMAKE_BUILD_TYPE,
         verbose=false,
     });
@@ -155,7 +155,7 @@ joltc_will_print_bindings :: () {
             }
         }
         */
-        print_declaration_to_builder(*builder, new_func, null, flags=.IS_GLOBAL);
+        print_declaration_to_builder(*builder, *new_func, null, flags=.IS_GLOBAL);
         append(*builder, "\n");
         //array_add(*context.generator.global_scope.members, new_func);
     }

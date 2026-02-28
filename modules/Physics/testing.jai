@@ -1,3 +1,5 @@
+SPAWN_SPHERES :: true;
+
 next_spawn_timer: float;
 
 world: struct {
@@ -14,7 +16,7 @@ random_sphere :: () -> pos: Vec3, radius: float {
     W :: 10.0;
     return .{
         random_get_zero_to_one() * W - W * 0.5,
-        30.0 - random_get_zero_to_one() * 20.0,
+        20.0 - random_get_zero_to_one() * 10.0,
         random_get_zero_to_one() * W - W * 0.5,
     }, 0.15 + random_get_zero_to_one() * 0.2;
 }
@@ -22,10 +24,12 @@ random_sphere :: () -> pos: Vec3, radius: float {
 
 update_test_environment :: (dt: float) {
     using physics;
-    next_spawn_timer -= dt;
-    if next_spawn_timer <= 0.0 {
-        next_spawn_timer += 3.0;
-        spawn_sphere();
+    #if SPAWN_SPHERES {
+        next_spawn_timer -= dt;
+        if next_spawn_timer <= 0.0 {
+            next_spawn_timer += 3.0;
+            spawn_sphere();
+        }
     }
 }
 
@@ -65,16 +69,18 @@ init_test_environment :: () {
 
     // create many spheres
     array_reset(*world.spheres);
-    for 0..30 {
-        spherePosition, radius := random_sphere();
-        sphereShape := SphereShape_Create(radius);
-        sphereSettings := BodyCreationSettings_Create3(sphereShape, *spherePosition, null /*identity*/, .Dynamic, Layers.MOVING);
-        defer BodyCreationSettings_Destroy(sphereSettings);
-        array_add(*world.spheres, {
-            pos     = cast,force(Vector3)spherePosition,
-            radius  = radius,
-            body_id = BodyInterface_CreateAndAddBody(body_interface, sphereSettings, .Activate),
-        });
+    #if SPAWN_SPHERES {
+        for 0..30 {
+            spherePosition, radius := random_sphere();
+            sphereShape := SphereShape_Create(radius);
+            sphereSettings := BodyCreationSettings_Create3(sphereShape, *spherePosition, null /*identity*/, .Dynamic, Layers.MOVING);
+            defer BodyCreationSettings_Destroy(sphereSettings);
+            array_add(*world.spheres, {
+                pos     = cast,force(Vector3)spherePosition,
+                radius  = radius,
+                body_id = BodyInterface_CreateAndAddBody(body_interface, sphereSettings, .Activate),
+            });
+        }
     }
 
     PhysicsSystem_OptimizeBroadPhase(system);

@@ -1,3 +1,5 @@
+debug_draw_enabled := false;
+
 Layers :: struct {
     NON_MOVING :: 0;
     MOVING     :: 1;
@@ -72,8 +74,8 @@ init :: () {
         body_draw_filter = BodyDrawFilter_Create(*ctx);
         DrawSettings_InitDefault(*draw_settings);
         using draw_settings;
-        //drawShape = true;
-        //drawShapeWireframe = true;
+        drawShape = true;
+        drawShapeWireframe = true;
     }
 
     set_debug_draw_procs();
@@ -161,7 +163,6 @@ physics: struct {
 }
 
 #scope_file
-debug_draw_enabled := false;
 #load "./debug_renderer.jai";
 #load "./testing.jai";
 JPH :: #import "JoltC";

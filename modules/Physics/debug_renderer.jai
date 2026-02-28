@@ -10,23 +10,12 @@ to_float_color :: (jph_color: JPH.Color) -> Vector4 {
 
 Debug_DrawLine :: (userdata: *void, from: *Vec3, to: *Vec3, color: JPH.Color) #c_call {
     push_renderer_ctx(userdata);
-
-    vec1 := cast,force(Vector3)(from.*);
-    vec2 := cast,force(Vector3)(to.*);
-    
-    //color_unorm: R8G8B8A8_UNORM;
-    //color_unorm.u = color;
-
-    Gizmo.line(vec1, vec2, to_float_color(color));
+    Gizmo.line(xx,force from.*, xx,force to.*, color);
 }
 
 Debug_DrawTriangle :: (userdata: *void, v1: *Vec3, v2: *Vec3, v3: *Vec3, color: JPH.Color, cast_shadow: DebugRenderer_CastShadow) #c_call {
     push_renderer_ctx(userdata);
-
-    //color_unorm: R8G8B8A8_UNORM;
-    //color_unorm.u = color;
-
-    Gizmo.triangle(xx,force v1.*, xx,force v2.*, xx,force v3.*, to_float_color(color));
+    Gizmo.triangle(xx,force v1.*, xx,force v2.*, xx,force v3.*, color, filled=true);
 }
 
 Debug_DrawText3D :: (userdata: *void, position: Vec3, str: string, color: JPH.Color, height: float) #c_call {
@@ -41,7 +30,6 @@ Debug_DrawText3D :: (userdata: *void, position: *Vec3, str: *u8, color: JPH.Colo
     //UI.report_replace(to_string(str));
     
     // TODO
-
 }
 
 #scope_file

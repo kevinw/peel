@@ -35,6 +35,7 @@ SimShapeFilter :: struct {}
 PhysicsStepListener :: struct {}
 PhysicsSystem :: struct {}
 PhysicsMaterial :: struct {}
+LinearCurve :: struct {}
 ShapeSettings :: struct {}
 ConvexShapeSettings :: struct {}
 SphereShapeSettings :: struct {}
@@ -345,6 +346,10 @@ Plane :: struct {
 Mat4 :: struct {
     column: [4] Vec4;
 }
+Point :: struct {
+    x: float;
+    y: float;
+}
 RVec3 :: Vec3;
 RMat4 :: Mat4;
 Color :: u32;
@@ -546,6 +551,9 @@ CharacterVirtual :: struct { #as _base: CharacterBase; }
 CharacterContactListener :: struct {}
 CharacterVsCharacterCollision :: struct {}
 Skeleton :: struct {}
+SkeletonPose :: struct {}
+SkeletalAnimation :: struct {}
+SkeletonMapper :: struct {}
 RagdollSettings :: struct {}
 Ragdoll :: struct {}
 ConstraintSettings :: struct {
@@ -762,6 +770,8 @@ JobSystemConfig :: struct {
     maxBarriers:    u32;
 }
 JobSystem :: struct {}
+/* Calculate max tire impulses by combining friction, slip, and suspension impulse. Note that the actual applied impulse may be lower (e.g. when the vehicle is stationary on a horizontal surface the actual impulse applied will be 0) */
+TireMaxImpulseCallback :: #type (userData: *void, wheelIndex: u32, outLongitudinalImpulse: *float, outLateralImpulse: *float, suspensionImpulse: float, longitudinalFriction: float, lateralFriction: float, longitudinalSlip: float, lateralSlip: float, deltaTime: float) -> void #c_call;
 JobSystemThreadPool_Create :: (config: *JobSystemThreadPoolConfig) -> *JobSystem #foreign libjoltc "JPH_JobSystemThreadPool_Create";
 JobSystemCallback_Create :: (config: *JobSystemConfig) -> *JobSystem #foreign libjoltc "JPH_JobSystemCallback_Create";
 JobSystem_Destroy :: (jobSystem: *JobSystem) -> void #foreign libjoltc "JPH_JobSystem_Destroy";
@@ -1841,7 +1851,45 @@ Skeleton_GetJoint :: (skeleton: *Skeleton, index: s32, joint: *SkeletonJoint) ->
 Skeleton_GetJointIndex :: (skeleton: *Skeleton, name: *u8) -> s32 #foreign libjoltc "JPH_Skeleton_GetJointIndex";
 Skeleton_CalculateParentJointIndices :: (skeleton: *Skeleton) -> void #foreign libjoltc "JPH_Skeleton_CalculateParentJointIndices";
 Skeleton_AreJointsCorrectlyOrdered :: (skeleton: *Skeleton) -> bool #foreign libjoltc "JPH_Skeleton_AreJointsCorrectlyOrdered";
-/* Ragdoll */
+/* SkeletonPose */
+SkeletonPose_Create :: () -> *SkeletonPose #foreign libjoltc "JPH_SkeletonPose_Create";
+SkeletonPose_Destroy :: (pose: *SkeletonPose) -> void #foreign libjoltc "JPH_SkeletonPose_Destroy";
+SkeletonPose_SetSkeleton :: (pose: *SkeletonPose, skeleton: *Skeleton) -> void #foreign libjoltc "JPH_SkeletonPose_SetSkeleton";
+SkeletonPose_GetSkeleton :: (pose: *SkeletonPose) -> *Skeleton #foreign libjoltc "JPH_SkeletonPose_GetSkeleton";
+SkeletonPose_SetRootOffset :: (pose: *SkeletonPose, offset: *RVec3) -> void #foreign libjoltc "JPH_SkeletonPose_SetRootOffset";
+SkeletonPose_GetRootOffset :: (pose: *SkeletonPose, result: *RVec3) -> void #foreign libjoltc "JPH_SkeletonPose_GetRootOffset";
+SkeletonPose_GetJointCount :: (pose: *SkeletonPose) -> s32 #foreign libjoltc "JPH_SkeletonPose_GetJointCount";
+SkeletonPose_GetJointState :: (pose: *SkeletonPose, index: s32, outTranslation: *Vec3, outRotation: *Quat) -> void #foreign libjoltc "JPH_SkeletonPose_GetJointState";
+SkeletonPose_SetJointState :: (pose: *SkeletonPose, index: s32, translation: *Vec3, rotation: *Quat) -> void #foreign libjoltc "JPH_SkeletonPose_SetJointState";
+SkeletonPose_GetJointMatrix :: (pose: *SkeletonPose, index: s32, result: *Mat4) -> void #foreign libjoltc "JPH_SkeletonPose_GetJointMatrix";
+SkeletonPose_SetJointMatrix :: (pose: *SkeletonPose, index: s32, matrix: *Mat4) -> void #foreign libjoltc "JPH_SkeletonPose_SetJointMatrix";
+SkeletonPose_GetJointMatrices :: (pose: *SkeletonPose, outMatrices: *Mat4, count: s32) -> void #foreign libjoltc "JPH_SkeletonPose_GetJointMatrices";
+SkeletonPose_SetJointMatrices :: (pose: *SkeletonPose, matrices: *Mat4, count: s32) -> void #foreign libjoltc "JPH_SkeletonPose_SetJointMatrices";
+SkeletonPose_CalculateJointMatrices :: (pose: *SkeletonPose) -> void #foreign libjoltc "JPH_SkeletonPose_CalculateJointMatrices";
+SkeletonPose_CalculateJointStates :: (pose: *SkeletonPose) -> void #foreign libjoltc "JPH_SkeletonPose_CalculateJointStates";
+SkeletonPose_CalculateLocalSpaceJointMatrices :: (pose: *SkeletonPose, outMatrices: *Mat4) -> void #foreign libjoltc "JPH_SkeletonPose_CalculateLocalSpaceJointMatrices";
+/* SkeletalAnimation */
+SkeletalAnimation_Create :: () -> *SkeletalAnimation #foreign libjoltc "JPH_SkeletalAnimation_Create";
+SkeletalAnimation_Destroy :: (animation: *SkeletalAnimation) -> void #foreign libjoltc "JPH_SkeletalAnimation_Destroy";
+SkeletalAnimation_GetDuration :: (animation: *SkeletalAnimation) -> float #foreign libjoltc "JPH_SkeletalAnimation_GetDuration";
+SkeletalAnimation_IsLooping :: (animation: *SkeletalAnimation) -> bool #foreign libjoltc "JPH_SkeletalAnimation_IsLooping";
+SkeletalAnimation_SetIsLooping :: (animation: *SkeletalAnimation, looping: bool) -> void #foreign libjoltc "JPH_SkeletalAnimation_SetIsLooping";
+SkeletalAnimation_ScaleJoints :: (animation: *SkeletalAnimation, scale: float) -> void #foreign libjoltc "JPH_SkeletalAnimation_ScaleJoints";
+SkeletalAnimation_Sample :: (animation: *SkeletalAnimation, time: float, pose: *SkeletonPose) -> void #foreign libjoltc "JPH_SkeletalAnimation_Sample";
+SkeletalAnimation_GetAnimatedJointCount :: (animation: *SkeletalAnimation) -> s32 #foreign libjoltc "JPH_SkeletalAnimation_GetAnimatedJointCount";
+SkeletalAnimation_AddAnimatedJoint :: (animation: *SkeletalAnimation, jointName: *u8) -> void #foreign libjoltc "JPH_SkeletalAnimation_AddAnimatedJoint";
+SkeletalAnimation_AddKeyframe :: (animation: *SkeletalAnimation, jointIndex: s32, time: float, translation: *Vec3, rotation: *Quat) -> void #foreign libjoltc "JPH_SkeletalAnimation_AddKeyframe";
+/* SkeletonMapper */
+SkeletonMapper_Create :: () -> *SkeletonMapper #foreign libjoltc "JPH_SkeletonMapper_Create";
+SkeletonMapper_Destroy :: (mapper: *SkeletonMapper) -> void #foreign libjoltc "JPH_SkeletonMapper_Destroy";
+SkeletonMapper_Initialize :: (mapper: *SkeletonMapper, skeleton1: *Skeleton, neutralPose1: *Mat4, skeleton2: *Skeleton, neutralPose2: *Mat4) -> void #foreign libjoltc "JPH_SkeletonMapper_Initialize";
+SkeletonMapper_LockAllTranslations :: (mapper: *SkeletonMapper, skeleton2: *Skeleton, neutralPose2: *Mat4) -> void #foreign libjoltc "JPH_SkeletonMapper_LockAllTranslations";
+SkeletonMapper_LockTranslations :: (mapper: *SkeletonMapper, skeleton2: *Skeleton, lockedTranslations: *bool, neutralPose2: *Mat4) -> void #foreign libjoltc "JPH_SkeletonMapper_LockTranslations";
+SkeletonMapper_Map :: (mapper: *SkeletonMapper, pose1ModelSpace: *Mat4, pose2LocalSpace: *Mat4, outPose2ModelSpace: *Mat4) -> void #foreign libjoltc "JPH_SkeletonMapper_Map";
+SkeletonMapper_MapReverse :: (mapper: *SkeletonMapper, pose2ModelSpace: *Mat4, outPose1ModelSpace: *Mat4) -> void #foreign libjoltc "JPH_SkeletonMapper_MapReverse";
+SkeletonMapper_GetMappedJointIndex :: (mapper: *SkeletonMapper, joint1Index: s32) -> s32 #foreign libjoltc "JPH_SkeletonMapper_GetMappedJointIndex";
+SkeletonMapper_IsJointTranslationLocked :: (mapper: *SkeletonMapper, joint2Index: s32) -> bool #foreign libjoltc "JPH_SkeletonMapper_IsJointTranslationLocked";
+/* RagdollSettings */
 RagdollSettings_Create :: () -> *RagdollSettings #foreign libjoltc "JPH_RagdollSettings_Create";
 RagdollSettings_Destroy :: (settings: *RagdollSettings) -> void #foreign libjoltc "JPH_RagdollSettings_Destroy";
 RagdollSettings_GetSkeleton :: (character: *RagdollSettings) -> *Skeleton #foreign libjoltc "JPH_RagdollSettings_GetSkeleton";
@@ -1851,13 +1899,35 @@ RagdollSettings_DisableParentChildCollisions :: (settings: *RagdollSettings, joi
 RagdollSettings_CalculateBodyIndexToConstraintIndex :: (settings: *RagdollSettings) -> void #foreign libjoltc "JPH_RagdollSettings_CalculateBodyIndexToConstraintIndex";
 RagdollSettings_GetConstraintIndexForBodyIndex :: (settings: *RagdollSettings, bodyIndex: s32) -> s32 #foreign libjoltc "JPH_RagdollSettings_GetConstraintIndexForBodyIndex";
 RagdollSettings_CalculateConstraintIndexToBodyIdxPair :: (settings: *RagdollSettings) -> void #foreign libjoltc "JPH_RagdollSettings_CalculateConstraintIndexToBodyIdxPair";
+RagdollSettings_ResizeParts :: (settings: *RagdollSettings, count: s32) -> void #foreign libjoltc "JPH_RagdollSettings_ResizeParts";
+RagdollSettings_GetPartCount :: (settings: *RagdollSettings) -> s32 #foreign libjoltc "JPH_RagdollSettings_GetPartCount";
+RagdollSettings_SetPartShape :: (settings: *RagdollSettings, partIndex: s32, shape: *Shape) -> void #foreign libjoltc "JPH_RagdollSettings_SetPartShape";
+RagdollSettings_SetPartPosition :: (settings: *RagdollSettings, partIndex: s32, position: *RVec3) -> void #foreign libjoltc "JPH_RagdollSettings_SetPartPosition";
+RagdollSettings_SetPartRotation :: (settings: *RagdollSettings, partIndex: s32, rotation: *Quat) -> void #foreign libjoltc "JPH_RagdollSettings_SetPartRotation";
+RagdollSettings_SetPartMotionType :: (settings: *RagdollSettings, partIndex: s32, motionType: MotionType) -> void #foreign libjoltc "JPH_RagdollSettings_SetPartMotionType";
+RagdollSettings_SetPartObjectLayer :: (settings: *RagdollSettings, partIndex: s32, layer: ObjectLayer) -> void #foreign libjoltc "JPH_RagdollSettings_SetPartObjectLayer";
+RagdollSettings_SetPartMassProperties :: (settings: *RagdollSettings, partIndex: s32, mass: float) -> void #foreign libjoltc "JPH_RagdollSettings_SetPartMassProperties";
+RagdollSettings_SetPartToParent :: (settings: *RagdollSettings, partIndex: s32, constraintSettings: *SwingTwistConstraintSettings) -> void #foreign libjoltc "JPH_RagdollSettings_SetPartToParent";
 RagdollSettings_CreateRagdoll :: (settings: *RagdollSettings, system: *PhysicsSystem, collisionGroup: CollisionGroupID, userData: u64) -> *Ragdoll #foreign libjoltc "JPH_RagdollSettings_CreateRagdoll";
+/* Ragdoll */
 Ragdoll_Destroy :: (ragdoll: *Ragdoll) -> void #foreign libjoltc "JPH_Ragdoll_Destroy";
 Ragdoll_AddToPhysicsSystem :: (ragdoll: *Ragdoll, activationMode: Activation, lockBodies: bool) -> void #foreign libjoltc "JPH_Ragdoll_AddToPhysicsSystem";
 Ragdoll_RemoveFromPhysicsSystem :: (ragdoll: *Ragdoll, lockBodies: bool) -> void #foreign libjoltc "JPH_Ragdoll_RemoveFromPhysicsSystem";
 Ragdoll_Activate :: (ragdoll: *Ragdoll, lockBodies: bool) -> void #foreign libjoltc "JPH_Ragdoll_Activate";
 Ragdoll_IsActive :: (ragdoll: *Ragdoll, lockBodies: bool) -> bool #foreign libjoltc "JPH_Ragdoll_IsActive";
 Ragdoll_ResetWarmStart :: (ragdoll: *Ragdoll) -> void #foreign libjoltc "JPH_Ragdoll_ResetWarmStart";
+Ragdoll_SetPose :: (ragdoll: *Ragdoll, pose: *SkeletonPose, lockBodies: bool) -> void #foreign libjoltc "JPH_Ragdoll_SetPose";
+Ragdoll_SetPose2 :: (ragdoll: *Ragdoll, rootOffset: *RVec3, jointMatrices: *Mat4, lockBodies: bool) -> void #foreign libjoltc "JPH_Ragdoll_SetPose2";
+Ragdoll_GetPose :: (ragdoll: *Ragdoll, outPose: *SkeletonPose, lockBodies: bool) -> void #foreign libjoltc "JPH_Ragdoll_GetPose";
+Ragdoll_GetPose2 :: (ragdoll: *Ragdoll, outRootOffset: *RVec3, outJointMatrices: *Mat4, lockBodies: bool) -> void #foreign libjoltc "JPH_Ragdoll_GetPose2";
+Ragdoll_DriveToPoseUsingMotors :: (ragdoll: *Ragdoll, pose: *SkeletonPose) -> void #foreign libjoltc "JPH_Ragdoll_DriveToPoseUsingMotors";
+Ragdoll_DriveToPoseUsingKinematics :: (ragdoll: *Ragdoll, pose: *SkeletonPose, deltaTime: float, lockBodies: bool) -> void #foreign libjoltc "JPH_Ragdoll_DriveToPoseUsingKinematics";
+Ragdoll_GetBodyCount :: (ragdoll: *Ragdoll) -> s32 #foreign libjoltc "JPH_Ragdoll_GetBodyCount";
+Ragdoll_GetBodyID :: (ragdoll: *Ragdoll, bodyIndex: s32) -> BodyID #foreign libjoltc "JPH_Ragdoll_GetBodyID";
+Ragdoll_GetConstraintCount :: (ragdoll: *Ragdoll) -> s32 #foreign libjoltc "JPH_Ragdoll_GetConstraintCount";
+Ragdoll_GetConstraint :: (ragdoll: *Ragdoll, constraintIndex: s32) -> *TwoBodyConstraint #foreign libjoltc "JPH_Ragdoll_GetConstraint";
+Ragdoll_GetRootTransform :: (ragdoll: *Ragdoll, outPosition: *RVec3, outRotation: *Quat, lockBodies: bool) -> void #foreign libjoltc "JPH_Ragdoll_GetRootTransform";
+Ragdoll_GetRagdollSettings :: (ragdoll: *Ragdoll) -> *RagdollSettings #foreign libjoltc "JPH_Ragdoll_GetRagdollSettings";
 /* JPH_EstimateCollisionResponse */
 EstimateCollisionResponse :: (body1: *Body, body2: *Body, manifold: *ContactManifold, combinedFriction: float, combinedRestitution: float, minVelocityForRestitution: float, numIterations: u32, result: *CollisionEstimationResult) -> void #foreign libjoltc "JPH_EstimateCollisionResponse";
 WheelSettings :: struct {}
@@ -1866,6 +1936,8 @@ WheelSettingsTV :: struct {}
 Wheel :: struct {}
 WheelWV :: struct {}
 WheelTV :: struct {}
+VehicleEngine :: struct {}
+VehicleTransmission :: struct {}
 VehicleTransmissionSettings :: struct {}
 VehicleCollisionTester :: struct {}
 VehicleCollisionTesterRay :: struct {}
@@ -1897,12 +1969,12 @@ VehicleConstraintSettings :: struct {
     controller:        *VehicleControllerSettings;
 }
 VehicleEngineSettings :: struct {
-    maxTorque:      float;
-    minRPM:         float;
-    maxRPM:         float;
-    //LinearCurve			normalizedTorque;
-    inertia:        float;
-    angularDamping: float;
+    maxTorque:        float;
+    minRPM:           float;
+    maxRPM:           float;
+    normalizedTorque: *LinearCurve;
+    inertia:          float;
+    angularDamping:   float;
 }
 VehicleDifferentialSettings :: struct {
     leftWheel:         s32;
@@ -1984,11 +2056,20 @@ Wheel_GetLateralLambda :: (wheel: *Wheel) -> float #foreign libjoltc "JPH_Wheel_
 Wheel_HasHitHardPoint :: (wheel: *Wheel) -> bool #foreign libjoltc "JPH_Wheel_HasHitHardPoint";
 /* VehicleAntiRollBar */
 VehicleAntiRollBar_Init :: (antiRollBar: *VehicleAntiRollBar) -> void #foreign libjoltc "JPH_VehicleAntiRollBar_Init";
-/* VehicleEngine */
+/* VehicleEngineSettings */
 VehicleEngineSettings_Init :: (settings: *VehicleEngineSettings) -> void #foreign libjoltc "JPH_VehicleEngineSettings_Init";
+/* VehicleEngine */
+VehicleEngine_ClampRPM :: (engine: *VehicleEngine) -> void #foreign libjoltc "JPH_VehicleEngine_ClampRPM";
+VehicleEngine_GetCurrentRPM :: (engine: *VehicleEngine) -> float #foreign libjoltc "JPH_VehicleEngine_GetCurrentRPM";
+VehicleEngine_SetCurrentRPM :: (engine: *VehicleEngine, rpm: float) -> void #foreign libjoltc "JPH_VehicleEngine_SetCurrentRPM";
+VehicleEngine_GetAngularVelocity :: (engine: *VehicleEngine) -> float #foreign libjoltc "JPH_VehicleEngine_GetAngularVelocity";
+VehicleEngine_GetTorque :: (engine: *VehicleEngine, acceleration: float) -> float #foreign libjoltc "JPH_VehicleEngine_GetTorque";
+VehicleEngine_ApplyTorque :: (engine: *VehicleEngine, torque: float, deltaTime: float) -> void #foreign libjoltc "JPH_VehicleEngine_ApplyTorque";
+VehicleEngine_ApplyDamping :: (engine: *VehicleEngine, deltaTime: float) -> void #foreign libjoltc "JPH_VehicleEngine_ApplyDamping";
+VehicleEngine_AllowSleep :: (engine: *VehicleEngine) -> bool #foreign libjoltc "JPH_VehicleEngine_AllowSleep";
 /* VehicleDifferentialSettings */
 VehicleDifferentialSettings_Init :: (settings: *VehicleDifferentialSettings) -> void #foreign libjoltc "JPH_VehicleDifferentialSettings_Init";
-/* VehicleTransmission */
+/* VehicleTransmissionSettings */
 VehicleTransmissionSettings_Create :: () -> *VehicleTransmissionSettings #foreign libjoltc "JPH_VehicleTransmissionSettings_Create";
 VehicleTransmissionSettings_Destroy :: (settings: *VehicleTransmissionSettings) -> void #foreign libjoltc "JPH_VehicleTransmissionSettings_Destroy";
 VehicleTransmissionSettings_GetMode :: (settings: *VehicleTransmissionSettings) -> TransmissionMode #foreign libjoltc "JPH_VehicleTransmissionSettings_GetMode";
@@ -2015,6 +2096,14 @@ VehicleTransmissionSettings_GetShiftDownRPM :: (settings: *VehicleTransmissionSe
 VehicleTransmissionSettings_SetShiftDownRPM :: (settings: *VehicleTransmissionSettings, value: float) -> void #foreign libjoltc "JPH_VehicleTransmissionSettings_SetShiftDownRPM";
 VehicleTransmissionSettings_GetClutchStrength :: (settings: *VehicleTransmissionSettings) -> float #foreign libjoltc "JPH_VehicleTransmissionSettings_GetClutchStrength";
 VehicleTransmissionSettings_SetClutchStrength :: (settings: *VehicleTransmissionSettings, value: float) -> void #foreign libjoltc "JPH_VehicleTransmissionSettings_SetClutchStrength";
+/* VehicleTransmission */
+VehicleTransmission_Set :: (transmission: *VehicleTransmission, currentGear: s32, clutchFriction: float) -> void #foreign libjoltc "JPH_VehicleTransmission_Set";
+VehicleTransmission_Update :: (transmission: *VehicleTransmission, deltaTime: float, currentRPM: float, forwardInput: float, canShiftUp: bool) -> void #foreign libjoltc "JPH_VehicleTransmission_Update";
+VehicleTransmission_GetCurrentGear :: (transmission: *VehicleTransmission) -> s32 #foreign libjoltc "JPH_VehicleTransmission_GetCurrentGear";
+VehicleTransmission_GetClutchFriction :: (transmission: *VehicleTransmission) -> float #foreign libjoltc "JPH_VehicleTransmission_GetClutchFriction";
+VehicleTransmission_IsSwitchingGear :: (transmission: *VehicleTransmission) -> bool #foreign libjoltc "JPH_VehicleTransmission_IsSwitchingGear";
+VehicleTransmission_GetCurrentRatio :: (transmission: *VehicleTransmission) -> float #foreign libjoltc "JPH_VehicleTransmission_GetCurrentRatio";
+VehicleTransmission_AllowSleep :: (transmission: *VehicleTransmission) -> bool #foreign libjoltc "JPH_VehicleTransmission_AllowSleep";
 /* VehicleCollisionTester */
 VehicleCollisionTester_Destroy :: (tester: *VehicleCollisionTester) -> void #foreign libjoltc "JPH_VehicleCollisionTester_Destroy";
 VehicleCollisionTester_GetObjectLayer :: (tester: *VehicleCollisionTester) -> ObjectLayer #foreign libjoltc "JPH_VehicleCollisionTester_GetObjectLayer";
@@ -2033,10 +2122,10 @@ WheelSettingsWV_GetAngularDamping :: (settings: *WheelSettingsWV) -> float #fore
 WheelSettingsWV_SetAngularDamping :: (settings: *WheelSettingsWV, value: float) -> void #foreign libjoltc "JPH_WheelSettingsWV_SetAngularDamping";
 WheelSettingsWV_GetMaxSteerAngle :: (settings: *WheelSettingsWV) -> float #foreign libjoltc "JPH_WheelSettingsWV_GetMaxSteerAngle";
 WheelSettingsWV_SetMaxSteerAngle :: (settings: *WheelSettingsWV, value: float) -> void #foreign libjoltc "JPH_WheelSettingsWV_SetMaxSteerAngle";
-//JPH_CAPI JPH_LinearCurve* JPH_WheelSettingsWV_GetLongitudinalFriction(const JPH_WheelSettingsWV* settings);
-//JPH_CAPI void JPH_WheelSettingsWV_SetLongitudinalFriction(JPH_WheelSettingsWV* settings, const JPH_LinearCurve* value);
-//JPH_CAPI JPH_LinearCurve* JPH_WheelSettingsWV_GetLateralFriction(const JPH_WheelSettingsWV* settings);
-//JPH_CAPI void JPH_WheelSettingsWV_SetLateralFriction(JPH_WheelSettingsWV* settings, const JPH_LinearCurve* value);
+WheelSettingsWV_GetLongitudinalFriction :: (settings: *WheelSettingsWV) -> *LinearCurve #foreign libjoltc "JPH_WheelSettingsWV_GetLongitudinalFriction";
+WheelSettingsWV_SetLongitudinalFriction :: (settings: *WheelSettingsWV, value: *LinearCurve) -> void #foreign libjoltc "JPH_WheelSettingsWV_SetLongitudinalFriction";
+WheelSettingsWV_GetLateralFriction :: (settings: *WheelSettingsWV) -> *LinearCurve #foreign libjoltc "JPH_WheelSettingsWV_GetLateralFriction";
+WheelSettingsWV_SetLateralFriction :: (settings: *WheelSettingsWV, value: *LinearCurve) -> void #foreign libjoltc "JPH_WheelSettingsWV_SetLateralFriction";
 WheelSettingsWV_GetMaxBrakeTorque :: (settings: *WheelSettingsWV) -> float #foreign libjoltc "JPH_WheelSettingsWV_GetMaxBrakeTorque";
 WheelSettingsWV_SetMaxBrakeTorque :: (settings: *WheelSettingsWV, value: float) -> void #foreign libjoltc "JPH_WheelSettingsWV_SetMaxBrakeTorque";
 WheelSettingsWV_GetMaxHandBrakeTorque :: (settings: *WheelSettingsWV) -> float #foreign libjoltc "JPH_WheelSettingsWV_GetMaxHandBrakeTorque";
@@ -2066,8 +2155,33 @@ WheeledVehicleController_GetBrakeInput :: (controller: *WheeledVehicleController
 WheeledVehicleController_SetHandBrakeInput :: (controller: *WheeledVehicleController, handBrakeInput: float) -> void #foreign libjoltc "JPH_WheeledVehicleController_SetHandBrakeInput";
 WheeledVehicleController_GetHandBrakeInput :: (controller: *WheeledVehicleController) -> float #foreign libjoltc "JPH_WheeledVehicleController_GetHandBrakeInput";
 WheeledVehicleController_GetWheelSpeedAtClutch :: (controller: *WheeledVehicleController) -> float #foreign libjoltc "JPH_WheeledVehicleController_GetWheelSpeedAtClutch";
-/* WheelSettingsTV - WheelTV - TrackedVehicleController */
-/* TODO: Add VehicleTrack and VehicleTrackSettings */
+WheeledVehicleController_SetTireMaxImpulseCallback :: (controller: *WheeledVehicleController, tireMaxImpulseCallback: TireMaxImpulseCallback, userData: *void) -> void #foreign libjoltc "JPH_WheeledVehicleController_SetTireMaxImpulseCallback";
+WheeledVehicleController_GetEngine :: (controller: *WheeledVehicleController) -> *VehicleEngine #foreign libjoltc "JPH_WheeledVehicleController_GetEngine";
+WheeledVehicleController_GetTransmission :: (controller: *WheeledVehicleController) -> *VehicleTransmission #foreign libjoltc "JPH_WheeledVehicleController_GetTransmission";
+VehicleTrack :: struct {}
+TrackSide :: enum u32 {
+    Left  :: 0;
+    Right :: 1;
+}
+VehicleTrackSettings :: struct {
+    drivenWheel:       u32;
+    wheels:            *u32;
+    wheelsCount:       u32;
+    inertia:           float;
+    angularDamping:    float;
+    maxBrakeTorque:    float;
+    differentialRatio: float;
+}
+VehicleTrackSettings_Init :: (settings: *VehicleTrackSettings) -> void #foreign libjoltc "JPH_VehicleTrackSettings_Init";
+VehicleTrack_GetAngularVelocity :: (track: *VehicleTrack) -> float #foreign libjoltc "JPH_VehicleTrack_GetAngularVelocity";
+VehicleTrack_SetAngularVelocity :: (track: *VehicleTrack, velocity: float) -> void #foreign libjoltc "JPH_VehicleTrack_SetAngularVelocity";
+VehicleTrack_GetDrivenWheel :: (track: *VehicleTrack) -> u32 #foreign libjoltc "JPH_VehicleTrack_GetDrivenWheel";
+VehicleTrack_GetInertia :: (track: *VehicleTrack) -> float #foreign libjoltc "JPH_VehicleTrack_GetInertia";
+VehicleTrack_GetAngularDamping :: (track: *VehicleTrack) -> float #foreign libjoltc "JPH_VehicleTrack_GetAngularDamping";
+VehicleTrack_GetMaxBrakeTorque :: (track: *VehicleTrack) -> float #foreign libjoltc "JPH_VehicleTrack_GetMaxBrakeTorque";
+VehicleTrack_GetDifferentialRatio :: (track: *VehicleTrack) -> float #foreign libjoltc "JPH_VehicleTrack_GetDifferentialRatio";
+TrackedVehicleController_GetTrack :: (controller: *TrackedVehicleController, side: TrackSide) -> *VehicleTrack #foreign libjoltc "JPH_TrackedVehicleController_GetTrack";
+/* WheelSettingsTV */
 WheelSettingsTV_Create :: () -> *WheelSettingsTV #foreign libjoltc "JPH_WheelSettingsTV_Create";
 WheelSettingsTV_GetLongitudinalFriction :: (settings: *WheelSettingsTV) -> float #foreign libjoltc "JPH_WheelSettingsTV_GetLongitudinalFriction";
 WheelSettingsTV_SetLongitudinalFriction :: (settings: *WheelSettingsTV, value: float) -> void #foreign libjoltc "JPH_WheelSettingsTV_SetLongitudinalFriction";
@@ -2089,6 +2203,8 @@ TrackedVehicleController_GetRightRatio :: (controller: *TrackedVehicleController
 TrackedVehicleController_SetRightRatio :: (controller: *TrackedVehicleController, value: float) -> void #foreign libjoltc "JPH_TrackedVehicleController_SetRightRatio";
 TrackedVehicleController_GetBrakeInput :: (controller: *TrackedVehicleController) -> float #foreign libjoltc "JPH_TrackedVehicleController_GetBrakeInput";
 TrackedVehicleController_SetBrakeInput :: (controller: *TrackedVehicleController, value: float) -> void #foreign libjoltc "JPH_TrackedVehicleController_SetBrakeInput";
+TrackedVehicleController_GetEngine :: (controller: *TrackedVehicleController) -> *VehicleEngine #foreign libjoltc "JPH_TrackedVehicleController_GetEngine";
+TrackedVehicleController_GetTransmission :: (controller: *TrackedVehicleController) -> *VehicleTransmission #foreign libjoltc "JPH_TrackedVehicleController_GetTransmission";
 /* MotorcycleController */
 MotorcycleControllerSettings_Create :: () -> *MotorcycleControllerSettings #foreign libjoltc "JPH_MotorcycleControllerSettings_Create";
 MotorcycleControllerSettings_GetMaxLeanAngle :: (settings: *MotorcycleControllerSettings) -> float #foreign libjoltc "JPH_MotorcycleControllerSettings_GetMaxLeanAngle";
@@ -2118,6 +2234,19 @@ MotorcycleController_GetLeanSpringIntegrationCoefficientDecay :: (controller: *M
 MotorcycleController_SetLeanSpringIntegrationCoefficientDecay :: (controller: *MotorcycleController, value: float) -> void #foreign libjoltc "JPH_MotorcycleController_SetLeanSpringIntegrationCoefficientDecay";
 MotorcycleController_GetLeanSmoothingFactor :: (controller: *MotorcycleController) -> float #foreign libjoltc "JPH_MotorcycleController_GetLeanSmoothingFactor";
 MotorcycleController_SetLeanSmoothingFactor :: (controller: *MotorcycleController, value: float) -> void #foreign libjoltc "JPH_MotorcycleController_SetLeanSmoothingFactor";
+/* LinearCurve */
+LinearCurve_Create :: () -> *LinearCurve #foreign libjoltc "JPH_LinearCurve_Create";
+LinearCurve_Destroy :: (curve: *LinearCurve) -> void #foreign libjoltc "JPH_LinearCurve_Destroy";
+LinearCurve_Clear :: (curve: *LinearCurve) -> void #foreign libjoltc "JPH_LinearCurve_Clear";
+LinearCurve_Reserve :: (curve: *LinearCurve, numPoints: u32) -> void #foreign libjoltc "JPH_LinearCurve_Reserve";
+LinearCurve_AddPoint :: (curve: *LinearCurve, x: float, y: float) -> void #foreign libjoltc "JPH_LinearCurve_AddPoint";
+LinearCurve_Sort :: (curve: *LinearCurve) -> void #foreign libjoltc "JPH_LinearCurve_Sort";
+LinearCurve_GetMinX :: (curve: *LinearCurve) -> float #foreign libjoltc "JPH_LinearCurve_GetMinX";
+LinearCurve_GetMaxX :: (curve: *LinearCurve) -> float #foreign libjoltc "JPH_LinearCurve_GetMaxX";
+LinearCurve_GetValue :: (curve: *LinearCurve, x: float) -> float #foreign libjoltc "JPH_LinearCurve_GetValue";
+LinearCurve_GetPointCount :: (curve: *LinearCurve) -> u32 #foreign libjoltc "JPH_LinearCurve_GetPointCount";
+LinearCurve_GetPoint :: (curve: *LinearCurve, index: u32, result: *Point) -> void #foreign libjoltc "JPH_LinearCurve_GetPoint";
+LinearCurve_GetPoints :: (curve: *LinearCurve, points: *Point, count: *u32) -> void #foreign libjoltc "JPH_LinearCurve_GetPoints";
 
 #scope_file
 
