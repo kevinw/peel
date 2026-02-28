@@ -179,6 +179,11 @@ generate_interface_module_output :: (using p: *JDLL_Metaprogram_Plugin) -> (ok: 
     print_to_builder(*sb, "% JDLL interface module '%'\n\n", GENERATED_MODULE_START_TAG, interface_module_output);
 
     scoped_program_print_procedure_bodies(false);
+    
+    if exported.count == 0 {
+        compiler_report(tprint("JDLL: no exported procedures found for '%'; cannot generate interface module.", interface_module_output));
+        return false;
+    }
 
     for entry: exported {
         decl := entry.decl;
