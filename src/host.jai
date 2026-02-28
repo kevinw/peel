@@ -84,6 +84,17 @@ main :: () {
             }
         }
     }
+    
+    
+    env_max_frames, did_parse := try_parse_env_int("PEEL_MAX_FRAMES");
+    if did_parse {
+        if max_frames == 0
+            max_frames = env_max_frames;
+        else
+            max_frames = min(env_max_frames, max_frames);
+    } else {
+    }
+    
 
     #if !SINGLE_BINARY {
         // Decide which app DLL to load.
@@ -114,8 +125,11 @@ main :: () {
 
         app := Single_Binary_App.{};
     }
+    
+    init_ctx: Init_Ctx;
+    init_ctx.max_frames = max_frames;
 
-    init_res := app.on_host_message(.{type = .Init, init_ctx = {max_frames = max_frames}});
+    init_res := app.on_host_message({type = .Init, init_ctx = init_ctx});
     if !init_res.success {
         log_error("App not initialized correctly, abort!");
         exit(1);
@@ -269,3 +283,4 @@ case .MACOS;   #import "Objective_C";
 }
 Debug :: #import "Debug"(USE_GRAPHICS=false);
 did_render_first_frame := false;
+#import "Env_Vars";

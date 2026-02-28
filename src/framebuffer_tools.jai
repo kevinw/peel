@@ -23,18 +23,6 @@ fb_parse_env_int :: (name: string, default: s64 = 0) -> s64 {
     return cast(s64) parsed;
 }
 
-fb_try_parse_env_int :: (name: string) -> (s64, bool) {
-    value_c := getenv(temp_c_string(name));
-    if !value_c return 0, false;
-    value_str := to_string(value_c, c_style_strlen(value_c));
-    parsed, ok, _ := String.string_to_int(value_str);
-    if !ok {
-        log_error("Invalid %='%'. Expected integer.", name, value_str);
-        return 0, false;
-    }
-    return cast(s64) parsed, true;
-}
-
 fb_collect_swapchain_framebuffer_stats :: (view: Gpu_Texture_View) -> (FB_Framebuffer_Stats, bool) {
     stats: FB_Framebuffer_Stats;
     width, height, size_ok := gpu_texture_view_size(view);
@@ -142,16 +130,27 @@ fb_validate_swapchain_readback_non_black :: (view: Gpu_Texture_View, backend_lab
     return ok;
 }
 
-fb_dump_swapchain_thumbnail_ppm :: (view: Gpu_Texture_View, output_path: string, thumb_width: u32 = 96, thumb_height: u32 = 96) -> bool {
+fb_dump_swapchain_thumbnail_jpeg :: (view: Gpu_Texture_View, output_path: string, thumb_width: u32 = DEFAULT_SNAPSHOT_WIDTH, thumb_height: u32 = DEFAULT_SNAPSHOT_HEIGHT) -> bool {
     width, height, ok := gpu_texture_view_size(view);
-    if !ok || width <= 1 || height <= 1 return false;
-    if thumb_width == 0 || thumb_height == 0 return false;
+    assert(ok);
+    if !ok return false;
+    if width <= 1 || height <= 1 {
+        log_error("fb_dump_swapchain_thumbnail_jpeg: invalid texture size <= 1 (% x %)", width, height);
+        return false;
+    }
+    if thumb_width == 0 || thumb_height == 0 {
+        log_error("fb_dump_swapchain_thumbnail_jpeg: invalid thumb size specified");
+        return false;
+    }
 
     bytes_per_row := cast(s64) width * 4;
     total_bytes := bytes_per_row * cast(s64) height;
     pixels := NewArray(total_bytes, u8);
     defer array_free(pixels);
-    if !gpu_readback_texture_view_bgra8(view, pixels, bytes_per_row) return false;
+    if !gpu_readback_texture_view_bgra8(view, pixels, bytes_per_row) {
+        log_error("fb_dump_swapchain_thumbnail_jpeg: failed to readback texture");
+        return false;
+    }
 
     body_len := cast(s64) thumb_width * cast(s64) thumb_height * 3;
     body := NewArray(body_len, u8);
@@ -170,18 +169,28 @@ fb_dump_swapchain_thumbnail_ppm :: (view: Gpu_Texture_View, output_path: string,
         }
     }
 
-    header := tprint("P6\n% %\n255\n", thumb_width, thumb_height);
-    out := NewArray(header.count + body_len, u8);
-    defer array_free(out);
-    memcpy(out.data, header.data, header.count);
-    memcpy(out.data + header.count, body.data, body_len);
-    return File.write_entire_file(output_path, out.data, out.count);
+    write_ok := stbi_write_jpg(temp_c_string(output_path),
+                               cast(s32) thumb_width,
+                               cast(s32) thumb_height,
+                               3,
+                               body.data,
+                               90);
+    
+    success := write_ok != 0;
+    if !success {
+        log_error("fb_dump_swapchain_thumbnail_jpeg: failed to write JPEG file");
+    } else {
+        log("PEEL_SNAPSHOT wrote thumbnail (%x%) to %", thumb_width, thumb_height, output_path);
+    }
+    return success;
 }
 
 #scope_file
 #import "Math";
 File :: #import "File";
 String :: #import "String";
+#import "stb_image_write";
 using,only(getenv) POSIX :: #import "POSIX";
 #import "Basic";
 #import "sgpu";
+#import "Env_Vars";

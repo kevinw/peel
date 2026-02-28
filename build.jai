@@ -122,7 +122,7 @@ PLATFORM_DIR :: #run get_platform_dir(OS); // win, macos, linux
 
         if script_opts.dll break; // We only need one host when we're building dll.
     }
-
+    
     // Build the DLL(s).
     if script_opts.dll {
         if !build_jdll("Game_Sound", "src/dlls/Game_Sound.jai", script_opts) {
@@ -261,7 +261,7 @@ get_dynamic_library_paths :: () -> []string /* temp allocated */ {
         "ImGui",
         //"SDL3/lib",
         "assimp/lib",
-        //"JoltC/lib",
+        "JoltC/lib",
         //"SDL_gpu_ext/lib",
         //"ImGuizmo/lib",
         "Game_Sound/lib",
@@ -710,10 +710,10 @@ parallel_build_all_and_exit :: (cmd_line_args: []string, script_opts: Build_Scri
         }
 
         exit(0);
+    } else {
+        log_error("Parallel build failed.");
+        exit(1);
     }
-
-    log_error("Parallel build failed.");
-    exit(1);
 }
 
 #import "Basic";

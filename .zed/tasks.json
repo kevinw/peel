@@ -1,5 +1,9 @@
 [
   {
+    "label": "terrain_test",
+    "command": "jai ~/src/peel/build.jai - src/apps/terrain_test.jai -run",
+  },
+  {
     "label": "physics_test",
     "command": "jai ~/src/peel/build.jai - src/apps/physics_test.jai -run",
   },

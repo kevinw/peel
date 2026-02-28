@@ -11,6 +11,7 @@ APP_FILES :: string.[
     "fluid2d.jai",
     "ripple_heightfield.jai",
     "gizmos_test.jai",
+    "terrain_test.jai",
 ];
 
 active_app_filename :: () -> string {

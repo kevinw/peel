@@ -1,12 +1,13 @@
 [
   {
-    "label": "debug textured_triangle",
+    "label": "debug terrain_test",
     "build": {
-      "command": "jai ~/src/peel/build.jai - src/apps/textured_triangle.jai",
+      "command": "jai ~/src/peel/build.jai - src/apps/terrain_test.jai",
     },
     "request": "launch",
     "mode": "debug",
-    "program": "~/src/peel/dist/textured_triangle",
+    "program": "./terrain_test",
+    "cwd": "/Users/kev/src/peel/dist",
     "adapter": "CodeLLDB",
   },
 ]

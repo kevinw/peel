@@ -22,14 +22,17 @@ Readback_Stats :: struct {
     prev_avg_luma: float;
 }
 
-readback_stats_reset :: (state: *Readback_Stats, snapshot_default_w: s64 = 96, snapshot_default_h: s64 = 96) {
+DEFAULT_SNAPSHOT_WIDTH  :u32 : 500;
+DEFAULT_SNAPSHOT_HEIGHT :u32 : 500;
+
+readback_stats_reset :: (state: *Readback_Stats, snapshot_default_w: s64 = DEFAULT_SNAPSHOT_WIDTH, snapshot_default_h: s64 = DEFAULT_SNAPSHOT_HEIGHT) {
     state.* = .{
         snapshot_width  = max(1, snapshot_default_w),
         snapshot_height = max(1, snapshot_default_h),
     };
 }
 
-readback_stats_init :: (state: *Readback_Stats, log_prefix: string, snapshot_default_w: s64 = 96, snapshot_default_h: s64 = 96, enable_export_jpg := false) {
+readback_stats_init :: (state: *Readback_Stats, log_prefix: string, snapshot_default_w: s64 = DEFAULT_SNAPSHOT_WIDTH, snapshot_default_h: s64 = DEFAULT_SNAPSHOT_HEIGHT) {
     readback_stats_reset(state, snapshot_default_w, snapshot_default_h);
 
     test_readback, _ := readback_stats_env_int("PEEL_TEST_READBACK");
@@ -53,21 +56,17 @@ readback_stats_init :: (state: *Readback_Stats, log_prefix: string, snapshot_def
     snapshot_h, snapshot_h_set := readback_stats_env_int("PEEL_SNAPSHOT_H");
     if snapshot_h_set state.snapshot_height = max(1, snapshot_h);
 
-    if enable_export_jpg {
-        export_jpg_mode, _ := readback_stats_env_int("PEEL_EXPORT_JPG");
-        state.export_jpg_mode = export_jpg_mode > 0;
-    }
 }
 
 readback_stats_needs_swapchain_readback :: (state: *Readback_Stats) -> bool {
     return state.test_readback || state.stats_mode || state.snapshot_mode || state.export_jpg_mode;
 }
 
-readback_stats_should_sample :: (state: *Readback_Stats, frame_num: s64) -> bool {
-    if !state.stats_mode return false;
-    if state.stats_samples_done >= state.stats_max_samples return false;
+readback_stats_should_sample :: (using state: *Readback_Stats, frame_num: s64) -> bool {
+    if !stats_mode return false;
+    if stats_samples_done >= stats_max_samples return false;
     if frame_num <= 0 return false;
-    return (frame_num % state.stats_every_frames) == 0;
+    return (frame_num % stats_every_frames) == 0;
 }
 
 readback_stats_log_sample :: (state: *Readback_Stats, log_prefix: string, frame_num: s64, using stats: FB_Framebuffer_Stats) {
@@ -94,10 +93,9 @@ readback_stats_advance_sample :: (using state: *Readback_Stats) -> bool {
     return stats_samples_done >= stats_max_samples;
 }
 
-readback_stats_maybe_dump_snapshot :: (using state: *Readback_Stats, view: Gpu_Texture_View, frame_num: s64, path_prefix: string, log_prefix: string) {
-    if !snapshot_mode return;
-    path := tprint("./%_frame_%.ppm", path_prefix, frame_num);
-    dumped := fb_dump_swapchain_thumbnail_ppm(view, path, cast(u32) snapshot_width, cast(u32) snapshot_height);
+readback_stats_dump_snapshot :: (using state: *Readback_Stats, view: Gpu_Texture_View, frame_num: s64, path_prefix: string, log_prefix: string) {
+    path := tprint("./%_frame_%.jpeg", path_prefix, frame_num);
+    dumped := fb_dump_swapchain_thumbnail_jpeg(view, path, cast(u32) snapshot_width, cast(u32) snapshot_height);
     if dumped {
         log("%_FRAMEBUFFER_SNAPSHOT frame=% path=%", log_prefix, frame_num, path);
     }
@@ -120,12 +118,12 @@ readback_stats_mark_jpg_exported :: (using state: *Readback_Stats) {
 }
 
 readback_stats_env_int :: (name: string) -> (s64, bool) {
-    value, set := fb_try_parse_env_int(name);
+    value, set := try_parse_env_int(name);
     return value, set;
 }
 
 frame_debug_init :: (readback_stats: *Readback_Stats) {
-    readback_stats_init(readback_stats, APP_NAME, snapshot_default_w = 128, snapshot_default_h = 128, enable_export_jpg = true);
+    readback_stats_init(readback_stats, APP_NAME, snapshot_default_w = DEFAULT_SNAPSHOT_WIDTH, snapshot_default_h = DEFAULT_SNAPSHOT_HEIGHT);
 
     if readback_stats_env_int("PEEL_SMOKE") > 0      smoke_mode = true;
     if readback_stats_env_int("PEEL_WINDOW_SNAPSHOT") > 0 window_snapshot_mode = true;
@@ -161,12 +159,18 @@ per_frame_debug :: (readback_stats: *Readback_Stats, frame_num: s64, swapchain_i
         log("WINDOW_PROBE completed; quitting.");
         app_quit_requested = true;
     }
+    
+    if readback_stats.snapshot_mode {
+        readback_stats.snapshot_mode = false;
+        readback_stats_dump_snapshot(readback_stats, swapchain_image, frame_num, tprint("%_snapshot", APP_NAME), APP_NAME);
+    }
 
     if readback_stats_should_sample(readback_stats, frame_num) {
         stats, ok := fb_collect_swapchain_framebuffer_stats(swapchain_image);
         if ok {
             readback_stats_log_sample(readback_stats, APP_NAME, frame_num, stats);
-            readback_stats_maybe_dump_snapshot(readback_stats, swapchain_image, frame_num, tprint("%_snapshot", APP_NAME), APP_NAME);
+        } else {
+            log("error: failed to collect framebuffer stats");
         }
         if readback_stats_advance_sample(readback_stats) {
             log("Framebuffer stats completed % samples; quitting.", readback_stats.stats_max_samples);
@@ -177,3 +181,6 @@ per_frame_debug :: (readback_stats: *Readback_Stats, frame_num: s64, swapchain_i
     ok := readback_stats_maybe_run_readback_check(readback_stats, swapchain_image, tprint("%_metal", APP_NAME));
     assert(ok, "Readback check failed: output appears uniform/black.");
 }
+
+#scope_file
+#import "Env_Vars";
