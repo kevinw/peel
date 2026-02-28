@@ -118,7 +118,9 @@ submit_and_present_with_ui :: (cmd_buff: Gpu_Command_Buffer) {
 app_swapchain_acquire :: () -> Gpu_Result, Gpu_Texture_View {
     result, swapchain_image := gpu_swapchain_acquire();
     assert(result == .SUCCESS);
-    current_ui_render_frame = ui_render_pre();
+    if swapchain_image != 0 {
+        current_ui_render_frame = ui_render_pre();
+    }
     return result, swapchain_image;
 }
 
@@ -212,6 +214,13 @@ create_window_and_init_sgpu :: () {
     result := gpu_init();
     assert(result == .SUCCESS);
     gpu_init_swapchain(xx window);
+
+
+    #if OS == .MACOS {
+        // HACK to make sure the window appears before we begin gpu stuff, which may cause it not to raise.
+        // there's probably a better fix for this!
+        Input.update_window_events();
+    }
 }
 
 host_quit :: (quit_ctx: Quit_Ctx) {
@@ -299,7 +308,7 @@ Input :: #import "Input";
         // TODO: on debug builds, check that it's actually an instance of CAMetalLayer.
         return cast(*CAMetalLayer)content_view.layer(content_view);
     }
-    
+
     #if LIVE_RELOAD_ENABLED {
     #scope_export
     reload_stdlib :: () {
@@ -309,18 +318,18 @@ Input :: #import "Input";
             NSWindow.setDelegate(window, context._macos_create_window_delegate());
         }
     } @on_reload
-    
+
     dll_unload :: () {
         // This is a hack to get live reloading working with Jai's Input module's NSApplication and NSWindow delegates.
         if window NSWindow.setDelegate(window, null);
         NSApplication.setDelegate(NSApp, null);
-    
+
         remove_old_objc_class("App_Delegate");
         remove_old_objc_class("Window_Delegate");
     } @on_unload
     }
-    
-    
+
+
     #scope_file
     remove_old_objc_class :: (name: *u8) {
         old_class := objc_getClass(name);

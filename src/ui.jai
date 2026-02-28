@@ -69,6 +69,9 @@ ui_render_pre :: () -> UI_Render_Frame_Info {
 }
 
 ui_render :: (wait_value: u64, signal_value: u64, ui_render_frame_info: UI_Render_Frame_Info) {
+    if ui_render_frame_info.pass == null {
+        return;
+    }
     ShowDemoWindow(null);
     call_event_functions(.ui);
     Render();
