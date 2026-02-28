@@ -33,16 +33,19 @@ Terrain_Voxel_Context :: struct {
     chunks: [..]Chunk;
     stream_radius_xz: s64;
     stream_layers_y: s64;
+    stream_layers_below_y: s64;
     demo_deform_time: float;
 }
 
-init :: (ctx: *Terrain_Voxel_Context, stream_radius_xz: s64 = 1, stream_layers_y: s64 = 1) {
+init :: (ctx: *Terrain_Voxel_Context, stream_radius_xz: s64 = 1, stream_layers_y: s64 = 1, stream_layers_below_y: s64 = 0) {
     ctx.* = .{};
     if stream_radius_xz < 0 stream_radius_xz = 0;
     if stream_layers_y < 1 stream_layers_y = 1;
+    if stream_layers_below_y < 0 stream_layers_below_y = 0;
 
     ctx.stream_radius_xz = stream_radius_xz;
     ctx.stream_layers_y = stream_layers_y;
+    ctx.stream_layers_below_y = stream_layers_below_y;
     ctx.chunks.allocator = context.allocator;
     ctx.initialized = true;
 }
@@ -75,6 +78,8 @@ carve_sphere :: (ctx: *Terrain_Voxel_Context, center: Vector3, radius: float, de
         it.dirty = true;
         it.mesh.dirty = true;
     }
+
+    sync_dirty_chunk_boundaries(ctx);
 }
 
 carve_capsule :: (ctx: *Terrain_Voxel_Context, a: Vector3, b: Vector3, radius: float, delta: float) {
@@ -86,6 +91,8 @@ carve_capsule :: (ctx: *Terrain_Voxel_Context, a: Vector3, b: Vector3, radius: f
         it.dirty = true;
         it.mesh.dirty = true;
     }
+
+    sync_dirty_chunk_boundaries(ctx);
 }
 
 tick_demo_deform :: (ctx: *Terrain_Voxel_Context, dt: float, world_time: float) {
@@ -101,10 +108,12 @@ update_streaming :: (ctx: *Terrain_Voxel_Context, center_world: Vector3) {
     if !ctx.initialized return;
 
     center_coord := world_to_chunk_coord(center_world);
+    min_stream_y := -ctx.stream_layers_below_y;
+    max_stream_y := ctx.stream_layers_y - 1;
 
     for dz: -ctx.stream_radius_xz..ctx.stream_radius_xz {
         for dx: -ctx.stream_radius_xz..ctx.stream_radius_xz {
-            for y: 0..ctx.stream_layers_y - 1 {
+            for y: min_stream_y..max_stream_y {
                 coord := Chunk_Coord.{
                     x = center_coord.x + dx,
                     y = y,
@@ -120,7 +129,7 @@ update_streaming :: (ctx: *Terrain_Voxel_Context, center_world: Vector3) {
     while i < ctx.chunks.count {
         c := ctx.chunks[i].coord;
         keep_xz := abs(c.x - center_coord.x) <= ctx.stream_radius_xz && abs(c.z - center_coord.z) <= ctx.stream_radius_xz;
-        keep_y := c.y >= 0 && c.y < ctx.stream_layers_y;
+        keep_y := c.y >= min_stream_y && c.y <= max_stream_y;
         if keep_xz && keep_y {
             i += 1;
             continue;
@@ -188,6 +197,23 @@ sample_pos_world :: inline (chunk: *Chunk, x: s64, y: s64, z: s64) -> Vector3 {
 
 get_density_f32 :: inline (chunk: *Chunk, x: s64, y: s64, z: s64) -> float {
     return cast(float) chunk.density[sample_index(x, y, z)] / Density_Scale;
+}
+
+density_grad :: inline (chunk: *Chunk, x: s64, y: s64, z: s64) -> Vector3 {
+    x0 := ifx x > 0 then x - 1 else x;
+    x1 := ifx x + 1 < Sample_Res then x + 1 else x;
+    y0 := ifx y > 0 then y - 1 else y;
+    y1 := ifx y + 1 < Sample_Res then y + 1 else y;
+    z0 := ifx z > 0 then z - 1 else z;
+    z1 := ifx z + 1 < Sample_Res then z + 1 else z;
+
+    gx := get_density_f32(chunk, x1, y,  z ) - get_density_f32(chunk, x0, y,  z );
+    gy := get_density_f32(chunk, x,  y1, z ) - get_density_f32(chunk, x,  y0, z );
+    gz := get_density_f32(chunk, x,  y,  z1) - get_density_f32(chunk, x,  y,  z0);
+    if x == 0 || x == Sample_Res - 1 gx = 0.0;
+    if y == 0 || y == Sample_Res - 1 gy = 0.0;
+    if z == 0 || z == Sample_Res - 1 gz = 0.0;
+    return safe_normalize(.{gx, gy, gz});
 }
 
 set_density_f32 :: inline (chunk: *Chunk, x: s64, y: s64, z: s64, d: float) {
@@ -274,6 +300,93 @@ apply_brush_capsule_density :: (chunk: *Chunk, a: Vector3, b: Vector3, radius: f
     }
 }
 
+copy_shared_face_x :: (src: *Chunk, dst: *Chunk, src_x: s64, dst_x: s64) {
+    for z: 0..Sample_Res - 1 {
+        for y: 0..Sample_Res - 1 {
+            src_i := sample_index(src_x, y, z);
+            dst_i := sample_index(dst_x, y, z);
+            dst.density[dst_i] = src.density[src_i];
+        }
+    }
+}
+
+copy_shared_face_y :: (src: *Chunk, dst: *Chunk, src_y: s64, dst_y: s64) {
+    for z: 0..Sample_Res - 1 {
+        for x: 0..Sample_Res - 1 {
+            src_i := sample_index(x, src_y, z);
+            dst_i := sample_index(x, dst_y, z);
+            dst.density[dst_i] = src.density[src_i];
+        }
+    }
+}
+
+copy_shared_face_z :: (src: *Chunk, dst: *Chunk, src_z: s64, dst_z: s64) {
+    for y: 0..Sample_Res - 1 {
+        for x: 0..Sample_Res - 1 {
+            src_i := sample_index(x, y, src_z);
+            dst_i := sample_index(x, y, dst_z);
+            dst.density[dst_i] = src.density[src_i];
+        }
+    }
+}
+
+sync_face_to_neighbor :: (ctx: *Terrain_Voxel_Context, chunk_i: s64, dx: s64, dy: s64, dz: s64) {
+    coord := ctx.chunks[chunk_i].coord;
+    neighbor_coord := Chunk_Coord.{coord.x + dx, coord.y + dy, coord.z + dz};
+    neighbor_i := find_chunk_index(ctx, neighbor_coord);
+    if neighbor_i < 0 return;
+
+    src := *ctx.chunks[chunk_i];
+    dst := *ctx.chunks[neighbor_i];
+
+    if dx == -1 copy_shared_face_x(src, dst, 0, Sample_Res - 1);
+    if dx == 1 copy_shared_face_x(src, dst, Sample_Res - 1, 0);
+    if dy == -1 copy_shared_face_y(src, dst, 0, Sample_Res - 1);
+    if dy == 1 copy_shared_face_y(src, dst, Sample_Res - 1, 0);
+    if dz == -1 copy_shared_face_z(src, dst, 0, Sample_Res - 1);
+    if dz == 1 copy_shared_face_z(src, dst, Sample_Res - 1, 0);
+
+    dst.dirty = true;
+    dst.mesh.dirty = true;
+}
+
+sync_dirty_chunk_boundaries :: (ctx: *Terrain_Voxel_Context) {
+    for i: 0..ctx.chunks.count - 1 {
+        if !ctx.chunks[i].dirty continue;
+        sync_face_to_neighbor(ctx, i, -1,  0,  0);
+        sync_face_to_neighbor(ctx, i, 1,  0,  0);
+        sync_face_to_neighbor(ctx, i,  0, -1,  0);
+        sync_face_to_neighbor(ctx, i,  0, 1,  0);
+        sync_face_to_neighbor(ctx, i,  0,  0, -1);
+        sync_face_to_neighbor(ctx, i,  0,  0, 1);
+    }
+}
+
+stitch_face_from_neighbor :: (ctx: *Terrain_Voxel_Context, chunk: *Chunk, dx: s64, dy: s64, dz: s64) {
+    coord := chunk.coord;
+    neighbor_coord := Chunk_Coord.{coord.x + dx, coord.y + dy, coord.z + dz};
+    neighbor_i := find_chunk_index(ctx, neighbor_coord);
+    if neighbor_i < 0 return;
+
+    neighbor := *ctx.chunks[neighbor_i];
+
+    if dx == -1 copy_shared_face_x(neighbor, chunk, Sample_Res - 1, 0);
+    if dx == 1 copy_shared_face_x(neighbor, chunk, 0, Sample_Res - 1);
+    if dy == -1 copy_shared_face_y(neighbor, chunk, Sample_Res - 1, 0);
+    if dy == 1 copy_shared_face_y(neighbor, chunk, 0, Sample_Res - 1);
+    if dz == -1 copy_shared_face_z(neighbor, chunk, Sample_Res - 1, 0);
+    if dz == 1 copy_shared_face_z(neighbor, chunk, 0, Sample_Res - 1);
+}
+
+stitch_chunk_from_neighbors :: (ctx: *Terrain_Voxel_Context, chunk: *Chunk) {
+    stitch_face_from_neighbor(ctx, chunk, -1,  0,  0);
+    stitch_face_from_neighbor(ctx, chunk, 1,  0,  0);
+    stitch_face_from_neighbor(ctx, chunk,  0, -1,  0);
+    stitch_face_from_neighbor(ctx, chunk,  0, 1,  0);
+    stitch_face_from_neighbor(ctx, chunk,  0,  0, -1);
+    stitch_face_from_neighbor(ctx, chunk,  0,  0, 1);
+}
+
 chunk_overlaps_sphere :: (chunk: *Chunk, center: Vector3, radius: float) -> bool {
     min_b := chunk.origin;
     max_b := chunk.origin + Vector3.{Chunk_World_Size, Chunk_World_Size, Chunk_World_Size};
@@ -293,33 +406,68 @@ chunk_overlaps_capsule :: (chunk: *Chunk, a: Vector3, b: Vector3, radius: float)
 }
 
 generate_chunk_density :: (chunk: *Chunk) {
+    seed0 := hash_coord_01(chunk.coord, 0xabc001);
+    seed1 := hash_coord_01(chunk.coord, 0xabc002);
+    seed2 := hash_coord_01(chunk.coord, 0xabc003);
+    seed3 := hash_coord_01(chunk.coord, 0xabc004);
+    seed4 := hash_coord_01(chunk.coord, 0xabc005);
+    seed5 := hash_coord_01(chunk.coord, 0xabc006);
+
+    warp_phase_x := (seed0 * 2.0 - 1.0) * 7.0;
+    warp_phase_z := (seed1 * 2.0 - 1.0) * 7.0;
+    warp_freq_x := 0.42 + seed2 * 0.35;
+    warp_freq_z := 0.39 + seed3 * 0.33;
+    warp_amp := 0.22 + seed4 * 0.35;
+
     for z: 0..Sample_Res - 1 {
         for y: 0..Sample_Res - 1 {
             for x: 0..Sample_Res - 1 {
                 p := sample_pos_world(chunk, x, y, z);
-                hill := -0.55 + sin(p.x * 0.42) * 0.18 + cos(p.z * 0.37) * 0.16;
-                hill += sin((p.x + p.z) * 0.13) * 0.08;
-                d := p.y - hill;
+
+                // Larger vertical relief with ridges plus broad undulation.
+                h0 := -0.92 + sin(p.x * 0.12) * 0.52 + cos(p.z * 0.10) * 0.46;
+                h1 := sin((p.x + p.z) * 0.055) * 0.66 + cos((p.x - p.z) * 0.072) * 0.42;
+
+                ridge0 := abs(sin(p.x * 0.24 + p.z * 0.19));
+                ridge1 := abs(cos(p.x * 0.16 - p.z * 0.27));
+                ridges := (ridge0 * ridge1) * 1.15 - 0.55;
+
+                detail := sin(p.x * 0.54 + p.z * 0.41) * 0.17 + cos(p.x * 0.61 - p.z * 0.58) * 0.14;
+
+                // Chunk-unique variation with edge fade to keep boundaries continuous.
+                u := cast(float) x / cast(float) (Sample_Res - 1);
+                v := cast(float) z / cast(float) (Sample_Res - 1);
+                edge_x := min(u, 1.0 - u) * 2.0;
+                edge_z := min(v, 1.0 - v) * 2.0;
+                edge_fade := smooth_falloff(min(edge_x, edge_z));
+                chunk_warp := (sin(p.x * warp_freq_x + warp_phase_x) + cos(p.z * warp_freq_z + warp_phase_z)) * 0.5;
+                chunk_warp *= warp_amp * edge_fade;
+
+                surface := h0 + h1 + ridges + detail + chunk_warp;
+                d := p.y - surface;
                 set_density_f32(chunk, x, y, z, d);
             }
         }
     }
 
-    seed0 := hash_coord_01(chunk.coord, 0xabc001);
-    seed1 := hash_coord_01(chunk.coord, 0xabc002);
-    seed2 := hash_coord_01(chunk.coord, 0xabc003);
-
     cave_center := chunk.origin + Vector3.{
-        (0.2 + seed0 * 0.6) * Chunk_World_Size,
-        0.25 * Chunk_World_Size + (seed1 - 0.5) * 0.2 * Chunk_World_Size,
-        (0.2 + seed2 * 0.6) * Chunk_World_Size,
+        (0.16 + seed0 * 0.68) * Chunk_World_Size,
+        0.18 * Chunk_World_Size + (seed1 - 0.5) * 0.42 * Chunk_World_Size,
+        (0.15 + seed2 * 0.70) * Chunk_World_Size,
     };
 
-    apply_brush_sphere_density(chunk, cave_center, 0.24 * Chunk_World_Size, +1.5);
+    // Deeper cavities and longer crevices.
+    apply_brush_sphere_density(chunk, cave_center, 0.30 * Chunk_World_Size, +2.1);
+    side_cave := cave_center + Vector3.{(seed3 - 0.5) * 0.55 * Chunk_World_Size, (seed4 - 0.5) * 0.24 * Chunk_World_Size, (seed5 - 0.5) * 0.55 * Chunk_World_Size};
+    apply_brush_sphere_density(chunk, side_cave, 0.18 * Chunk_World_Size, +1.6);
 
-    tunnel_a := cave_center + Vector3.{-0.35 * Chunk_World_Size, 0.05 * Chunk_World_Size, -0.28 * Chunk_World_Size};
-    tunnel_b := cave_center + Vector3.{ 0.45 * Chunk_World_Size, -0.02 * Chunk_World_Size, 0.38 * Chunk_World_Size};
-    apply_brush_capsule_density(chunk, tunnel_a, tunnel_b, 0.08 * Chunk_World_Size, +1.3);
+    tunnel_a := cave_center + Vector3.{-0.58 * Chunk_World_Size, 0.10 * Chunk_World_Size, -0.42 * Chunk_World_Size};
+    tunnel_b := cave_center + Vector3.{ 0.70 * Chunk_World_Size, -0.18 * Chunk_World_Size, 0.56 * Chunk_World_Size};
+    apply_brush_capsule_density(chunk, tunnel_a, tunnel_b, 0.11 * Chunk_World_Size, +1.9);
+
+    crevice_a := cave_center + Vector3.{-0.10 * Chunk_World_Size, 0.34 * Chunk_World_Size, -0.62 * Chunk_World_Size};
+    crevice_b := cave_center + Vector3.{ 0.18 * Chunk_World_Size, -0.44 * Chunk_World_Size, 0.64 * Chunk_World_Size};
+    apply_brush_capsule_density(chunk, crevice_a, crevice_b, 0.09 * Chunk_World_Size, +2.2);
 }
 
 add_chunk :: (ctx: *Terrain_Voxel_Context, coord: Chunk_Coord) {
@@ -332,6 +480,7 @@ add_chunk :: (ctx: *Terrain_Voxel_Context, coord: Chunk_Coord) {
     chunk.mesh.normals.allocator = context.allocator;
 
     generate_chunk_density(*chunk);
+    stitch_chunk_from_neighbors(ctx, *chunk);
     array_add(*ctx.chunks, chunk);
 }
 
@@ -471,14 +620,14 @@ rebuild_chunk_mesh :: (chunk: *Chunk) {
                     cp[i] = sample_pos_world(chunk, sx, sy, sz);
                     cd[i] = get_density_f32(chunk, sx, sy, sz);
                 }
-                cg[0] = .{cd[1] - cd[0], cd[3] - cd[0], cd[4] - cd[0]};
-                cg[1] = .{cd[1] - cd[0], cd[2] - cd[1], cd[5] - cd[1]};
-                cg[2] = .{cd[2] - cd[3], cd[2] - cd[1], cd[6] - cd[2]};
-                cg[3] = .{cd[2] - cd[3], cd[3] - cd[0], cd[7] - cd[3]};
-                cg[4] = .{cd[5] - cd[4], cd[7] - cd[4], cd[4] - cd[0]};
-                cg[5] = .{cd[5] - cd[4], cd[6] - cd[5], cd[5] - cd[1]};
-                cg[6] = .{cd[6] - cd[7], cd[6] - cd[5], cd[6] - cd[2]};
-                cg[7] = .{cd[6] - cd[7], cd[7] - cd[4], cd[7] - cd[3]};
+                cg[0] = density_grad(chunk, sx0, sy0, sz0);
+                cg[1] = density_grad(chunk, sx1, sy0, sz0);
+                cg[2] = density_grad(chunk, sx1, sy1, sz0);
+                cg[3] = density_grad(chunk, sx0, sy1, sz0);
+                cg[4] = density_grad(chunk, sx0, sy0, sz1);
+                cg[5] = density_grad(chunk, sx1, sy0, sz1);
+                cg[6] = density_grad(chunk, sx1, sy1, sz1);
+                cg[7] = density_grad(chunk, sx0, sy1, sz1);
 
                 for t: 0..5 {
                     tp: [4]Vector3;

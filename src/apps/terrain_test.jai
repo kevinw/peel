@@ -4,7 +4,6 @@
 terrain_voxel_ctx: Terrain_Voxel.Terrain_Voxel_Context;
 terrain_render_ctx: Terrain_Render.Terrain_Render_Context;
 terrain_mesh_compute_ctx: Terrain_Mesh_Compute.Terrain_Mesh_Compute_Context;
-terrain_use_compute_meshing :: true;
 
 terrain_depth_texture: Gpu_Texture;
 terrain_depth_view: Gpu_Texture_View;
@@ -60,13 +59,13 @@ ensure_depth_target :: (width: u32, height: u32) {
 }
 
 on_dll_init :: () {
-    Terrain_Voxel.init(*terrain_voxel_ctx, stream_radius_xz = 1, stream_layers_y = 1);
-    if terrain_use_compute_meshing {
-        compute_source := cast([]u8) get_transpiled(.METAL, terrain_mesh_build_chunk_compute);
-        assert(compute_source.count > 0, "Transpilation failed for terrain mesh compute shader.");
-        mesh_ok := Terrain_Mesh_Compute.init(*terrain_mesh_compute_ctx, compute_source);
-        assert(mesh_ok, "Terrain_Mesh_Compute initialization failed.");
-    }
+    Terrain_Voxel.init(*terrain_voxel_ctx, stream_radius_xz = 1, stream_layers_y = 2, stream_layers_below_y = 3);
+
+    compute_source := cast([]u8) get_transpiled(.METAL, terrain_mesh_build_chunk_compute);
+    assert(compute_source.count > 0, "Transpilation failed for terrain mesh compute shader.");
+    mesh_ok := Terrain_Mesh_Compute.init(*terrain_mesh_compute_ctx, compute_source);
+    assert(mesh_ok, "Terrain_Mesh_Compute initialization failed.");
+
     ok := Terrain_Render.init(*terrain_render_ctx, max_vertices = 1200000);
     assert(ok, "Terrain_Render initialization failed.");
     Terrain_Render.set_material(*terrain_render_ctx, tex_scale = 0.22, tri_sharpness = 3.0);
@@ -76,9 +75,7 @@ on_dll_init :: () {
 } @on_dll_init
 
 on_unload :: () {
-    if terrain_use_compute_meshing {
-        Terrain_Mesh_Compute.deinit(*terrain_mesh_compute_ctx);
-    }
+    Terrain_Mesh_Compute.deinit(*terrain_mesh_compute_ctx);
     Terrain_Render.deinit(*terrain_render_ctx);
     Terrain_Voxel.deinit(*terrain_voxel_ctx);
 } @on_unload
@@ -141,7 +138,7 @@ tick :: () {
             delta := mouse_pos - terrain_prev_mouse_pos;
             if delta.x != 0.0 || delta.y != 0.0 {
                 terrain_camera_yaw += delta.x * terrain_mouse_sensitivity;
-                terrain_camera_pitch -= delta.y * terrain_mouse_sensitivity;
+                terrain_camera_pitch += delta.y * terrain_mouse_sensitivity;
                 terrain_camera_pitch = clamp(terrain_camera_pitch, -1.5, 1.5);
                 used_mouse_look = true;
             }
@@ -173,11 +170,7 @@ tick :: () {
 
     Terrain_Voxel.update_streaming(*terrain_voxel_ctx, terrain_camera_pos);
     Terrain_Voxel.tick_demo_deform(*terrain_voxel_ctx, dt, t);
-    if terrain_use_compute_meshing {
-        Terrain_Mesh_Compute.rebuild_dirty_meshes(*terrain_mesh_compute_ctx, *terrain_voxel_ctx);
-    } else {
-        Terrain_Voxel.rebuild_dirty_meshes(*terrain_voxel_ctx);
-    }
+    Terrain_Mesh_Compute.rebuild_dirty_meshes(*terrain_mesh_compute_ctx, *terrain_voxel_ctx);
 
     aspect := viewport.x / max(viewport.y, 1.0);
     view_forward := terrain_forward_from_angles(terrain_camera_yaw, terrain_camera_pitch);

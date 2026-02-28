@@ -127,7 +127,7 @@ draw_uploaded :: (ctx: *Terrain_Render_Context, cmd: Gpu_Command_Buffer, vertex_
 
     pipeline := ctx.pipeline_no_depth;
     if depth_mode == .TEST {
-        gpu_set_depth_stencil_state(cmd, .{depth_test = .LESS, depth_mode = .READ});
+        gpu_set_depth_stencil_state(cmd, .{depth_test = .LESS, depth_mode = .READ | .WRITE});
         pipeline = ctx.pipeline_with_depth;
     } else {
         gpu_set_depth_stencil_state(cmd, .{depth_test = .ALWAYS, depth_mode = .NONE});

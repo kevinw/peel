@@ -24,6 +24,35 @@ tm_sample_index :: (x: u32, y: u32, z: u32) -> u32 {
     return x + y * TM_Sample_Res + z * TM_Sample_Res * TM_Sample_Res;
 }
 
+tm_density_at :: (density: *float, x: u32, y: u32, z: u32) -> float {
+    return density[tm_sample_index(x, y, z)];
+}
+
+tm_density_grad :: (density: *float, x: u32, y: u32, z: u32) -> Vector3 {
+    x0 := x;
+    if x0 > 0 x0 -= 1;
+    x1 := x;
+    if x1 + 1 < TM_Sample_Res x1 += 1;
+
+    y0 := y;
+    if y0 > 0 y0 -= 1;
+    y1 := y;
+    if y1 + 1 < TM_Sample_Res y1 += 1;
+
+    z0 := z;
+    if z0 > 0 z0 -= 1;
+    z1 := z;
+    if z1 + 1 < TM_Sample_Res z1 += 1;
+
+    gx := tm_density_at(density, x1, y,  z ) - tm_density_at(density, x0, y,  z );
+    gy := tm_density_at(density, x,  y1, z ) - tm_density_at(density, x,  y0, z );
+    gz := tm_density_at(density, x,  y,  z1) - tm_density_at(density, x,  y,  z0);
+    if x == 0 || x == TM_Sample_Res - 1 gx = 0.0;
+    if y == 0 || y == TM_Sample_Res - 1 gy = 0.0;
+    if z == 0 || z == TM_Sample_Res - 1 gz = 0.0;
+    return tm_safe_normalize(.{gx, gy, gz});
+}
+
 tm_interp_iso :: (pa: Vector3, pb: Vector3, da: float, db: float) -> Vector3 {
     denom := da - db;
     if abs(denom) < 0.000001 return pa;
@@ -231,14 +260,14 @@ terrain_mesh_build_chunk_compute :: (using in: TM_Compute_In, density: *float, p
     d6 := density[tm_sample_index(sx1, sy1, sz1)];
     d7 := density[tm_sample_index(sx0, sy1, sz1)];
 
-    g0 := Vector3.{d1 - d0, d3 - d0, d4 - d0};
-    g1 := Vector3.{d1 - d0, d2 - d1, d5 - d1};
-    g2 := Vector3.{d2 - d3, d2 - d1, d6 - d2};
-    g3 := Vector3.{d2 - d3, d3 - d0, d7 - d3};
-    g4 := Vector3.{d5 - d4, d7 - d4, d4 - d0};
-    g5 := Vector3.{d5 - d4, d6 - d5, d5 - d1};
-    g6 := Vector3.{d6 - d7, d6 - d5, d6 - d2};
-    g7 := Vector3.{d6 - d7, d7 - d4, d7 - d3};
+    g0 := tm_density_grad(density, sx0, sy0, sz0);
+    g1 := tm_density_grad(density, sx1, sy0, sz0);
+    g2 := tm_density_grad(density, sx1, sy1, sz0);
+    g3 := tm_density_grad(density, sx0, sy1, sz0);
+    g4 := tm_density_grad(density, sx0, sy0, sz1);
+    g5 := tm_density_grad(density, sx1, sy0, sz1);
+    g6 := tm_density_grad(density, sx1, sy1, sz1);
+    g7 := tm_density_grad(density, sx0, sy1, sz1);
 
     base := cell_idx * TM_Max_Verts_Per_Cell;
     emitted: u32 = 0;
