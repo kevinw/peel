@@ -114,6 +114,5 @@ tick :: () {
 } @on_tick
 
 #scope_file
-#import "Window_Creation";
 #import "Math";
 Input :: #import "Input";

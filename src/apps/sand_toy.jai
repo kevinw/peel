@@ -310,5 +310,4 @@ tick :: () {
 #import "Jai-Shader-Transpiler";
 SHR :: #import,file "../shader_hot_reload.jai";
 #load "shaders/sand_toy_shader.jai";
-#import "Window_Creation";
 Input :: #import "Input";

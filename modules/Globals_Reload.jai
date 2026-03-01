@@ -211,7 +211,51 @@ should_include_declaration :: (using p: *Globals_Reload_Metaprogram_Plugin, decl
         return false;
     }
 
+    import := decl.enclosing_load.enclosing_import;
+    if import != null && import.module_name == "" && globals_reload_decl_explicitly_binds_to_function_symbol(decl) {
+        decl_loc := make_location(cast(*Code_Node) decl);
+        compiler_report(
+            tprint("Globals_Reload: global '%' is a callable value (Procedure/Code). These are not reliably reload-safe and may leave stale pointers across DLL reloads.",
+                decl.name),
+            decl_loc,
+            mode = .WARNING);
+    }
+
     return true;
+}
+
+globals_reload_decl_explicitly_binds_to_function_symbol :: (decl: *Code_Declaration) -> bool {
+    if decl == null return false;
+    if decl.expression == null return false;
+    return globals_reload_expr_binds_to_function_symbol(decl.expression);
+}
+
+globals_reload_expr_binds_to_function_symbol :: (expr: *Code_Node) -> bool {
+    if expr == null return false;
+
+    if expr.kind == {
+        case .PROCEDURE_HEADER;
+            return true;
+
+        case .IDENT;
+            ident := cast(*Code_Ident) expr;
+            resolved := ident.resolved_declaration;
+            if resolved == null return false;
+            if resolved.expression == null return false;
+            if resolved.expression == expr return false;
+            return globals_reload_expr_binds_to_function_symbol(resolved.expression);
+
+        case .CAST;
+            cast_expr := cast(*Code_Cast) expr;
+            return globals_reload_expr_binds_to_function_symbol(cast_expr.expression);
+
+        case .RESOLVED_OVERLOAD;
+            resolved := cast(*Code_Resolved_Overload) expr;
+            return globals_reload_expr_binds_to_function_symbol(resolved.result);
+
+        case;
+            return false;
+    }
 }
 
 should_include_file_cached :: (using p: *Globals_Reload_Metaprogram_Plugin, file: *Message_File) -> (include: bool, was_new: bool) {
@@ -255,7 +299,14 @@ should_include_file :: (using p: *Globals_Reload_Metaprogram_Plugin, file: *Mess
         return false;
     }
 
-    is_stdlib := String.find_index_from_left(module_name, "/jai/modules") != -1;
+    // Module names are logical names like "Input", not filesystem paths.
+    // Detect stdlib by source path instead.
+    is_stdlib := false;
+    if String.find_index_from_left(file.fully_pathed_filename, "/jai/modules/") != -1 {
+        is_stdlib = true;
+    } else if String.find_index_from_left(file.fully_pathed_filename, "\\jai\\modules\\") != -1 {
+        is_stdlib = true;
+    }
 
     if !is_stdlib {
         return true;

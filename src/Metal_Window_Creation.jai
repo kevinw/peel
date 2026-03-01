@@ -1,0 +1,120 @@
+#if OS == .MACOS {
+    sgpu_macos_application_initialized := false;
+
+    set_nsview_layer :: (view: *NSView, layer: *CALayer) {
+        set_layer: (*void, Selector, *CALayer) -> void #c_call;
+        set_layer = xx objc_msgSend;
+        set_layer(view, selector("setLayer:"), layer);
+    }
+
+    init_macos_app_for_sgpu :: () {
+        if sgpu_macos_application_initialized return;
+
+        init_all_objective_c_selector_structs();
+        NSApplication.sharedApplication();
+
+        dg := context._macos_create_app_delegate();
+        NSApplication.setDelegate(NSApp, dg);
+
+        menu_bar := objc_init(objc_alloc(NSMenu));
+        autorelease(menu_bar);
+        NSApp.setMainMenu(NSApp, menu_bar);
+
+        S :: NSString.getTempString;
+
+        app_menu_item := menu_bar.addItemWithTitle(menu_bar, S(""), null, S(""));
+        autorelease(app_menu_item);
+
+        app_menu := objc_init(objc_alloc(NSMenu));
+        autorelease(app_menu);
+
+        fullscreen_item := app_menu.addItemWithTitle(app_menu, S("Enter Full Screen"), selector("toggleFullScreen:"), S("f"));
+        NSMenuItem.setKeyEquivalentModifierMask(fullscreen_item, NSEventModifierFlagControl | NSEventModifierFlagCommand);
+        app_menu.addItemWithTitle(app_menu, S("Quit"), selector("terminate:"), S("q"));
+        app_menu_item.setSubmenu(app_menu_item, app_menu);
+
+        NSApplication.setAppleMenu(NSApp, app_menu);
+        NSApplication.finishLaunching(NSApp);
+
+        sgpu_macos_application_initialized = true;
+    }
+
+    create_metal_window :: (width: int, height: int, window_name: string, window_x := -1, window_y := -1) -> *NSWindow {
+        init_macos_app_for_sgpu();
+
+        // On macOS window geometry is in points, while we want pixel-sized inputs.
+        target_screen := NSScreen.mainScreen();
+        pixels_to_points_factor := cast(CGFloat) 1 / NSScreen.backingScaleFactor(target_screen);
+        target_frame: NSRect = ---;
+        target_frame.origin = .{ xx window_x * pixels_to_points_factor, xx window_y * pixels_to_points_factor };
+        target_frame.size = .{ xx width * pixels_to_points_factor, xx height * pixels_to_points_factor };
+
+        window := NSWindow.initWithContentRect(objc_alloc(NSWindow), target_frame,
+            NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable,
+            NSBackingStoreBuffered, NO, target_screen);
+        autorelease(window);
+        NSWindow.setReleasedWhenClosed(window, NO);
+        NSWindow.setTitle(window, window_name);
+
+        wd := context._macos_create_window_delegate();
+        NSWindow.setDelegate(window, wd);
+        NSWindow.setCollectionBehavior(window, NSWindowCollectionBehaviorFullScreenPrimary | NSWindowCollectionBehaviorManaged);
+        NSWindow.makeKeyAndOrderFront(window, null);
+
+        view := objc_init(objc_alloc(NSView));
+        NSView.setWantsLayer(view, YES);
+        autorelease(view);
+
+        metal_layer_class := objc_getClass("CAMetalLayer");
+        assert(metal_layer_class != null, "CAMetalLayer class not found.");
+        metal_layer := objc_init(objc_alloc(metal_layer_class));
+        assert(metal_layer != null, "Failed to create CAMetalLayer.");
+        autorelease(metal_layer);
+        set_nsview_layer(view, cast(*CALayer) metal_layer);
+
+        NSWindow.setContentView(window, view);
+        NSWindow.makeFirstResponder(window, view);
+
+        if window_x == -1 && window_y == -1 {
+            NSWindow.center(window);
+        }
+
+        return window;
+    }
+
+    #scope_export
+    get_mouse_pointer_position :: (window: *NSWindow, right_handed: bool) -> x: int, y: int, success: bool {
+        pt := NSWindow.mouseLocationOutsideOfEventStream(window);
+
+        view := NSWindow.contentView(window);
+        backing_pt := NSView.convertPointToBacking(view, pt);
+
+        if !right_handed {
+            frame := NSView.frame(view);
+            fb := NSView.convertRectToBacking(view, frame);
+            backing_pt.y = fb.size.height - backing_pt.y;
+        }
+
+        return cast(int) backing_pt.x, cast(int) backing_pt.y, true;
+    }
+
+    get_mouse_pointer_position :: inline (right_handed := false) -> x: int, y: int, success: bool {
+        if !NSApp return 0, 0, false;
+
+        win := NSApplication.keyWindow(NSApp);
+        if !win return 0, 0, false;
+
+        x, y, success := get_mouse_pointer_position(win, right_handed);
+        return x, y, success;
+    }
+
+    #scope_export
+    get_dimensions :: (window: Window_Type, right_handed: bool) -> (x: s32, y: s32, width: s32, height: s32, success := true) {
+        view := NSWindow.contentView(window);
+        frame := NSView.frame(view);
+        fb := NSView.convertRectToBacking(view, frame);
+
+        y := ifx right_handed then fb.origin.y + fb.size.height else fb.origin.y;
+        return cast(s32) fb.origin.x, cast(s32) y, cast(s32) fb.size.width, cast(s32) fb.size.height;
+    }
+}

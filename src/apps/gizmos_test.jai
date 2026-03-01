@@ -95,4 +95,3 @@ tick :: () {
 Gizmo :: #import "Gizmo";
 Gizmo_Render :: #import "Gizmo_Render";
 #import "Math";
-#import "Window_Creation";

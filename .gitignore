@@ -50,3 +50,5 @@ dist/physics_test
 modules/JDLL/examples/example_jai_dynamic_library.dylib
 dist/terrain_test
 dist/sand_toy
+dist/sand_toy.dylib
+dist/terrain_test.dylib

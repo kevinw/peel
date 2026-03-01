@@ -192,6 +192,5 @@ tick :: () {
 #load "../SGPU_App_Common.jai";
 #import "Jai-Shader-Transpiler";
 #load "shaders/boids_shader.jai";
-#import "Window_Creation";
 #import "Random";
 SHR :: #import,file "../shader_hot_reload.jai";

@@ -7,4 +7,4 @@ load_sounds :: () #foreign Game_Sound_lib "_jdll_load_sounds";
 
 #scope_file
 #if OS == .MACOS   Game_Sound_lib :: #library,no_static_library "macos/Game_Sound";
-#if OS == .WINDOWS Game_Sound_lib :: #library,no_static_library "win/Game_Sound";
+#if OS == .WINDOWS Game_Sound_lib :: #library,no_static_library "windows/Game_Sound";

@@ -242,6 +242,7 @@ handle_app_live_reload :: (app: *App, ctx: *App_Update_Ctx, library_filename: *s
             if !(ctx.app_return_flags & .Load_App) {
                 // When we're just reloading, copy over the globals.
                 app_library_copy(app, *new_app);
+                reload_pointer_check_after_copy(app, *new_app);
             } else {
                 // When loading a different DLL, we need to copy over the Device and Window globals.
                 // This is so that the new app can use the same device and window as the old app.
@@ -266,6 +267,7 @@ handle_app_live_reload :: (app: *App, ctx: *App_Update_Ctx, library_filename: *s
 }
 
 #import "app_loader";
+#load "reload_pointer_check.jai";
 
 } // !SINGLE_BINARY
 

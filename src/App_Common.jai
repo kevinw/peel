@@ -1,7 +1,7 @@
 num_app_reloads: int = 0;
 SAVE_AND_RESTORE_WINDOW_POS :: true;
 
-USE_GLOBAL_DLL_CONTEXT :: true;
+USE_GLOBAL_DLL_CONTEXT :: false;
 CHECK_CONTEXT :: false;
 #if USE_GLOBAL_DLL_CONTEXT {
     bare_context: #Context;
@@ -114,7 +114,7 @@ handle_host_message :: (message: Host_Message) -> App_Return_Message {
 #import "Reload_Common";
 
 #if !SINGLE_BINARY {
-    #import "Remap_Context"(VERBOSE=true);
+    #import "Remap_Context"(VERBOSE=false);
     #load "Program_Parameters_Common.jai";
 }
 

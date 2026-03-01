@@ -73,7 +73,7 @@ ui_render :: (wait_value: u64, signal_value: u64, ui_render_frame_info: UI_Rende
     if ui_render_frame_info.pass == null {
         return;
     }
-    ShowDemoWindow(null);
+    // ShowDemoWindow(null);
     call_event_functions(.ui);
     Render();
 

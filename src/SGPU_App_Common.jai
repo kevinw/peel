@@ -21,6 +21,8 @@ sgpu_debug_status: string;
 ui_timeline_value: u64 = 0;
 shader_reload_ctx: SHR.Shader_Hot_Reload;
 max_frames: int = 0;
+reload_on_frame: int = 0;
+pending_objc_reinit_after_reload := false;
 perf_capture_cpu_ms_sum: float64 = 0;
 perf_capture_gpu_ms_sum: float64 = 0;
 perf_capture_count: s64 = 0;
@@ -137,6 +139,16 @@ app_update :: (update_ctx: *App_Update_Ctx) {
     auto_release_temp();
 
     #if OS == .MACOS {
+        if pending_objc_reinit_after_reload {
+            init_all_objective_c_selector_structs();
+            if NSApp {
+                NSApplication.setDelegate(NSApp, context._macos_create_app_delegate());
+            }
+            if window {
+                NSWindow.setDelegate(window, context._macos_create_window_delegate());
+            }
+            pending_objc_reinit_after_reload = false;
+        }
         pool := objc_new(NSAutoreleasePool);
         defer release(pool);
     }
@@ -182,14 +194,21 @@ app_update :: (update_ctx: *App_Update_Ctx) {
     }
 
     for Input.events_this_frame {
-        if it.type == {
+        using it;
+        if type == {
             case .QUIT;
                 app_quit_requested = true;
             case .KEYBOARD;
-                if it.key_code == #char "R" {
+                if key_code == #char "R" && key_pressed {
                     update_ctx.app_return_flags |= .Reload;
                 }
         }
+    }
+
+    if reload_on_frame > 0 && frame_count == reload_on_frame {
+        log("PEEL_RELOAD_ON_FRAME triggering reload at frame %.", frame_count);
+        update_ctx.app_return_flags |= .Reload;
+        reload_on_frame = 0; // one-shot trigger
     }
 
     if app_quit_requested {
@@ -230,7 +249,11 @@ app_update :: (update_ctx: *App_Update_Ctx) {
 }
 
 create_window_and_init_sgpu :: () {
-    window = create_window(2000, 1500, "hello peel");
+    #if OS == .MACOS {
+        window = create_metal_window(2000, 1500, "hello peel");
+    } else {
+        window = create_window(2000, 1500, "hello peel");
+    }
     result := gpu_init();
     assert(result == .SUCCESS);
     gpu_init_swapchain(xx window);
@@ -245,6 +268,9 @@ create_window_and_init_sgpu :: () {
 
 host_quit :: (quit_ctx: Quit_Ctx) {
     #if !RELEASE { // let OS do cleanup for us in release mode.
+        #if OS == .MACOS {
+            init_all_objective_c_selector_structs();
+        }
         gpu_destroy_swapchain();
         gpu_shutdown();
         if sgpu_debug_status.count != 0 {
@@ -266,6 +292,15 @@ host_init :: (init_ctx: Init_Ctx) -> bool {
     }
 
     max_frames = init_ctx.max_frames;
+    reload_on_frame = 0;
+    env_reload_on_frame, did_parse_reload_on_frame := Env_Vars.try_parse_env_int("PEEL_RELOAD_ON_FRAME");
+    if did_parse_reload_on_frame {
+        if env_reload_on_frame > 0 {
+            reload_on_frame = cast(int) env_reload_on_frame;
+        } else {
+            log_error("PEEL_RELOAD_ON_FRAME must be > 0; got %.", env_reload_on_frame);
+        }
+    }
     perf_capture_cpu_ms_sum = 0;
     perf_capture_gpu_ms_sum = 0;
     perf_capture_count = 0;
@@ -340,6 +375,9 @@ perf_gpu_validation_enabled :: () -> bool {
 else #if OS == .MACOS #import "MacOS_Tools";
 #import "General_Utils";
 Input :: #import "Input";
+WT :: #import "Window_Type";
+#scope_export
+Window_Type :: WT.Window_Type;
 #if OS == .MACOS {
     #import "Objective_C";
     #import "Objective_C/AppKit";
@@ -371,11 +409,7 @@ Input :: #import "Input";
     #if LIVE_RELOAD_ENABLED {
     #scope_export
     reload_stdlib :: () {
-        init_all_objective_c_selector_structs();
-        if window {
-            // Recreate the window delegate so the new DLL's function pointers get called instead of the old ones.
-            NSWindow.setDelegate(window, context._macos_create_window_delegate());
-        }
+        pending_objc_reinit_after_reload = true;
     } @on_reload
 
     dll_unload :: () {
@@ -403,6 +437,8 @@ Input :: #import "Input";
 #scope_file
 #load "measure_fps.jai";
 #load "readback_stats.jai";
-#import "Window_Creation";
+#if OS != .MACOS #import "Window_Creation";
+#if OS == .MACOS #load "Metal_Window_Creation.jai";
 String :: #import "String";
+Env_Vars :: #import "Env_Vars";
 SHR :: #import,file "shader_hot_reload.jai";

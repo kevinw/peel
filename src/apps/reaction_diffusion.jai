@@ -198,7 +198,6 @@ tick :: () {
 } @on_tick
 
 #scope_file
-#import "Window_Creation";
 #import "Math";
 #load "../SGPU_App_Common.jai";
 #import "Jai-Shader-Transpiler";

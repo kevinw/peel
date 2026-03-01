@@ -1,7 +1,7 @@
 [
   {
     "label": "sand_toy",
-    "command": "jai ~/src/peel/build.jai - src/apps/sand_toy.jai -run",
+    "command": "jai ~/src/peel/build.jai - src/apps/sand_toy.jai -run -dll",
   },
   {
     "label": "terrain_test",
