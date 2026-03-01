@@ -9,13 +9,16 @@ Draw_Data :: struct {
 }
 
 graphics_pipeline: Gpu_Pipeline;
-compute_pipeline: Gpu_Pipeline;
+compute_pipeline_plan: Gpu_Pipeline;
+compute_pipeline_resolve: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
 
 sand_state_storage_gpu: Gpu_Ptr;
 sand_state_storage_cpu: *[SAND_CELL_COUNT * 2] Vector4;
 sand_state: AB_Buffer([SAND_CELL_COUNT] Vector4);
+sand_move_targets_ring_cpu: *[SGPU_FRAMES_IN_FLIGHT] [SAND_CELL_COUNT] u32;
+sand_move_targets_ring_gpu: Gpu_Ptr;
 sand_control_ring_cpu: *[SGPU_FRAMES_IN_FLIGHT] Sand_Compute_Control;
 sand_control_ring_gpu: Gpu_Ptr;
 
@@ -23,9 +26,6 @@ sand_brush_element: u32 = SAND_MAT_SAND;
 sand_brush_radius_px: float = 7.0;
 sand_prev_left_down := false;
 sand_prev_right_down := false;
-sand_have_last_stamp_cell := false;
-sand_last_stamp_cell_x: s64 = -1;
-sand_last_stamp_cell_y: s64 = -1;
 
 sand_set_cell :: (state: *[SAND_CELL_COUNT] Vector4, x: s64, y: s64, mat: u32, temp: float) {
     if x < 0 || y < 0 return;
@@ -144,8 +144,10 @@ sand_ui :: () -> bool {
 }
 
 on_dll_init :: () {
-    compute_source := cast([]u8) get_transpiled(.METAL, sand_step_compute);
-    assert(compute_source.count > 0, "Compute transpilation failed (sand_step_compute).");
+    compute_plan_source := cast([]u8) get_transpiled(.METAL, sand_plan_moves_compute);
+    assert(compute_plan_source.count > 0, "Compute transpilation failed (sand_plan_moves_compute).");
+    compute_resolve_source := cast([]u8) get_transpiled(.METAL, sand_resolve_compute);
+    assert(compute_resolve_source.count > 0, "Compute transpilation failed (sand_resolve_compute).");
     graphics_source := cast([]u8) get_transpiled(.METAL, sand_vertex_main, sand_fragment_main);
     assert(graphics_source.count > 0, "Graphics transpilation failed (sand shaders).");
 
@@ -156,13 +158,17 @@ on_dll_init :: () {
         ],
     };
 
-    compute_pipeline = gpu_create_compute_pipeline(compute_source);
-    assert(compute_pipeline != 0, "Sand compute pipeline creation failed.");
+    compute_pipeline_plan = gpu_create_compute_pipeline(compute_plan_source);
+    assert(compute_pipeline_plan != 0, "Sand compute plan pipeline creation failed.");
+    compute_pipeline_resolve = gpu_create_compute_pipeline(compute_resolve_source);
+    assert(compute_pipeline_resolve != 0, "Sand compute resolve pipeline creation failed.");
 
     graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, sand_vertex_main, sand_fragment_main);
     assert(graphics_ok, "Sand graphics pipeline creation failed.");
-    compute_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_pipeline, compute_source, .METAL, sand_step_compute);
-    assert(compute_ok, "Sand compute pipeline creation failed.");
+    compute_plan_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_pipeline_plan, compute_plan_source, .METAL, sand_plan_moves_compute);
+    assert(compute_plan_ok, "Sand compute plan pipeline creation failed.");
+    compute_resolve_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_pipeline_resolve, compute_resolve_source, .METAL, sand_resolve_compute);
+    assert(compute_resolve_ok, "Sand compute resolve pipeline creation failed.");
 
     gpu_arena = gpu_make_arena(1024 * 1024 * 18, label = "sand toy arena");
 
@@ -185,8 +191,10 @@ on_dll_init :: () {
     };
 
     sand_control_ring_cpu, sand_control_ring_gpu = sgpu_arena_alloc_frame_ring(*gpu_arena, Sand_Compute_Control);
+    sand_move_targets_ring_cpu, sand_move_targets_ring_gpu = sgpu_arena_alloc_frame_ring(*gpu_arena, [SAND_CELL_COUNT] u32);
     for 0..SGPU_FRAMES_IN_FLIGHT-1 {
-        sand_control_ring_cpu.*[it] = .{
+        ring_idx := it;
+        sand_control_ring_cpu.*[ring_idx] = .{
             cursor_uv = .{-1.0, -1.0},
             brush_radius_px = sand_brush_radius_px,
             use_b_as_src = 0,
@@ -194,6 +202,10 @@ on_dll_init :: () {
             brush_element = SAND_MAT_SAND,
             frame_index = 0,
         };
+        for 0..SAND_CELL_COUNT-1 {
+            cell_idx := it;
+            sand_move_targets_ring_cpu.*[ring_idx][cell_idx] = cast(u32) cell_idx;
+        }
     }
 
     draw_data = .{
@@ -247,21 +259,9 @@ tick :: () {
 
         control.brush_active = 0;
         control.brush_element = SAND_MAT_EMPTY;
-        if left_down || right_down {
-            cell_changed := !sand_have_last_stamp_cell || cell_x != sand_last_stamp_cell_x || cell_y != sand_last_stamp_cell_y;
-            left_pressed := left_down && !sand_prev_left_down;
-            right_pressed := right_down && !sand_prev_right_down;
-            if cell_changed || left_pressed || right_pressed {
-                if left_down {
-                    control.brush_active = 1;
-                    control.brush_element = sand_brush_element;
-                }
-                sand_have_last_stamp_cell = true;
-                sand_last_stamp_cell_x = cell_x;
-                sand_last_stamp_cell_y = cell_y;
-            }
-        } else {
-            sand_have_last_stamp_cell = false;
+        if left_down {
+            control.brush_active = 1;
+            control.brush_element = sand_brush_element;
         }
 
         sand_prev_left_down = left_down;
@@ -269,17 +269,24 @@ tick :: () {
     } else {
         sand_prev_left_down = false;
         sand_prev_right_down = false;
-        sand_have_last_stamp_cell = false;
     }
 
     main_queue := gpu_get_queue(.MAIN, 0);
     result=, cmd_buff := gpu_start_command_recording(main_queue);
     assert(result == .SUCCESS);
 
-    result = gpu_set_pipeline(cmd_buff, compute_pipeline);
-    assert(result == .SUCCESS, tprint("Sand compute set pipeline failed: %", result));
     control_gpu := sgpu_frame_ring_gpu_slot(sand_control_ring_gpu, Sand_Compute_Control);
-    gpu_dispatch_buffers(cmd_buff, .[sand_state_storage_gpu, control_gpu], .[(SAND_CELL_COUNT + 63) / 64, 1, 1]);
+    move_targets_gpu := sgpu_frame_ring_gpu_slot(sand_move_targets_ring_gpu, [SAND_CELL_COUNT] u32);
+
+    result = gpu_set_pipeline(cmd_buff, compute_pipeline_plan);
+    assert(result == .SUCCESS, tprint("Sand compute(plan) set pipeline failed: %", result));
+    gpu_dispatch_buffers(cmd_buff, .[sand_state_storage_gpu, move_targets_gpu, control_gpu], .[(SAND_CELL_COUNT + 63) / 64, 1, 1]);
+
+    gpu_barrier(cmd_buff, .COMPUTE_SHADER, .COMPUTE_SHADER);
+
+    result = gpu_set_pipeline(cmd_buff, compute_pipeline_resolve);
+    assert(result == .SUCCESS, tprint("Sand compute(resolve) set pipeline failed: %", result));
+    gpu_dispatch_buffers(cmd_buff, .[sand_state_storage_gpu, move_targets_gpu, control_gpu], .[(SAND_CELL_COUNT + 63) / 64, 1, 1]);
 
     ab_buffer_advance(*sand_state);
     draw_data.vertex_params_gpu = ab_buffer_src_gpu(*sand_state);
