@@ -61,10 +61,11 @@ ui_render_pre :: () -> UI_Render_Frame_Info {
     }
     ImGui.ImplMetal_NewFrame(pass);
     frame_info.pass = pass;
-} else {
-    log("TODO: ui render setup for this platform");
-}
     NewFrame();
+} else {
+    assert(false, "TODO: ui render setup for this platform");
+    NewFrame();
+}
     return frame_info;
 }
 

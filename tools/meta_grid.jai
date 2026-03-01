@@ -58,7 +58,7 @@ delete_old_snapshots_for_app :: (app_name: string) {
 
 find_latest_snapshot_for_app :: (app_name: string) -> string {
     prefix := sprint("%_snapshot_frame_", app_name);
-    suffix := ".ppm";
+    suffix := ".jpeg";
 
     best_frame: s64 = -1;
     best_path := "";
@@ -286,7 +286,7 @@ capture_and_save_grid :: () {
                 }
             } else {
                 array_add(*failed_apps, copy_string(app_name));
-                log_error("Capture failed for app '%'; writing placeholder tile.", app_name);
+                log_error("Capture failed for app '%'; (capture_ok=%, newest=%) writing placeholder tile.", app_name, capture_ok, newest);
                 write_placeholder_capture(capture_dest, opts.cell_w, opts.cell_h);
             }
         }
