@@ -89,7 +89,9 @@ sand_material_priority :: (mat: u32) -> u32 {
 
 sand_is_passable_for :: (mover: u32, target: u32) -> bool {
     if mover == SAND_MAT_SAND || mover == SAND_MAT_LAVA {
-        return target == SAND_MAT_EMPTY || target == SAND_MAT_WATER || target == SAND_MAT_STEAM;
+        // Note: allowing sand/lava into water requires explicit swap/eviction
+        // handling; without that, water can be dropped. Keep it conservative.
+        return target == SAND_MAT_EMPTY || target == SAND_MAT_STEAM;
     }
     if mover == SAND_MAT_WATER {
         return target == SAND_MAT_EMPTY || target == SAND_MAT_STEAM;
@@ -103,6 +105,46 @@ sand_is_passable_for :: (mover: u32, target: u32) -> bool {
 sand_heat_diffusion :: (center: float, up: float, down: float, left: float, right: float) -> float {
     avg := (up + down + left + right) * 0.25;
     return mix(center, avg, 0.18);
+}
+
+sand_pick_candidate :: (candidate: Vector4, old_center_mat: u32, io_mat: *u32, io_temp: *float) {
+    candidate_mat := sand_material_of(candidate);
+    if candidate_mat == SAND_MAT_EMPTY return;
+    if !sand_is_passable_for(candidate_mat, old_center_mat) return;
+    if sand_material_priority(candidate_mat) > sand_material_priority(io_mat.*) {
+        io_mat.* = candidate_mat;
+        io_temp.* = candidate.y;
+    }
+}
+
+sand_apply_reactions :: (up_m: u32, down_m: u32, left_m: u32, right_m: u32, io_mat: *u32, io_temp: *float) {
+    adjacent_lava := (up_m == SAND_MAT_LAVA) || (down_m == SAND_MAT_LAVA) || (left_m == SAND_MAT_LAVA) || (right_m == SAND_MAT_LAVA);
+    adjacent_water_count: u32 = 0;
+    adjacent_ice := (up_m == SAND_MAT_ICE) || (down_m == SAND_MAT_ICE) || (left_m == SAND_MAT_ICE) || (right_m == SAND_MAT_ICE);
+    if up_m == SAND_MAT_WATER adjacent_water_count += 1;
+    if down_m == SAND_MAT_WATER adjacent_water_count += 1;
+    if left_m == SAND_MAT_WATER adjacent_water_count += 1;
+    if right_m == SAND_MAT_WATER adjacent_water_count += 1;
+
+    if io_mat.* == SAND_MAT_SAND && adjacent_lava {
+        io_mat.* = SAND_MAT_GLASS;
+        io_temp.* = max(io_temp.*, 0.62);
+    } else if io_mat.* == SAND_MAT_WATER && adjacent_lava {
+        io_mat.* = SAND_MAT_STEAM;
+        io_temp.* = max(io_temp.*, 0.86);
+    } else if io_mat.* == SAND_MAT_LAVA && adjacent_water_count >= 2 {
+        io_mat.* = SAND_MAT_STONE;
+        io_temp.* = 0.30;
+    } else if io_mat.* == SAND_MAT_STEAM && io_temp.* < 0.28 {
+        io_mat.* = SAND_MAT_WATER;
+        io_temp.* = 0.22;
+    } else if io_mat.* == SAND_MAT_ICE && adjacent_lava {
+        io_mat.* = SAND_MAT_WATER;
+        io_temp.* = 0.20;
+    } else if io_mat.* == SAND_MAT_WATER && adjacent_ice && io_temp.* < 0.14 {
+        io_mat.* = SAND_MAT_ICE;
+        io_temp.* = 0.06;
+    }
 }
 
 sand_step_compute :: (using in: Sand_Compute_In, state: *Vector4, control: *Sand_Compute_Control) {
@@ -175,23 +217,11 @@ sand_step_compute :: (using in: Sand_Compute_In, state: *Vector4, control: *Sand
                 candidate_mat = SAND_MAT_EMPTY;
             }
         }
-        // Donor eligibility is evaluated against OLD center material to avoid
-        // duplication when this cell moves out in the same step.
-        if candidate_mat != SAND_MAT_EMPTY && sand_is_passable_for(candidate_mat, center_m) {
-            if sand_material_priority(candidate_mat) > sand_material_priority(next_mat) {
-                next_mat = candidate_mat;
-                next_temp = up_v.y;
-            }
-        }
+        if candidate_mat != SAND_MAT_EMPTY sand_pick_candidate(.{cast(float) candidate_mat, up_v.y, 0.0, 0.0}, center_m, *next_mat, *next_temp);
     }
 
     // Incoming from below (steam rises).
-    if down_m == SAND_MAT_STEAM && sand_is_passable_for(SAND_MAT_STEAM, center_m) {
-        if sand_material_priority(SAND_MAT_STEAM) > sand_material_priority(next_mat) {
-            next_mat = SAND_MAT_STEAM;
-            next_temp = down_v.y;
-        }
-    }
+    if down_m == SAND_MAT_STEAM sand_pick_candidate(.{cast(float) SAND_MAT_STEAM, down_v.y, 0.0, 0.0}, center_m, *next_mat, *next_temp);
 
     // Incoming from left/right for lateral water/steam flow.
     left_rand := ((frame_hash >> 1) & 1) == 1;
@@ -200,23 +230,13 @@ sand_step_compute :: (using in: Sand_Compute_In, state: *Vector4, control: *Sand
         left_down_open := sand_is_passable_for(SAND_MAT_WATER, down_left_m);
         if !left_down_open && left_rand && sand_is_passable_for(SAND_MAT_WATER, center_m) {
             candidate_mat := sand_material_of(left_v);
-            if candidate_mat != SAND_MAT_EMPTY {
-                if sand_material_priority(candidate_mat) > sand_material_priority(next_mat) {
-                    next_mat = candidate_mat;
-                    next_temp = left_v.y;
-                }
-            }
+            if candidate_mat != SAND_MAT_EMPTY sand_pick_candidate(.{cast(float) candidate_mat, left_v.y, 0.0, 0.0}, center_m, *next_mat, *next_temp);
         }
     } else if left_m == SAND_MAT_STEAM {
         left_up_open := sand_is_passable_for(SAND_MAT_STEAM, up_left_m);
         if !left_up_open && left_rand && sand_is_passable_for(SAND_MAT_STEAM, center_m) {
             candidate_mat := sand_material_of(left_v);
-            if candidate_mat != SAND_MAT_EMPTY {
-                if sand_material_priority(candidate_mat) > sand_material_priority(next_mat) {
-                    next_mat = candidate_mat;
-                    next_temp = left_v.y;
-                }
-            }
+            if candidate_mat != SAND_MAT_EMPTY sand_pick_candidate(.{cast(float) candidate_mat, left_v.y, 0.0, 0.0}, center_m, *next_mat, *next_temp);
         }
     }
 
@@ -224,54 +244,18 @@ sand_step_compute :: (using in: Sand_Compute_In, state: *Vector4, control: *Sand
         right_down_open := sand_is_passable_for(SAND_MAT_WATER, down_right_m);
         if !right_down_open && right_rand && sand_is_passable_for(SAND_MAT_WATER, center_m) {
             candidate_mat := sand_material_of(right_v);
-            if candidate_mat != SAND_MAT_EMPTY {
-                if sand_material_priority(candidate_mat) > sand_material_priority(next_mat) {
-                    next_mat = candidate_mat;
-                    next_temp = right_v.y;
-                }
-            }
+            if candidate_mat != SAND_MAT_EMPTY sand_pick_candidate(.{cast(float) candidate_mat, right_v.y, 0.0, 0.0}, center_m, *next_mat, *next_temp);
         }
     } else if right_m == SAND_MAT_STEAM {
         right_up_open := sand_is_passable_for(SAND_MAT_STEAM, up_right_m);
         if !right_up_open && right_rand && sand_is_passable_for(SAND_MAT_STEAM, center_m) {
             candidate_mat := sand_material_of(right_v);
-            if candidate_mat != SAND_MAT_EMPTY {
-                if sand_material_priority(candidate_mat) > sand_material_priority(next_mat) {
-                    next_mat = candidate_mat;
-                    next_temp = right_v.y;
-                }
-            }
+            if candidate_mat != SAND_MAT_EMPTY sand_pick_candidate(.{cast(float) candidate_mat, right_v.y, 0.0, 0.0}, center_m, *next_mat, *next_temp);
         }
     }
 
     next_temp = sand_heat_diffusion(next_temp, up_v.y, down_v.y, left_v.y, right_v.y);
-    adjacent_lava := (up_m == SAND_MAT_LAVA) || (down_m == SAND_MAT_LAVA) || (left_m == SAND_MAT_LAVA) || (right_m == SAND_MAT_LAVA);
-    adjacent_water_count: u32 = 0;
-    adjacent_ice := (up_m == SAND_MAT_ICE) || (down_m == SAND_MAT_ICE) || (left_m == SAND_MAT_ICE) || (right_m == SAND_MAT_ICE);
-    if up_m == SAND_MAT_WATER adjacent_water_count += 1;
-    if down_m == SAND_MAT_WATER adjacent_water_count += 1;
-    if left_m == SAND_MAT_WATER adjacent_water_count += 1;
-    if right_m == SAND_MAT_WATER adjacent_water_count += 1;
-
-    if next_mat == SAND_MAT_SAND && adjacent_lava {
-        next_mat = SAND_MAT_GLASS;
-        next_temp = max(next_temp, 0.62);
-    } else if next_mat == SAND_MAT_WATER && adjacent_lava {
-        next_mat = SAND_MAT_STEAM;
-        next_temp = max(next_temp, 0.86);
-    } else if next_mat == SAND_MAT_LAVA && adjacent_water_count >= 2 {
-        next_mat = SAND_MAT_STONE;
-        next_temp = 0.30;
-    } else if next_mat == SAND_MAT_STEAM && next_temp < 0.28 {
-        next_mat = SAND_MAT_WATER;
-        next_temp = 0.22;
-    } else if next_mat == SAND_MAT_ICE && adjacent_lava {
-        next_mat = SAND_MAT_WATER;
-        next_temp = 0.20;
-    } else if next_mat == SAND_MAT_WATER && adjacent_ice && next_temp < 0.14 {
-        next_mat = SAND_MAT_ICE;
-        next_temp = 0.06;
-    }
+    sand_apply_reactions(up_m, down_m, left_m, right_m, *next_mat, *next_temp);
 
     target_temp := sand_default_temp_for_material(next_mat);
     next_temp = mix(next_temp, target_temp, 0.035);
