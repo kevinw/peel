@@ -101,11 +101,6 @@ readback_stats_dump_snapshot :: (using state: *Readback_Stats, view: Gpu_Texture
     }
 }
 
-readback_stats_maybe_run_readback_check :: (using state: *Readback_Stats, view: Gpu_Texture_View, backend_label: string) -> bool {
-    if !test_readback || did_readback || frame_count < 1 return true;
-    did_readback = true;
-    return fb_validate_swapchain_readback_non_black(view, backend_label);
-}
 
 readback_stats_should_export_jpg :: (using state: *Readback_Stats, frame_num: s64, min_frame: s64 = 2) -> bool {
     if !export_jpg_mode return false;
@@ -144,28 +139,39 @@ frame_debug_init :: (readback_stats: *Readback_Stats) {
 }
 
 per_frame_debug :: (readback_stats: *Readback_Stats, frame_num: s64, swapchain_image: Gpu_Texture_View) {
+    check_frame_buffer :: () #expand {
+        if swapchain_image == 0 {
+            log_error("Swapchain image is null; cannot perform readback/stats/snapshot.");
+            `return;
+        }
+    }
     if frame_num >= 2 && window_snapshot_mode {
+        check_frame_buffer();
         window_snapshot_path := tprint("./%_window_frame_%.jpeg", APP_NAME, frame_num);
         gpu_dump_to_bitmap(window_snapshot_path);
         log("WINDOW_SNAPSHOT frame=% path=%", frame_num, window_snapshot_path);
         window_snapshot_mode = false;
     }
     if frame_num >= 2 && window_validate_mode {
+        check_frame_buffer();
         ok := gpu_validate_window_readback_non_black();
         assert(ok, "Error: Window capture validation failed: output appears black.");
         window_validate_mode = false;
     }
     if frame_num >= 2 && window_probe_auto_quit && !window_snapshot_mode && !window_validate_mode {
+        check_frame_buffer();
         log("WINDOW_PROBE completed; quitting.");
         app_quit_requested = true;
     }
-    
+
     if readback_stats.snapshot_mode {
+        check_frame_buffer();
         readback_stats.snapshot_mode = false;
         readback_stats_dump_snapshot(readback_stats, swapchain_image, frame_num, tprint("%_snapshot", APP_NAME), APP_NAME);
     }
 
     if readback_stats_should_sample(readback_stats, frame_num) {
+        check_frame_buffer();
         stats, ok := fb_collect_swapchain_framebuffer_stats(swapchain_image);
         if ok {
             readback_stats_log_sample(readback_stats, APP_NAME, frame_num, stats);
@@ -178,9 +184,19 @@ per_frame_debug :: (readback_stats: *Readback_Stats, frame_num: s64, swapchain_i
         }
     }
 
-    ok := readback_stats_maybe_run_readback_check(readback_stats, swapchain_image, tprint("%_metal", APP_NAME));
-    assert(ok, "Readback check failed: output appears uniform/black.");
+    {
+        using readback_stats;
+        if test_readback && !did_readback && frame_count >= 1 {
+            check_frame_buffer();
+            did_readback = true;
+            os_lower := tprint("%", OS);
+            to_lower_in_place(os_lower);
+            ok := fb_validate_swapchain_readback_non_black(swapchain_image, tprint("%_%", APP_NAME, os_lower));
+            assert(ok, "Readback check failed: output appears uniform/black.");
+        }
+    }
 }
 
 #scope_file
 #import "Env_Vars";
+using,only(to_lower_in_place) _ :: #import "String";
