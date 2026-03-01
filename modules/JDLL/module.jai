@@ -59,6 +59,7 @@ JDLL_Metaprogram_Plugin :: struct {
         verbose := DEFAULT_VERBOSE;
         include_files: [..]string;
         export_note := "jdll_export";
+        public_footer: string;
     };
 
     // Filled by the plugin, you can inspect after the build.
@@ -179,7 +180,7 @@ generate_interface_module_output :: (using p: *JDLL_Metaprogram_Plugin) -> (ok: 
     print_to_builder(*sb, "% JDLL interface module '%'\n\n", GENERATED_MODULE_START_TAG, interface_module_output);
 
     scoped_program_print_procedure_bodies(false);
-    
+
     if exported.count == 0 {
         compiler_report(tprint("JDLL: no exported procedures found for '%'; cannot generate interface module.", interface_module_output));
         return false;
@@ -229,11 +230,11 @@ wrapper instead.
     }
 
     append(*sb, tprint(#string END
-
+%3
 #scope_file
 #if OS == .MACOS   %1 :: #library,no_static_library "macos/%2";
 #if OS == .WINDOWS %1 :: #library,no_static_library "windows/%2";
-END, lib_name, interface_module_output));
+END, lib_name, interface_module_output, public_footer));
 
     filename := sprint("%/module.jai", module_dirname);
     p.output.generated_module_filename = filename;
@@ -243,18 +244,10 @@ END, lib_name, interface_module_output));
         copy_file(it, tprint("%/%", module_dirname, String.path_filename(it)));
     }
 
-    if !check_if_file_is_ok_to_overwrite(filename) {
-        return false;
-    }
-
     make_directory_if_it_does_not_exist(String.path_strip_filename(filename), recursive=true);
-    contents, ok := File.read_entire_file(filename);
-    new_contents := builder_to_string(*sb);
-    if ok && contents != new_contents {
-        if !File.write_entire_file(filename, *sb) {
-            compiler_report(tprint("Error writing file '%'", filename));
-            return false;
-        }
+    if !File.write_entire_file(filename, *sb) {
+        compiler_report(tprint("Error writing file '%'", filename));
+        return false;
     }
 
     if verbose {
@@ -282,7 +275,6 @@ check_if_file_is_ok_to_overwrite :: (filename: string) -> bool {
     if !file_exists(filename) {
         return true;
     }
-
 
     file, ok := file_open(filename);
     assert(ok);

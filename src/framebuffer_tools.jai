@@ -175,7 +175,7 @@ fb_dump_swapchain_thumbnail_jpeg :: (view: Gpu_Texture_View, output_path: string
                                3,
                                body.data,
                                90);
-    
+
     success := write_ok != 0;
     if !success {
         log_error("fb_dump_swapchain_thumbnail_jpeg: failed to write JPEG file");
@@ -192,5 +192,5 @@ String :: #import "String";
 #import "stb_image_write";
 using,only(getenv) POSIX :: #import "POSIX";
 #import "Basic";
-#import "sgpu";
+using,except(Viewport) _ :: #import "sgpu";
 #import "Env_Vars";

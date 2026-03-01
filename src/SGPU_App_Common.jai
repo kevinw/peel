@@ -21,11 +21,20 @@ sgpu_debug_status: string;
 ui_timeline_value: u64 = 0;
 shader_reload_ctx: SHR.Shader_Hot_Reload;
 max_frames: int = 0;
+perf_capture_cpu_ms_sum: float64 = 0;
+perf_capture_gpu_ms_sum: float64 = 0;
+perf_capture_count: s64 = 0;
+perf_capture_gpu_count: s64 = 0;
+perf_capture_reported := false;
+
+PERF_CAPTURE_START_FRAME :: 5;
+PERF_CAPTURE_END_FRAME :: 30;
+PERF_CAPTURE_MIN_FPS :: 10.0;
 #if READBACK_ENABLED {
     readback_stats: Readback_Stats;
 }
 
-#import "sgpu"()(SLANG_COMPILER=false);
+using,except(Viewport) _ :: #import "sgpu"()(SLANG_COMPILER=false);
 
 AB_Buffer :: struct($T: Type) {
     a_cpu: *T;
@@ -135,8 +144,10 @@ app_update :: (update_ctx: *App_Update_Ctx) {
     time = seconds_since_init();
     dt = cast(float)(time - last_time);
     last_time = time;
-    perf_push_cpu_frame_ms(dt * 1000.0);
-    perf_set_latest_gpu_frame_ms(gpu_last_frame_gpu_ms());
+    cpu_frame_ms := dt * 1000.0;
+    gpu_frame_ms := gpu_last_frame_gpu_ms();
+    perf_push_cpu_frame_ms(cpu_frame_ms);
+    perf_set_latest_gpu_frame_ms(gpu_frame_ms);
 
     if window && frame_count % PERF_TITLE_UPDATE_EVERY_FRAMES == 0 {
         perf_text := perf_title_text();
@@ -154,6 +165,14 @@ app_update :: (update_ctx: *App_Update_Ctx) {
     }
 
     frame_count += 1;
+    if frame_count >= PERF_CAPTURE_START_FRAME && frame_count <= PERF_CAPTURE_END_FRAME {
+        perf_capture_cpu_ms_sum += cpu_frame_ms;
+        perf_capture_count += 1;
+        if gpu_frame_ms >= 0.0 {
+            perf_capture_gpu_ms_sum += gpu_frame_ms;
+            perf_capture_gpu_count += 1;
+        }
+    }
 
     Input.update_window_events();
     for Input.get_window_resizes() {
@@ -203,6 +222,7 @@ app_update :: (update_ctx: *App_Update_Ctx) {
     }
 
     if max_frames > 0 && frame_count > max_frames {
+        perf_capture_finish_and_check();
         log("Hit max frame count (%), exiting.", max_frames);
         update_ctx.app_return_flags |= .Quit;
         return;
@@ -237,13 +257,20 @@ host_quit :: (quit_ctx: Quit_Ctx) {
 host_init :: (init_ctx: Init_Ctx) -> bool {
     #if !RELEASE && OS == .MACOS {
         using,only(setenv) POSIX :: #import "POSIX";
-        setenv("MTL_LOG_TO_STDERR", "1", 1);
-        setenv("MTL_DEBUG_LAYER", "1", 1);
-        setenv("MTL_LOG_LEVEL", "MTLLogLevelDebug", 1);
-        setenv("MTL_LOG_BUFFER_SIZE", "2048", 1);
+        if perf_gpu_validation_enabled() {
+            setenv("MTL_LOG_TO_STDERR", "1", 1);
+            setenv("MTL_DEBUG_LAYER", "1", 1);
+            setenv("MTL_LOG_LEVEL", "MTLLogLevelDebug", 1);
+            setenv("MTL_LOG_BUFFER_SIZE", "2048", 1);
+        }
     }
 
     max_frames = init_ctx.max_frames;
+    perf_capture_cpu_ms_sum = 0;
+    perf_capture_gpu_ms_sum = 0;
+    perf_capture_count = 0;
+    perf_capture_gpu_count = 0;
+    perf_capture_reported = false;
     #if OS == {
         case .WINDOWS;
             #if !RELEASE {
@@ -276,6 +303,38 @@ host_init :: (init_ctx: Init_Ctx) -> bool {
 dummy_on_resize :: () {  } @on_window_resize
 
 #scope_file
+
+perf_capture_finish_and_check :: () {
+    if perf_capture_reported return;
+    perf_capture_reported = true;
+    if max_frames <= 0 return;
+    if max_frames < PERF_CAPTURE_END_FRAME return;
+    if perf_capture_count <= 0 return;
+
+    avg_cpu_ms := cast(float) (perf_capture_cpu_ms_sum / cast(float64) perf_capture_count);
+    avg_fps := 1000.0 / max(avg_cpu_ms, 0.0001);
+    if perf_capture_gpu_count > 0 {
+        avg_gpu_ms := cast(float) (perf_capture_gpu_ms_sum / cast(float64) perf_capture_gpu_count);
+        log("PERF_AVG frames=%..% cpu_ms=% gpu_ms=% fps=%",
+            PERF_CAPTURE_START_FRAME, PERF_CAPTURE_END_FRAME, avg_cpu_ms, avg_gpu_ms, avg_fps);
+    } else {
+        log("PERF_AVG frames=%..% cpu_ms=% fps=%",
+            PERF_CAPTURE_START_FRAME, PERF_CAPTURE_END_FRAME, avg_cpu_ms, avg_fps);
+    }
+
+    assert(avg_fps >= PERF_CAPTURE_MIN_FPS,
+        tprint("Performance regression: avg fps % is below threshold % (frames %..%).",
+            avg_fps, PERF_CAPTURE_MIN_FPS, PERF_CAPTURE_START_FRAME, PERF_CAPTURE_END_FRAME));
+}
+
+perf_gpu_validation_enabled :: () -> bool {
+    #if OS != .MACOS return true;
+    using,only(getenv) POSIX :: #import "POSIX";
+    v := getenv("PEEL_GPU_VALIDATION");
+    if v == null return true;
+    if v[0] == #char "0" return false;
+    return true;
+}
 
 #if OS == .WINDOWS  #import "Windows_Utils";
 else #if OS == .MACOS #import "MacOS_Tools";

@@ -273,6 +273,18 @@ tick :: () {
         terrain_have_prev_mouse = false;
     }
 
+    {
+        // example imgui overlay
+        #import "ImGui";
+        open: bool = true;
+        window_flags: WindowFlags = .NoDecoration | .AlwaysAutoResize | .NoSavedSettings | .NoFocusOnAppearing | .NoNav;
+        if Begin("debug overlay", *open, window_flags) {
+            Text("Simple overlay");
+            Separator();
+        }
+        End();
+    }
+
     move_len_sq := dot(move, move);
     if move_len_sq > 0.000001 {
         move /= sqrt(move_len_sq);
