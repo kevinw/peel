@@ -122,20 +122,48 @@ flux_safe_normalize3 :: (v: Vector3) -> Vector3 {
     return .{v.x * inv, v.y * inv, v.z * inv};
 }
 
-flux_sky_color :: (view_dir: Vector3, sun_dir: Vector3) -> Vector3 {
+flux_sky_base_color :: (view_dir: Vector3, sun_dir: Vector3) -> Vector3 {
     upness := clamp(view_dir.z * 0.5 + 0.5, 0.0, 1.0);
-    sun_amount := clamp(dot(view_dir, sun_dir), 0.0, 1.0);
+    sun_dot := dot(view_dir, sun_dir);
+    toward_sun := clamp((sun_dot + 0.15) / 1.15, 0.0, 1.0);
+    away_from_sun := 1.0 - toward_sun;
     horizon := pow(1.0 - clamp(view_dir.z, 0.0, 1.0), 2.0);
+    sun_elevation := clamp(sun_dir.z, -1.0, 1.0);
+    day_t := clamp(sun_elevation * 0.85 + 0.33, 0.0, 1.0);
+    twilight_t := 1.0 - clamp(abs(sun_elevation) * 3.0, 0.0, 1.0);
 
-    zenith_col := Vector3.{0.18, 0.34, 0.72};
-    horizon_col := Vector3.{0.62, 0.70, 0.86};
+    night_zenith := Vector3.{0.004, 0.006, 0.012};
+    night_horizon := Vector3.{0.008, 0.006, 0.005};
+    day_zenith := Vector3.{0.18, 0.34, 0.72};
+    day_horizon := Vector3.{0.62, 0.70, 0.86};
+    zenith_col := mix(night_zenith, day_zenith, day_t);
+    horizon_col := mix(night_horizon, day_horizon, day_t);
     base := mix(horizon_col, zenith_col, upness);
-    base = base * (1.0 - horizon * 0.22);
+    base = base * mix(0.82, 1.0 - horizon * 0.22, day_t);
+
+    sunset_orange := Vector3.{1.18, 0.42, 0.09};
+    twilight_blue := Vector3.{0.08, 0.18, 0.42};
+    base += sunset_orange * (horizon * twilight_t * toward_sun * 0.55);
+    base += twilight_blue * (twilight_t * away_from_sun * (0.18 + upness * 0.42));
+    return base;
+}
+
+flux_sky_color :: (view_dir: Vector3, sun_dir: Vector3) -> Vector3 {
+    sun_dot := dot(view_dir, sun_dir);
+    sun_amount := clamp(sun_dot, 0.0, 1.0);
+    sun_elevation := clamp(sun_dir.z, -1.0, 1.0);
+    twilight_t := 1.0 - clamp(abs(sun_elevation) * 3.0, 0.0, 1.0);
+    day_t := clamp(sun_elevation * 0.85 + 0.33, 0.0, 1.0);
+    base := flux_sky_base_color(view_dir, sun_dir);
 
     sun_glow := pow(sun_amount, 18.0) * 0.42;
     sun_core := pow(sun_amount, 140.0);
-    warm := Vector3.{1.0, 0.74, 0.44};
-    return base + warm * (sun_glow + sun_core * 1.2);
+    warm_day := Vector3.{1.0, 0.74, 0.44};
+    warm_twilight := Vector3.{1.25, 0.48, 0.12};
+    warm := mix(warm_day, warm_twilight, twilight_t);
+
+    night_glow_scale := mix(0.35, 1.0, day_t + twilight_t * 0.45);
+    return base + warm * (sun_glow + sun_core * 1.2) * night_glow_scale;
 }
 
 flux_sim_src_offset :: (payload: *Vector4) -> u32 {
@@ -444,7 +472,7 @@ flux_fragment_main :: (using in: Flux_Fragment_In, payload: *Vector4) -> struct 
     view_vec := world_pos - cam_pos;
     dist := sqrt(max(dot(view_vec, view_vec), 0.0));
     view_dir := flux_safe_normalize3(view_vec);
-    sky_col := flux_sky_color(view_dir, light_dir);
+    sky_col := flux_sky_base_color(view_dir, light_dir);
     fog_term := pow(max(dist * fog_density, 0.0), fog_exponent);
     fog := 1.0 - exp(-fog_term);
     fog = clamp(fog, 0.0, 1.0);
