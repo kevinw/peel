@@ -86,6 +86,13 @@ Use metallib for both startup and reload paths.
    - missing metallib
    - outdated manifest
    - bad function name mapping
+5. Add an automated shader-reload snapshot mode for deterministic before/after capture:
+   - `PEEL_SHADER_RELOAD_SNAPSHOT=1`
+   - captures `before` at startup frame
+   - waits for shader hot-reload completion event (`shader_hot_reload_tick` reports rebuild completion)
+   - captures `after` immediately after successful pipeline swap
+   - exits automatically
+   - includes timeout guard via `PEEL_SHADER_RELOAD_TIMEOUT_FRAMES` to avoid hangs if no reload occurs.
 
 ## Risks
 - Function name mismatches between manifest and compiled metallib.
@@ -102,3 +109,4 @@ Use metallib for both startup and reload paths.
 3. Packaging: one metallib per app for now, including debug shaders.
 4. Pair refactor: move pair shader external work into worker-thread job flow now (no temporary main-thread path).
 5. AIR retention: keep generated `.air` files always (not debug-only).
+6. Reload failure behavior: keep old pipelines alive, log error, and surface a dismissible ImGui error window.

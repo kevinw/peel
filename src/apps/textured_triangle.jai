@@ -108,6 +108,14 @@ tick :: () {
     draw_result := gpu_draw_instanced_direct(cmd_buff, draw_data.pixel_gpu, draw_data.num_vertices, draw_data.num_instances);
     assert(draw_result == .SUCCESS, tprint("Textured triangle draw failed: %", draw_result));
 
+    {
+        using ImGui;
+        if Begin("Textured Triangle") {
+            Text("Hello, triangle!");
+        }
+        End();
+    }
+
     submit_and_present_with_ui(cmd_buff);
 } @on_tick
 
@@ -117,3 +125,4 @@ tick :: () {
 SHR :: #import,file "../shader_hot_reload.jai";
 #load "shaders/textured_triangle_shader.jai";
 #import "Random";
+ImGui :: #import "ImGui";
