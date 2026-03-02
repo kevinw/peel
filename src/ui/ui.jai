@@ -1,3 +1,22 @@
+#load "./inspect.jai";
+
+current_ui_render_frame: UI_Render_Frame_Info;
+fonts: struct {
+    main: *ImFont;
+    mono: *ImFont;
+
+    MAIN_SIZE :: 15.0;
+    LARGE_SIZE :: 35.0;
+}
+ui_opts: struct {
+
+    // State for a window which shows all global variables and allows searching/filtering them by name or module.
+    globals: struct {
+        show: bool = true;
+        search_text: string;
+    }
+};
+
 ui_init :: () {
     ImGui.CreateContext();
     io := GetIO();
@@ -17,8 +36,8 @@ ui_init :: () {
         assert(false, "TODO: ui_init for platform %", OS);
     }
 
-    ui_font_main = load_ui_font(GetIO(), 16.5);
-    ui_font_monospace = load_ui_monospace_font(GetIO(), 15.5);
+    fonts.main = load_ui_font(GetIO(), fonts.MAIN_SIZE);
+    fonts.mono = load_ui_monospace_font(GetIO(), fonts.MAIN_SIZE);
 } @on_dll_init
 
 ui_get_sync_semaphore :: () -> Gpu_Semaphore {
@@ -26,7 +45,7 @@ ui_get_sync_semaphore :: () -> Gpu_Semaphore {
 }
 
 ui_get_monospace_font :: () -> *ImGui.ImFont {
-    return ui_font_monospace;
+    return fonts.mono;
 }
 
 // Per frame UI info to be passed from ui_render_pre to ui_render
@@ -37,8 +56,6 @@ UI_Render_Frame_Info :: struct {
     }
 
 }
-
-current_ui_render_frame: UI_Render_Frame_Info;
 
 ui_render_pre :: () -> UI_Render_Frame_Info {
     frame_info: UI_Render_Frame_Info;
@@ -116,16 +133,16 @@ ui_render :: (wait_value: u64, signal_value: u64, ui_render_frame_info: *UI_Rend
 dummy_on_ui :: () { } @on_ui
 
 #scope_file
+
 using ImGui :: #import "ImGui";
 using,only(file_exists) _ :: #import "File_Utilities";
+
 #if OS == .MACOS {
     #import "Metal";
     ui_device: *MTLDevice;
     ui_command_queue: *MTLCommandQueue;
     ui_sync_semaphore: Gpu_Semaphore;
 }
-ui_font_main: *ImGui.ImFont;
-ui_font_monospace: *ImGui.ImFont;
 
 load_ui_font :: (io: *ImGui.IO, font_size_px: float) -> *ImGui.ImFont {
     #if OS == .MACOS {
@@ -196,5 +213,5 @@ load_ui_monospace_font :: (io: *ImGui.IO, font_size_px: float) -> *ImGui.ImFont 
         font := io.Fonts.AddFontFromFileTTF(io.Fonts, temp_c_string(it), font_size_px);
         if font != null return font;
     }
-    return ui_font_main;
+    return fonts.main;;
 }

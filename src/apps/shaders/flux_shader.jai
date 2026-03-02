@@ -8,9 +8,43 @@ FLUX_CELL_COUNT :: FLUX_WIDTH * FLUX_HEIGHT;
 FLUX_MESH_WIDTH  :: 512;
 FLUX_MESH_HEIGHT :: 512;
 FLUX_MESH_VERTS :: (FLUX_MESH_WIDTH - 1) * (FLUX_MESH_HEIGHT - 1) * 6;
+FLUX_GRASS_INSTANCE_COUNT :: 44000;
+FLUX_GRASS_VERTS_PER_INSTANCE :: 6;
 
-FLUX_PARAM_V4_COUNT :: 11;
+FLUX_PARAM_V4_COUNT :: 12;
 FLUX_STATE_OFFSET :: FLUX_PARAM_V4_COUNT;
+FLUX_GRASS_DATA_OFFSET :: FLUX_STATE_OFFSET + FLUX_CELL_COUNT * 2;
+FLUX_PAYLOAD_TOTAL_V4_COUNT :: FLUX_GRASS_DATA_OFFSET + FLUX_GRASS_INSTANCE_COUNT;
+
+FLUX_PARAM_CAMERA_POS_PROJ_X              :: 0;
+FLUX_PARAM_CAMERA_RIGHT_PROJ_Y            :: 1;
+FLUX_PARAM_CAMERA_UP_NEAR                 :: 2;
+FLUX_PARAM_CAMERA_FORWARD_FAR             :: 3;
+FLUX_PARAM_LIGHT_RIGHT_EXTENT             :: 4;
+FLUX_PARAM_LIGHT_UP_NEAR                  :: 5;
+FLUX_PARAM_LIGHT_FORWARD_FAR              :: 6;
+FLUX_PARAM_LIGHT_CENTER_USE_B_AS_SRC      :: 7;
+FLUX_PARAM_SHADOW_TEX_SAMPLER_BIAS_TEXEL  :: 8;
+FLUX_PARAM_SUN_DIR_XZ_SCALE               :: 9;
+FLUX_PARAM_FOG_TIME_WIND_GAIN             :: 10;
+FLUX_PARAM_GRASS_COUNT_SPACING_SCALE      :: 11;
+
+Flux_Render_Params :: struct {
+    camera_pos_proj_x: Vector4;
+    camera_right_proj_y: Vector4;
+    camera_up_near: Vector4;
+    camera_forward_far: Vector4;
+    light_right_extent: Vector4;
+    light_up_near: Vector4;
+    light_forward_far: Vector4;
+    light_center_use_b_as_src: Vector4;
+    shadow_tex_sampler_bias_texel: Vector4;
+    sun_dir_xz_scale: Vector4;
+    fog_time_wind_gain: Vector4;
+    grass_count_spacing_scale: Vector4;
+}
+
+#assert(size_of(Flux_Render_Params) == FLUX_PARAM_V4_COUNT * size_of(Vector4));
 
 FLUX_DT :: 1.0;
 FLUX_FLOW_ACCEL :: 0.030;
@@ -89,6 +123,25 @@ Flux_Shadow_Fragment_In :: struct {
     depth01: float;
 }
 
+Flux_Grass_Compute_In :: struct {
+    thread_id: UVector3; @thread_position_in_grid
+}
+
+Flux_Grass_Vertex_Out :: struct {
+    gl_Position: Vector4; @position
+    world_pos: Vector3;
+    normal: Vector3;
+    shadow_uvz: Vector3;
+    blade_t: float;
+}
+
+Flux_Grass_Fragment_In :: struct {
+    world_pos: Vector3;
+    normal: Vector3;
+    shadow_uvz: Vector3;
+    blade_t: float;
+}
+
 flux_cell_index :: (x: u32, y: u32) -> u32 {
     return y * FLUX_WIDTH + x;
 }
@@ -113,6 +166,10 @@ flux_fract :: (x: float) -> float {
 flux_hash01 :: (x: u32, y: u32, frame_index: u32) -> float {
     s := sin(cast(float) x * cast(float) 12.9898 + cast(float) y * cast(float) 78.233 + cast(float) frame_index * cast(float) 0.173);
     return flux_fract(s * cast(float) 43758.5453);
+}
+
+flux_rand01_from_id :: (id: u32, mul: float, add: float) -> float {
+    return flux_fract((cast(float) id + 0.5) * mul + add);
 }
 
 flux_safe_normalize3 :: (v: Vector3) -> Vector3 {
@@ -166,8 +223,21 @@ flux_sky_color :: (view_dir: Vector3, sun_dir: Vector3) -> Vector3 {
     return base + warm * (sun_glow + sun_core * 1.2) * night_glow_scale;
 }
 
+flux_param_camera_pos_proj_x :: (payload: *Vector4) -> Vector4 { return payload[FLUX_PARAM_CAMERA_POS_PROJ_X]; }
+flux_param_camera_right_proj_y :: (payload: *Vector4) -> Vector4 { return payload[FLUX_PARAM_CAMERA_RIGHT_PROJ_Y]; }
+flux_param_camera_up_near :: (payload: *Vector4) -> Vector4 { return payload[FLUX_PARAM_CAMERA_UP_NEAR]; }
+flux_param_camera_forward_far :: (payload: *Vector4) -> Vector4 { return payload[FLUX_PARAM_CAMERA_FORWARD_FAR]; }
+flux_param_light_right_extent :: (payload: *Vector4) -> Vector4 { return payload[FLUX_PARAM_LIGHT_RIGHT_EXTENT]; }
+flux_param_light_up_near :: (payload: *Vector4) -> Vector4 { return payload[FLUX_PARAM_LIGHT_UP_NEAR]; }
+flux_param_light_forward_far :: (payload: *Vector4) -> Vector4 { return payload[FLUX_PARAM_LIGHT_FORWARD_FAR]; }
+flux_param_light_center_use_b_as_src :: (payload: *Vector4) -> Vector4 { return payload[FLUX_PARAM_LIGHT_CENTER_USE_B_AS_SRC]; }
+flux_param_shadow_tex_sampler_bias_texel :: (payload: *Vector4) -> Vector4 { return payload[FLUX_PARAM_SHADOW_TEX_SAMPLER_BIAS_TEXEL]; }
+flux_param_sun_dir_xz_scale :: (payload: *Vector4) -> Vector4 { return payload[FLUX_PARAM_SUN_DIR_XZ_SCALE]; }
+flux_param_fog_time_wind_gain :: (payload: *Vector4) -> Vector4 { return payload[FLUX_PARAM_FOG_TIME_WIND_GAIN]; }
+flux_param_grass_count_spacing_scale :: (payload: *Vector4) -> Vector4 { return payload[FLUX_PARAM_GRASS_COUNT_SPACING_SCALE]; }
+
 flux_sim_src_offset :: (payload: *Vector4) -> u32 {
-    use_b_f := payload[7].w;
+    use_b_f := flux_param_light_center_use_b_as_src(payload).w;
     if use_b_f >= 0.5 return FLUX_STATE_OFFSET + FLUX_CELL_COUNT;
     return FLUX_STATE_OFFSET;
 }
@@ -178,6 +248,10 @@ flux_read_state_uv :: (payload: *Vector4, uv: Vector2) -> Vector4 {
     px := cast(u32) floor(u * cast(float) (FLUX_WIDTH - 1));
     py := cast(u32) floor(v * cast(float) (FLUX_HEIGHT - 1));
     return payload[flux_sim_src_offset(payload) + flux_cell_index(px, py)];
+}
+
+flux_grass_data_at :: (payload: *Vector4, instance_id: u32) -> Vector4 {
+    return payload[FLUX_GRASS_DATA_OFFSET + instance_id];
 }
 
 flux_decode_world_pos :: (vertex_id: u32, payload: *Vector4, uv_out: *Vector2) -> Vector3 {
@@ -211,7 +285,7 @@ flux_decode_world_pos :: (vertex_id: u32, payload: *Vector4, uv_out: *Vector2) -
     sample := flux_read_state_uv(payload, uv_out.*);
     h := sample.x;
 
-    xz_scale := max(payload[9].w, 0.0001);
+    xz_scale := max(flux_param_sun_dir_xz_scale(payload).w, 0.0001);
     wx := (fx * 2.0 - 1.0) * xz_scale;
     wy := (fy * 2.0 - 1.0) * xz_scale;
     wz := h * 0.34;
@@ -219,10 +293,10 @@ flux_decode_world_pos :: (vertex_id: u32, payload: *Vector4, uv_out: *Vector2) -
 }
 
 flux_project_camera :: (world_pos: Vector3, payload: *Vector4) -> Vector4 {
-    p0 := payload[0];
-    p1 := payload[1];
-    p2 := payload[2];
-    p3 := payload[3];
+    p0 := flux_param_camera_pos_proj_x(payload);
+    p1 := flux_param_camera_right_proj_y(payload);
+    p2 := flux_param_camera_up_near(payload);
+    p3 := flux_param_camera_forward_far(payload);
     cam_pos := Vector3.{p0.x, p0.y, p0.z};
     cam_right := Vector3.{p1.x, p1.y, p1.z};
     cam_up := Vector3.{p2.x, p2.y, p2.z};
@@ -247,10 +321,10 @@ flux_project_camera :: (world_pos: Vector3, payload: *Vector4) -> Vector4 {
 }
 
 flux_project_light :: (world_pos: Vector3, payload: *Vector4) -> Vector3 {
-    p4 := payload[4];
-    p5 := payload[5];
-    p6 := payload[6];
-    p7 := payload[7];
+    p4 := flux_param_light_right_extent(payload);
+    p5 := flux_param_light_up_near(payload);
+    p6 := flux_param_light_forward_far(payload);
+    p7 := flux_param_light_center_use_b_as_src(payload);
     light_right := Vector3.{p4.x, p4.y, p4.z};
     light_up := Vector3.{p5.x, p5.y, p5.z};
     light_forward := Vector3.{p6.x, p6.y, p6.z};
@@ -269,6 +343,33 @@ flux_project_light :: (world_pos: Vector3, payload: *Vector4) -> Vector3 {
     ndc_z := (lz - light_near) / max(light_far - light_near, 0.0001);
     return .{ndc_x, ndc_y, ndc_z};
 }
+
+flux_init_compute :: (using in: Flux_Compute_In, state: *Vector4) {
+    if thread_id.x >= FLUX_CELL_COUNT return;
+
+    i := thread_id.x;
+    x := i % FLUX_WIDTH;
+    y := i / FLUX_WIDTH;
+    fx := cast(float) x / cast(float) FLUX_WIDTH;
+    fy := cast(float) y / cast(float) FLUX_HEIGHT;
+
+    h1 := sin(fx * 9.2) * 0.34;
+    h2 := cos(fy * 11.4) * 0.30;
+    h3 := sin((fx + fy * 0.7) * 18.8) * 0.14;
+    ridge := sin((fx * 2.0 - fy * 1.7) * 27.0) * 0.08;
+    crater_x := fx - 0.72;
+    crater_y := fy - 0.43;
+    crater := exp(-(crater_x * crater_x + crater_y * crater_y) * 84.0) * 0.85;
+    hot_x := fx - 0.22;
+    hot_y := fy - 0.72;
+    hot_spot := exp(-(hot_x * hot_x + hot_y * hot_y) * 120.0);
+
+    height := h1 + h2 + h3 + ridge - crater;
+    temp := 0.08 + hot_spot * 1.4;
+    vx := (fy - 0.5) * 0.06;
+    vy := -(fx - 0.5) * 0.06;
+    state[i] = .{height*1.2, vx, vy, temp};
+} @compute_shader
 
 flux_step_compute :: (using in: Flux_Compute_In, state: *Vector4, control: *Flux_Compute_Control) {
     if thread_id.x >= FLUX_CELL_COUNT return;
@@ -355,6 +456,51 @@ flux_step_compute :: (using in: Flux_Compute_In, state: *Vector4, control: *Flux
     state[dst_offset + i] = .{next_h, vx, vy, next_temp};
 } @compute_shader
 
+flux_grass_spawn_compute :: (using in: Flux_Grass_Compute_In, payload: *Vector4) {
+    if thread_id.x >= FLUX_GRASS_INSTANCE_COUNT return;
+
+    id := thread_id.x;
+    p11 := flux_param_grass_count_spacing_scale(payload);
+    blade_count := cast(u32) max(p11.x, 0.0);
+    spacing := max(p11.y, 0.05);
+    if id >= blade_count {
+        payload[FLUX_GRASS_DATA_OFFSET + id] = .{0.0, 0.0, 0.0, 0.0};
+        return;
+    }
+
+    u := flux_rand01_from_id(id, 0.7548777, 0.1213);
+    v := flux_rand01_from_id(id, 0.5698403, 0.9175);
+    uv := Vector2.{u, v};
+
+    center := flux_read_state_uv(payload, uv);
+    du := 1.0 / cast(float) FLUX_WIDTH;
+    dv := 1.0 / cast(float) FLUX_HEIGHT;
+    left := flux_read_state_uv(payload, .{uv.x - du, uv.y});
+    right := flux_read_state_uv(payload, .{uv.x + du, uv.y});
+    up := flux_read_state_uv(payload, .{uv.x, uv.y - dv});
+    down := flux_read_state_uv(payload, .{uv.x, uv.y + dv});
+
+    grad_x := (right.x - left.x) * 0.5;
+    grad_y := (down.x - up.x) * 0.5;
+    slope := sqrt(grad_x * grad_x + grad_y * grad_y);
+
+    xz_scale := max(flux_param_sun_dir_xz_scale(payload).w, 0.0001);
+    wx := (u * 2.0 - 1.0) * xz_scale;
+    wy := (v * 2.0 - 1.0) * xz_scale;
+    wz := center.x * 0.34;
+
+    keep_prob := 1.0 / (spacing * spacing);
+    keep_roll := flux_rand01_from_id(id, 0.4385780, 0.3317);
+    spawn_mask := 0.0;
+    if slope < 0.20 && center.w < 1.35 && center.x > -3.0 {
+        if keep_roll <= keep_prob {
+            spawn_mask = 1.0;
+        }
+    }
+
+    payload[FLUX_GRASS_DATA_OFFSET + id] = .{wx, wy, wz, spawn_mask};
+} @compute_shader
+
 flux_shadow_vertex_main :: (using in: Flux_Vertex_In, payload: *Vector4) -> Flux_Shadow_Vertex_Out {
     using out: Flux_Shadow_Vertex_Out;
     local_uv: Vector2;
@@ -382,10 +528,11 @@ flux_vertex_main :: (using in: Flux_Vertex_In, payload: *Vector4) -> Flux_Vertex
 } @vertex_shader
 
 flux_shadow_visibility :: (payload: *Vector4, shadow_uvz: Vector3) -> float {
-    tex_idx := cast(u32) payload[8].x;
-    samp_idx := cast(u32) payload[8].y;
-    bias := payload[8].z;
-    texel := payload[8].w;
+    p8 := flux_param_shadow_tex_sampler_bias_texel(payload);
+    tex_idx := cast(u32) p8.x;
+    samp_idx := cast(u32) p8.y;
+    bias := p8.z;
+    texel := p8.w;
 
     u := shadow_uvz.x;
     // Render-target UV convention differs from clip-space Y; flip for shadow lookup.
@@ -435,7 +582,7 @@ flux_fragment_main :: (using in: Flux_Fragment_In, payload: *Vector4) -> struct 
     grad_y := (h_down - h_up) * 0.5;
 
     n := flux_safe_normalize3(.{-grad_x * 12.0, -grad_y * 12.0, 1.0});
-    p9 := payload[9];
+    p9 := flux_param_sun_dir_xz_scale(payload);
     light_dir := flux_safe_normalize3(.{p9.x, p9.y, p9.z});
     ndotl := clamp(dot(n, light_dir), 0.0, 1.0);
 
@@ -464,8 +611,8 @@ flux_fragment_main :: (using in: Flux_Fragment_In, payload: *Vector4) -> struct 
     flow_sheen := speed * 0.16;
 
     color := base * (ambient + diffuse + rim) + Vector3.{flow_sheen, flow_sheen * 0.8, flow_sheen * 0.6};
-    p0 := payload[0];
-    p10 := payload[10];
+    p0 := flux_param_camera_pos_proj_x(payload);
+    p10 := flux_param_fog_time_wind_gain(payload);
     cam_pos := Vector3.{p0.x, p0.y, p0.z};
     fog_density := max(p10.x, 0.0);
     fog_exponent := max(p10.y, 0.0001);
@@ -499,7 +646,7 @@ flux_debug_shadow_vertex_main :: (using in: Flux_Vertex_In, payload: *Vector4) -
 } @vertex_shader
 
 flux_debug_shadow_fragment_main :: (using in: Flux_Debug_Fragment_In, payload: *Vector4) -> struct { out_color: Vector4; } {
-    p8 := payload[8];
+    p8 := flux_param_shadow_tex_sampler_bias_texel(payload);
     tex_idx := cast(u32) p8.x;
     samp_idx := cast(u32) p8.y;
     s := sample_2d(tex_idx, samp_idx, .{uv.x, 1.0 - uv.y});
@@ -520,11 +667,11 @@ flux_sky_vertex_main :: (using in: Flux_Vertex_In, payload: *Vector4) -> Flux_Sk
 } @vertex_shader
 
 flux_sky_fragment_main :: (using in: Flux_Sky_Fragment_In, payload: *Vector4) -> struct { out_color: Vector4; } {
-    p0 := payload[0];
-    p1 := payload[1];
-    p2 := payload[2];
-    p3 := payload[3];
-    p9 := payload[9];
+    p0 := flux_param_camera_pos_proj_x(payload);
+    p1 := flux_param_camera_right_proj_y(payload);
+    p2 := flux_param_camera_up_near(payload);
+    p3 := flux_param_camera_forward_far(payload);
+    p9 := flux_param_sun_dir_xz_scale(payload);
 
     cam_right := Vector3.{p1.x, p1.y, p1.z};
     cam_up := Vector3.{p2.x, p2.y, p2.z};
@@ -540,4 +687,92 @@ flux_sky_fragment_main :: (using in: Flux_Sky_Fragment_In, payload: *Vector4) ->
     color := flux_sky_color(view_dir, sun_dir);
 
     return .{out_color = .{color.x, color.y, color.z, 1.0}};
+} @fragment_shader
+
+flux_grass_vertex_main :: (using in: Flux_Vertex_In, payload: *Vector4) -> Flux_Grass_Vertex_Out {
+    using out: Flux_Grass_Vertex_Out;
+
+    entry := flux_grass_data_at(payload, instance_id);
+    active := entry.w;
+    if active < 0.5 {
+        gl_Position = .{0.0, 0.0, 2.0, 1.0};
+        world_pos = .{0.0, 0.0, 0.0};
+        normal = .{0.0, 0.0, 1.0};
+        shadow_uvz = .{0.0, 0.0, 2.0};
+        blade_t = 0.0;
+        return out;
+    }
+
+    base := Vector3.{entry.x, entry.y, entry.z};
+    id := instance_id;
+    tau := cast(float) 6.28318530718;
+    r0 := flux_rand01_from_id(id, 0.8191725, 0.2179);
+    r1 := flux_rand01_from_id(id, 0.6710436, 0.4891);
+    r2 := flux_rand01_from_id(id, 0.5129028, 0.7334);
+
+    yaw := r0 * tau;
+    right := Vector3.{cos(yaw), sin(yaw), 0.0};
+    tangent := Vector3.{-right.y, right.x, 0.0};
+
+    blade_scale := max(flux_param_grass_count_spacing_scale(payload).z, 0.05);
+    h := mix(0.07, 0.17, r1) * blade_scale;
+    w := h * mix(0.12, 0.20, r2);
+
+    vx: float;
+    vt: float;
+    if vertex_id == 0 { vx = -1.0; vt = 0.0; }
+    else if vertex_id == 1 { vx =  1.0; vt = 0.0; }
+    else if vertex_id == 2 { vx = -0.32; vt = 1.0; }
+    else if vertex_id == 3 { vx =  1.0; vt = 0.0; }
+    else if vertex_id == 4 { vx =  0.32; vt = 1.0; }
+    else { vx = -0.32; vt = 1.0; }
+
+    p10 := flux_param_fog_time_wind_gain(payload);
+    wind_time := p10.z;
+    wind_gain := max(p10.w, 0.0);
+    wind_dir := flux_safe_normalize3(.{sin(wind_time * 0.19), cos(wind_time * 0.23), 0.0});
+    sway := sin(wind_time * 1.8 + r2 * 12.0 + base.x * 0.9 + base.y * 1.1) * (0.06 + wind_gain * 0.26);
+    bend := sway * vt * vt;
+
+    world_pos = base + right * (vx * w) + Vector3.{0.0, 0.0, vt * h} + wind_dir * bend;
+    gl_Position = flux_project_camera(world_pos, payload);
+
+    tip_dir := flux_safe_normalize3(.{wind_dir.x * bend, wind_dir.y * bend, 1.0});
+    n := flux_safe_normalize3(cross(tangent, tip_dir));
+    normal = n;
+    blade_t = vt;
+
+    lndc := flux_project_light(world_pos, payload);
+    shadow_uvz = .{lndc.x * 0.5 + 0.5, lndc.y * 0.5 + 0.5, lndc.z};
+    return out;
+} @vertex_shader
+
+flux_grass_fragment_main :: (using in: Flux_Grass_Fragment_In, payload: *Vector4) -> struct { out_color: Vector4; } {
+    p9 := flux_param_sun_dir_xz_scale(payload);
+    p10 := flux_param_fog_time_wind_gain(payload);
+    light_dir := flux_safe_normalize3(.{p9.x, p9.y, p9.z});
+    n := flux_safe_normalize3(normal);
+    ndotl := clamp(dot(n, light_dir), 0.0, 1.0);
+    shadow := flux_shadow_visibility(payload, shadow_uvz);
+
+    low := Vector3.{0.065, 0.20, 0.07};
+    high := Vector3.{0.26, 0.56, 0.17};
+    base := mix(low, high, blade_t);
+    ambient := 0.24;
+    diffuse := 0.85 * ndotl * shadow;
+    col := base * (ambient + diffuse);
+
+    p0 := flux_param_camera_pos_proj_x(payload);
+    cam_pos := Vector3.{p0.x, p0.y, p0.z};
+    view_vec := world_pos - cam_pos;
+    dist := sqrt(max(dot(view_vec, view_vec), 0.0));
+    fog_density := max(p10.x, 0.0);
+    fog_exponent := max(p10.y, 0.0001);
+    view_dir := flux_safe_normalize3(view_vec);
+    sky_col := flux_sky_base_color(view_dir, light_dir);
+    fog_term := pow(max(dist * fog_density, 0.0), fog_exponent);
+    fog := clamp(1.0 - exp(-fog_term), 0.0, 1.0);
+    col = mix(col, sky_col, fog);
+
+    return .{out_color = .{col.x, col.y, col.z, 1.0}};
 } @fragment_shader

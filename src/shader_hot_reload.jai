@@ -70,10 +70,15 @@ shader_hot_reload_register_graphics_pipeline :: (reload: *Shader_Hot_Reload, ent
 }
 
 shader_hot_reload_create_and_register_graphics_pipeline_with_entry_id :: (reload: *Shader_Hot_Reload, entry_id: string, pipeline: *Gpu_Pipeline, source: []u8, raster_desc: Gpu_Raster_Desc) -> bool {
-    _ = source;
     if entry_id.count == 0 || !pipeline return false;
 
     new_pipeline := shader_hot_reload_create_graphics_pipeline_for_entry(reload, entry_id, raster_desc);
+    if new_pipeline == 0 && source.count > 0 {
+        // Startup/build-cache fallback: manifest_latest can be stale (global/shared),
+        // but direct source compilation is still valid for initial pipeline creation.
+        log_error("% falling back to source graphics compile for id=%", reload.log_prefix, entry_id);
+        new_pipeline = gpu_create_graphics_pipeline(source, raster_desc);
+    }
     if new_pipeline == 0 return false;
 
     old_pipeline := pipeline.*;
@@ -101,10 +106,15 @@ shader_hot_reload_register_compute_pipeline :: (reload: *Shader_Hot_Reload, entr
 }
 
 shader_hot_reload_create_and_register_compute_pipeline_with_entry_id :: (reload: *Shader_Hot_Reload, entry_id: string, pipeline: *Gpu_Pipeline, source: []u8) -> bool {
-    _ = source;
     if entry_id.count == 0 || !pipeline return false;
 
     new_pipeline := shader_hot_reload_create_compute_pipeline_for_entry(reload, entry_id);
+    if new_pipeline == 0 && source.count > 0 {
+        // Startup/build-cache fallback: manifest_latest can be stale (global/shared),
+        // but direct source compilation is still valid for initial pipeline creation.
+        log_error("% falling back to source compute compile for id=%", reload.log_prefix, entry_id);
+        new_pipeline = gpu_create_compute_pipeline(source);
+    }
     if new_pipeline == 0 return false;
 
     old_pipeline := pipeline.*;

@@ -557,7 +557,7 @@ Window_Type :: WT.Window_Type;
 }
 
 #load "App_Common.jai";
-#load "ui.jai";
+#load "ui/ui.jai";
 #scope_file
 #load "measure_fps.jai";
 #load "readback_stats.jai";

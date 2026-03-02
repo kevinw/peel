@@ -90,11 +90,18 @@ END, event_name));
 
                             // If the declaration is in a module, we need to import the module to call the function on it.
                             if decl.enclosing_load && decl.enclosing_load.enclosing_import && decl.enclosing_load.enclosing_import.module_name {
-                                module_name := decl.enclosing_load.enclosing_import.module_name;
+                                import := decl.enclosing_load.enclosing_import;
+                                module_name := import.module_name;
+                                module_name_id := sanitize_identifier(module_name);
+                                import_suffix := "";
+                                if ends_with(module_name, ".jai") {
+                                    import_suffix = ",file";
+                                    module_name = import.fully_pathed_filename;
+                                }
                                 append(*sb, tprint(#string END
-            % :: #import "%";
-            %.%();
-END, module_name, module_name, module_name, decl.name));
+            %1 :: #import%4 "%2";
+            %1.%3();
+END, module_name_id, module_name, decl.name, import_suffix));
                             } else {
                                 // Otherwise, just call the function directly.
                                 append(*sb, tprint(#string END
@@ -115,6 +122,19 @@ END);
 }
 
 #scope_file
+sanitize_identifier :: (s: string) -> string {
+    result := alloc_string(s.count);
+
+    for c: s {
+        if (is_alpha(c) || is_digit(c) || c == #char "_") && c != #char "."
+            result[it_index] = c;
+        else
+            result[it_index] = #char "_";
+    }
+
+    return result;
+}
+
 #import "Compiler";
 #import "Basic";
 #import "String";

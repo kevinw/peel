@@ -3,6 +3,9 @@
 //
 
 Global_Entry :: struct {
+  name: string;
+  module_name: string;
+  source_code_location: Source_Code_Location;
   name_hash: u32;
   module_name_hash: u32;
   data: *void;

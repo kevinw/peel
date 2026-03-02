@@ -1,6 +1,7 @@
 # TODO
 
 - a "noisy" mode for sgpu where all non-success results are logged
+- sgpu Metal debug: track residency dirty state and assert/bark on resource use without `gpu_commit_residency()`, using `MTLResidencySet.containsAllocation(...)` checks on bound allocations
 - fix jai build.jai - -dll (parallel builds need to build only dylibs)
 - add "capture screen" app which saves a grid of images from all the examples
 - remove IR_PLAN

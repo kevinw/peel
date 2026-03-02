@@ -366,6 +366,7 @@ END, reload_common_module);
 
         it.module_name_id = String.replace(it.import.module_name, "/", "__",, temp);
         it.module_name_id = String.replace(it.module_name_id, "-", "_",, temp);
+        it.module_name_id = String.replace(it.module_name_id, ".", "___",, temp);
     }
 
     // Now we have a global ordering of decls.
@@ -422,10 +423,10 @@ END, file_entry.message_file.fully_pathed_filename, func_name));
         for it, decl_index: file_entry.decls {
             name := it.name;
             loc := it.location;
-            append(*sb, tprint(#string END
-        .{ name_hash=% /* "%" */, module_name_hash=% /* "%" */, data=*%, size=size_of(type_of(%)), ti=type_info(type_of(%)) },
+            print_to_builder(*sb, #string END
+        { name="%2", module_name="%4", name_hash=%1 /* "%2" */, module_name_hash=%3 /* "%4" */, data=*%2, size=size_of(type_of(%2)), ti=type_info(type_of(%2)) },
 END,
-                    name_hashes[global_decl_index], name, file_entry.module_name_hash, import.module_name, name, name, name));
+                    name_hashes[global_decl_index], name, file_entry.module_name_hash, import.module_name,, temp);
             global_decl_index += 1;
         }
         append(*sb, tprint(#string END
