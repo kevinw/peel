@@ -3,6 +3,7 @@
 // moves it to the corner of the screen, for live reload during development.
 //
 
+MINI_MODE_ENABLED :: !RELEASE;
 MINI_MODE_WIDTH_PX  :: 1152;
 MINI_MODE_HEIGHT_PX :: 648;
 MINI_MODE_MARGIN_PX :: 16;
@@ -12,12 +13,10 @@ app_window_focus_initialized := false;
 app_window_has_focus := false;
 app_window_unfocused_streak: int = 0;
 app_mini_mode_active := false;
-#if OS == .MACOS {
-    macos_window_focus_hooks_installed := false;
-}
 
 handle_focus_transition_after_input_update :: () {
     #if OS != .MACOS return;
+    #if !MINI_MODE_ENABLED return;
     if !window return;
 
     focus_now := Input.input_application_has_focus;
@@ -52,6 +51,7 @@ handle_focus_transition_after_input_update :: () {
 #if OS == .MACOS {
 
     enter_mini_mode_window :: () {
+        #if !MINI_MODE_ENABLED return;
         if !window return;
         if app_mini_mode_active return;
 
@@ -85,6 +85,7 @@ handle_focus_transition_after_input_update :: () {
     }
 
     exit_mini_mode_window :: () {
+        #if !MINI_MODE_ENABLED return;
         if !window return;
         if !app_mini_mode_active return;
 
@@ -105,18 +106,19 @@ handle_focus_transition_after_input_update :: () {
         app_mini_mode_active = false;
     }
 
+}
+
+#scope_file
+Input :: #import "Input";
+
+
+#if OS == .MACOS {
     window_screen :: (window: *NSWindow) -> *NSScreen {
         if !window return null;
         get_screen: (*void, Selector) -> *NSScreen #c_call;
         get_screen = xx objc_msgSend;
         return get_screen(window, selector("screen"));
     }
-}
-
-#scope_file
-Input :: #import "Input";
-
-#if OS == .MACOS {
     saved_window: struct {
         frame: NSRect = ---;
         level: NSWindowLevel = 0;

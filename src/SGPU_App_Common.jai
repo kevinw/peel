@@ -28,6 +28,9 @@ perf_capture_gpu_ms_sum: float64 = 0;
 perf_capture_count: s64 = 0;
 perf_capture_gpu_count: s64 = 0;
 perf_capture_reported := false;
+#if OS == .MACOS {
+    macos_window_focus_hooks_installed := false;
+}
 
 PERF_CAPTURE_START_FRAME :: 5;
 PERF_CAPTURE_END_FRAME :: 30;
