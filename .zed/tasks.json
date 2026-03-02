@@ -1,62 +1,74 @@
 [
   {
+    "label": "boids",
+    "command": "jai ~/src/peel/build.jai - src/apps/boids.jai -run -dll"
+  },
+  {
+    "label": "fluid2d",
+    "command": "jai ~/src/peel/build.jai - src/apps/fluid2d.jai -run -dll"
+  },
+  {
     "label": "flux",
-    "command": "jai ~/src/peel/build.jai - src/apps/flux.jai -run -dll",
-  },
-  {
-    "label": "sand_toy",
-    "command": "jai ~/src/peel/build.jai - src/apps/sand_toy.jai -run -dll",
-  },
-  {
-    "label": "terrain_test",
-    "command": "jai ~/src/peel/build.jai - src/apps/terrain_test.jai -run",
-  },
-  {
-    "label": "physics_test",
-    "command": "jai ~/src/peel/build.jai - src/apps/physics_test.jai -run",
+    "command": "jai ~/src/peel/build.jai - src/apps/flux.jai -run -dll"
   },
   {
     "label": "gizmos_test",
-    "command": "jai ~/src/peel/build.jai - src/apps/gizmos_test.jai -run",
+    "command": "jai ~/src/peel/build.jai - src/apps/gizmos_test.jai -run"
   },
   {
     "label": "particles",
-    "command": "jai ~/src/peel/build.jai - src/apps/particles.jai -run -dll",
+    "command": "jai ~/src/peel/build.jai - src/apps/particles.jai -run -dll"
   },
   {
-    "label": "textured_triangle",
-    "command": "jai ~/src/peel/build.jai - src/apps/textured_triangle.jai -run",
+    "label": "pbr",
+    "command": "jai ~/src/peel/build.jai - src/apps/pbr.jai -run -dll"
   },
   {
-    "label": "boids",
-    "command": "jai ~/src/peel/build.jai - src/apps/boids.jai -run -dll",
+    "label": "physics_test",
+    "command": "jai ~/src/peel/build.jai - src/apps/physics_test.jai -run"
   },
   {
     "label": "raymarch",
-    "command": "jai ~/src/peel/build.jai - src/apps/raymarch.jai -run -dll",
-  },
-  {
-    "label": "ripple_heightfield",
-    "command": "jai ~/src/peel/build.jai - src/apps/ripple_heightfield.jai -run -dll",
-  },
-  {
-    "label": "textured_triangle_smoke",
-    "command": "cd ~/src/peel && ./tools/textured_triangle_probe.sh",
+    "command": "jai ~/src/peel/build.jai - src/apps/raymarch.jai -run -dll"
   },
   {
     "label": "raytracer",
-    "command": "jai ~/src/peel/build.jai - src/apps/raytracer.jai -run -dll",
+    "command": "jai ~/src/peel/build.jai - src/apps/raytracer.jai -run -dll"
+  },
+  {
+    "label": "reaction_diffusion",
+    "command": "jai ~/src/peel/build.jai - src/apps/reaction_diffusion.jai -run -dll"
+  },
+  {
+    "label": "ripple_heightfield",
+    "command": "jai ~/src/peel/build.jai - src/apps/ripple_heightfield.jai -run -dll"
+  },
+  {
+    "label": "sand_toy",
+    "command": "jai ~/src/peel/build.jai - src/apps/sand_toy.jai -run -dll"
+  },
+  {
+    "label": "terrain_test",
+    "command": "jai ~/src/peel/build.jai - src/apps/terrain_test.jai -run"
+  },
+  {
+    "label": "textured_triangle",
+    "command": "jai ~/src/peel/build.jai - src/apps/textured_triangle.jai -run"
   },
   {
     "label": "build ir_pipe",
-    "command": "cd ~/src/peel/modules/Jai-Shader-Transpiler && jai build_ir_pipe.jai",
+    "command": "cd ~/src/peel/modules/Jai-Shader-Transpiler && jai build_ir_pipe.jai"
   },
   {
     "label": "build ALL",
-    "command": "cd ~/src/peel && jai build.jai",
+    "command": "cd ~/src/peel && jai build.jai"
   },
   {
     "label": "compute_semantics_runner",
-    "command": "~/src/peel/modules/Jai-Shader-Transpiler/headless_ir/test_ir_compute_semantics.sh",
+    "command": "~/src/peel/modules/Jai-Shader-Transpiler/headless_ir/test_ir_compute_semantics.sh"
   },
+  {
+    "label": "regenerate peel tasks",
+    "command": "cd ~/src/peel/tools && node generate_zed_tasks.mjs"
+  }
 ]
