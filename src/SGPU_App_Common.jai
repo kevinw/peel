@@ -28,11 +28,6 @@ perf_capture_gpu_ms_sum: float64 = 0;
 perf_capture_count: s64 = 0;
 perf_capture_gpu_count: s64 = 0;
 perf_capture_reported := false;
-shader_reload_snapshot_mode := false;
-shader_reload_snapshot_before_done := false;
-shader_reload_snapshot_after_pending := false;
-shader_reload_snapshot_after_done := false;
-shader_reload_snapshot_after_min_frame: s64 = 0;
 
 PERF_CAPTURE_START_FRAME :: 5;
 PERF_CAPTURE_END_FRAME :: 30;
@@ -112,6 +107,12 @@ sgpu_set_debug_status :: (status: string) {
 }
 
 submit_and_present_with_ui :: (cmd_buff: Gpu_Command_Buffer) {
+    if !app_should_render_ui() {
+        current_ui_render_frame = {};
+        gpu_submit_and_present(cmd_buff);
+        return;
+    }
+
     //
     // interleave metal and metal4 here. todo: we can go back to a more normal
     // "flow" once we make a Metal4 imgui backend.
@@ -123,7 +124,7 @@ submit_and_present_with_ui :: (cmd_buff: Gpu_Command_Buffer) {
 
     gpu_submit_swapchain_no_present(cmd_buff, signals=.[.{ui_semaphore, app_done_value}]);
 
-    ui_render(app_done_value, ui_done_value, current_ui_render_frame);
+    ui_render(app_done_value, ui_done_value, *current_ui_render_frame, skip_render=app_mini_mode_active);
     current_ui_render_frame = {};
 
     gpu_present_current_swapchain(waits=.[.{ui_semaphore, ui_done_value}]);
@@ -135,7 +136,11 @@ app_swapchain_acquire :: () -> Gpu_Result, Gpu_Texture_View {
     result, swapchain_image := gpu_swapchain_acquire();
     assert(result == .SUCCESS);
     if swapchain_image != 0 {
-        current_ui_render_frame = ui_render_pre();
+        if app_should_render_ui() {
+            current_ui_render_frame = ui_render_pre();
+        } else {
+            current_ui_render_frame = {};
+        }
     }
     return result, swapchain_image;
 }
@@ -146,6 +151,7 @@ app_update :: (update_ctx: *App_Update_Ctx) {
     #if OS == .MACOS {
         if pending_objc_reinit_after_reload {
             init_all_objective_c_selector_structs();
+            install_macos_window_focus_hooks();
             if NSApp {
                 NSApplication.setDelegate(NSApp, context._macos_create_app_delegate());
             }
@@ -192,6 +198,7 @@ app_update :: (update_ctx: *App_Update_Ctx) {
     }
 
     Input.update_window_events();
+    handle_focus_transition_after_input_update();
     for Input.get_window_resizes() {
         if it.window == window {
             gpu_swapchain_resize();
@@ -233,9 +240,9 @@ app_update :: (update_ctx: *App_Update_Ctx) {
             } else if did_rebuild && !swapped_all {
                 log_error("SHADER_RELOAD build succeeded but pipeline swap was partial.");
             }
-            if shader_reload_snapshot_mode && did_rebuild && rebuild_ok {
-                shader_reload_snapshot_after_pending = true;
-                shader_reload_snapshot_after_min_frame = cast(s64) frame_count + 1;
+            if snapshot.enabled && did_rebuild && rebuild_ok {
+                snapshot.after_pending = true;
+                snapshot.after_min_frame = cast(s64) frame_count + 1;
             }
         }
 
@@ -245,13 +252,13 @@ app_update :: (update_ctx: *App_Update_Ctx) {
                 log_error("Error: READBACK_ENABLED but no gpu_current_swapchain_view()");
             } else {
                 per_frame_debug(*readback_stats, cast(s64)frame_count, swapchain_image);
-                if shader_reload_snapshot_mode && frame_count >= 2 {
-                    if !shader_reload_snapshot_before_done {
+                if snapshot.enabled && frame_count >= 2 {
+                    if !snapshot.before_done {
                         readback_stats_dump_snapshot(*readback_stats, swapchain_image, cast(s64) frame_count, tprint("%_shader_reload_before", APP_NAME), APP_NAME);
-                        shader_reload_snapshot_before_done = true;
-                    } else if shader_reload_snapshot_after_pending && !shader_reload_snapshot_after_done && cast(s64) frame_count >= shader_reload_snapshot_after_min_frame {
+                        snapshot.before_done = true;
+                    } else if snapshot.after_pending && !snapshot.after_done && cast(s64) frame_count >= snapshot.after_min_frame {
                         readback_stats_dump_snapshot(*readback_stats, swapchain_image, cast(s64) frame_count, tprint("%_shader_reload_after", APP_NAME), APP_NAME);
-                        shader_reload_snapshot_after_done = true;
+                        snapshot.after_done = true;
                         app_quit_requested = true;
                     }
                 }
@@ -269,7 +276,8 @@ app_update :: (update_ctx: *App_Update_Ctx) {
 
 create_window_and_init_sgpu :: () {
     #if OS == .MACOS {
-        window = create_metal_window(2500, 2000, "hello peel");
+        window = create_metal_window(2500, 2000, "");
+        install_macos_window_focus_hooks();
         ensure_macos_window_frontmost(window);
     } else {
         window = create_window(2500, 2000, "hello peel");
@@ -284,6 +292,9 @@ create_window_and_init_sgpu :: () {
         // there's probably a better fix for this!
         ensure_macos_window_frontmost(window);
         Input.update_window_events();
+        app_window_focus_initialized = false;
+        app_window_has_focus = false;
+        app_window_unfocused_streak = 0;
     }
 }
 
@@ -327,14 +338,10 @@ host_init :: (init_ctx: Init_Ctx) -> bool {
     perf_capture_count = 0;
     perf_capture_gpu_count = 0;
     perf_capture_reported = false;
-    shader_reload_snapshot_mode = false;
-    shader_reload_snapshot_before_done = false;
-    shader_reload_snapshot_after_pending = false;
-    shader_reload_snapshot_after_done = false;
-    shader_reload_snapshot_after_min_frame = 0;
+    snapshot = {};
     env_reload_snapshot_mode, did_parse_reload_snapshot_mode := Env_Vars.try_parse_env_int("PEEL_SHADER_RELOAD_SNAPSHOT");
     if did_parse_reload_snapshot_mode {
-        shader_reload_snapshot_mode = env_reload_snapshot_mode > 0;
+        snapshot.enabled = env_reload_snapshot_mode > 0;
     }
     #if OS == {
         case .WINDOWS;
@@ -352,16 +359,21 @@ host_init :: (init_ctx: Init_Ctx) -> bool {
 
     #if READBACK_ENABLED {
         frame_debug_init(*readback_stats);
-        if shader_reload_snapshot_mode {
+        if snapshot.enabled {
             gpu_set_swapchain_framebuffer_only(false);
         }
     }
+
+    wait_for_initial_focus_before_dll_init();
 
     SHR.shader_hot_reload_init_auto(*shader_reload_ctx,
         app_source_file = APP_NAME,
         poll_every_frames = 15,
         log_prefix = "SHADER_RELOAD",
-        enabled_by_default = !RELEASE || shader_reload_snapshot_mode);
+        enabled_by_default = !RELEASE || snapshot.enabled,
+        use_background_thread = false,
+    );
+
 
     call_event_functions(.dll_init);
 
@@ -372,6 +384,35 @@ dummy_on_resize :: () {  } @on_window_resize
 shader_reload_on_ui :: () { SHR.shader_hot_reload_imgui(*shader_reload_ctx, ui_get_monospace_font()); } @on_ui
 
 #scope_file
+
+app_should_render_ui :: () -> bool {
+    return true;
+}
+
+wait_for_initial_focus_before_dll_init :: () {
+    #if OS != .MACOS return;
+    if !window return;
+
+    STARTUP_FOCUS_WAIT_MAX_MS :: 4000;
+    STARTUP_FOCUS_WAIT_STEP_MS :: 10;
+
+    attempts := STARTUP_FOCUS_WAIT_MAX_MS / STARTUP_FOCUS_WAIT_STEP_MS;
+    for i: 0..attempts-1 {
+        Input.update_window_events();
+        if Input.input_application_has_focus {
+            app_window_focus_initialized = true;
+            app_window_has_focus = true;
+            app_window_unfocused_streak = 0;
+            return;
+        }
+
+        if i % 20 == 0 ensure_macos_window_frontmost(window);
+        sleep_milliseconds(STARTUP_FOCUS_WAIT_STEP_MS);
+    }
+
+    log_error("Initial focus wait timed out after %ms; continuing app init.", STARTUP_FOCUS_WAIT_MAX_MS);
+}
+
 
 perf_capture_finish_and_check :: () {
     if perf_capture_reported return;
@@ -420,6 +461,7 @@ Window_Type :: WT.Window_Type;
     init_all_objective_c_selector_structs :: () {
         init_objective_c();
         init_app_kit();
+        init_core_graphics_runtime_constants();
         init_metal();
         init_objective_c_tools();
     }
@@ -447,12 +489,14 @@ Window_Type :: WT.Window_Type;
     #scope_export
     reload_stdlib :: () {
         pending_objc_reinit_after_reload = true;
+        macos_window_focus_hooks_installed = false;
     } @on_reload
 
     dll_unload :: () {
         // This is a hack to get live reloading working with Jai's Input module's NSApplication and NSWindow delegates.
         if window NSWindow.setDelegate(window, null);
         NSApplication.setDelegate(NSApp, null);
+        macos_window_focus_hooks_installed = false;
 
         remove_old_objc_class("App_Delegate");
         remove_old_objc_class("Window_Delegate");
@@ -461,6 +505,37 @@ Window_Type :: WT.Window_Type;
 
 
     #scope_file
+    Window_Delegate_Focus_Hooks :: struct {
+        using #as nsobject: NSObject;
+
+        windowDidBecomeKey :: (using self: *Window_Delegate_Focus_Hooks, _sel: Selector, notification: *NSNotification) #c_call {
+            _ = self;
+            _ = notification;
+            Input.input_application_has_focus = true;
+        } @selector(windowDidBecomeKey:)
+
+        windowDidResignKey :: (using self: *Window_Delegate_Focus_Hooks, _sel: Selector, notification: *NSNotification) #c_call {
+            _ = self;
+            _ = notification;
+            if NSApp {
+                key_window := NSApplication.keyWindow(NSApp);
+                main_window := NSApplication.mainWindow(NSApp);
+                Input.input_application_has_focus = key_window != null || main_window != null;
+            } else {
+                Input.input_application_has_focus = false;
+            }
+        } @selector(windowDidResignKey:)
+    }
+
+    install_macos_window_focus_hooks :: () {
+        if macos_window_focus_hooks_installed return;
+        wd_class := objc_getClass("Window_Delegate");
+        if !wd_class return;
+        objc_add_instance_method(wd_class, Window_Delegate_Focus_Hooks.windowDidBecomeKey, "windowDidBecomeKey:");
+        objc_add_instance_method(wd_class, Window_Delegate_Focus_Hooks.windowDidResignKey, "windowDidResignKey:");
+        macos_window_focus_hooks_installed = true;
+    }
+
     remove_old_objc_class :: (name: *u8) {
         old_class := objc_getClass(name);
         if old_class {
@@ -474,8 +549,17 @@ Window_Type :: WT.Window_Type;
 #scope_file
 #load "measure_fps.jai";
 #load "readback_stats.jai";
+#load "mini_mode.jai";
 #if OS != .MACOS #import "Window_Creation";
 #if OS == .MACOS #load "Metal_Window_Creation.jai";
 String :: #import "String";
 Env_Vars :: #import "Env_Vars";
 SHR :: #import,file "shader_hot_reload.jai";
+
+snapshot: struct {
+    enabled := false;
+    before_done := false;
+    after_pending := false;
+    after_done := false;
+    after_min_frame: s64 = 0;
+}

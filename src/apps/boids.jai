@@ -29,8 +29,7 @@ build_ui :: () {
     open: bool = true;
     window_flags: WindowFlags = .NoDecoration | .AlwaysAutoResize | .NoSavedSettings | .NoFocusOnAppearing | .NoNav;
     if Begin("Boids", *open, window_flags) {
-        Text("Simple overlay");
-        Separator();
+        Text("Boids");
     }
     End();
 }

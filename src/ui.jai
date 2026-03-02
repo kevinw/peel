@@ -74,37 +74,43 @@ ui_render_pre :: () -> UI_Render_Frame_Info {
     return frame_info;
 }
 
-ui_render :: (wait_value: u64, signal_value: u64, ui_render_frame_info: UI_Render_Frame_Info) {
+ui_render :: (wait_value: u64, signal_value: u64, ui_render_frame_info: *UI_Render_Frame_Info, skip_render := false) {
     if ui_render_frame_info.pass == null {
         return;
     }
+
     // ShowDemoWindow(null);
     call_event_functions(.ui);
     Render();
 
-    // encode gpu commands
-    command_buffer := ui_command_queue.commandBuffer(ui_command_queue);
-    assert(command_buffer != null);
+    #if OS == .MACOS {
+        // encode gpu commands
+        command_buffer := ui_command_queue.commandBuffer(ui_command_queue);
+        assert(command_buffer != null);
 
-#if OS == .MACOS {
-    sync_event := gpu_get_native_shared_event(ui_sync_semaphore);
-    assert(sync_event != null);
-    command_buffer.encodeWaitForEvent(command_buffer, sync_event, wait_value);
+        sync_event := gpu_get_native_shared_event(ui_sync_semaphore);
+        assert(sync_event != null);
+        command_buffer.encodeWaitForEvent(command_buffer, sync_event, wait_value);
 
-    render_encoder := command_buffer.renderCommandEncoderWithDescriptor(command_buffer, ui_render_frame_info.pass);
-    {
-        render_encoder.pushDebugGroup(render_encoder, to_temp_nsstring("ImGui render"));
-        defer render_encoder.popDebugGroup(render_encoder);
-        draw_data := GetDrawData();
-        ImplMetal_RenderDrawData(draw_data, command_buffer, render_encoder);
-        render_encoder.endEncoding(render_encoder);
+        render_encoder := command_buffer.renderCommandEncoderWithDescriptor(command_buffer, ui_render_frame_info.pass);
+        {
+            render_encoder.pushDebugGroup(render_encoder, to_temp_nsstring("ImGui render"));
+            defer render_encoder.popDebugGroup(render_encoder);
+            draw_data := GetDrawData();
+            if !skip_render {
+                ImplMetal_RenderDrawData(draw_data, command_buffer, render_encoder);
+            }
+            render_encoder.endEncoding(render_encoder);
+        }
+
+        command_buffer.encodeSignalEvent(command_buffer, sync_event, signal_value);
+        command_buffer.commit(command_buffer);
+
+        if ui_render_frame_info.pass {
+            release(ui_render_frame_info.pass);
+            ui_render_frame_info.pass = null;
+        }
     }
-
-    command_buffer.encodeSignalEvent(command_buffer, sync_event, signal_value);
-    command_buffer.commit(command_buffer);
-
-    release(ui_render_frame_info.pass);
-}
 }
 
 dummy_on_ui :: () { } @on_ui

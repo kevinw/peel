@@ -129,11 +129,7 @@ flux_sky_color :: (view_dir: Vector3, sun_dir: Vector3) -> Vector3 {
 
     zenith_col := Vector3.{0.18, 0.34, 0.72};
     horizon_col := Vector3.{0.62, 0.70, 0.86};
-    base := Vector3.{
-        mix(horizon_col.x, zenith_col.x, upness),
-        mix(horizon_col.y, zenith_col.y, upness),
-        mix(horizon_col.z, zenith_col.z, upness),
-    };
+    base := mix(horizon_col, zenith_col, upness);
     base = base * (1.0 - horizon * 0.22);
 
     sun_glow := pow(sun_amount, 18.0) * 0.42;

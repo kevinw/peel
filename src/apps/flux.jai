@@ -49,6 +49,7 @@ flux_show_shadow_debug := true;
 flux_xz_scale: float = 2.6;
 flux_fog_density: float = 0.18;
 flux_fog_exponent: float = 1.0;
+flux_time_of_day: float = 0.36;
 
 flux_cam_target := Vector3.{0.0, 0.0, 0.0};
 flux_cam_yaw: float = 0.78;
@@ -182,6 +183,7 @@ flux_ui :: () -> bool {
         SliderFloat("Brush Radius", *flux_brush_radius_px, 10.0, 150.0, "%.1f px");
         SliderFloat("Brush Strength", *flux_brush_strength, 0.001, 0.025, "%.3f");
         SliderFloat("Time Scale", *flux_time_scale, 0.01, 2.0, "%.2f");
+        SliderFloat("Time of Day", *flux_time_of_day, 0.0, 1.0, "%.2f");
         SliderFloat("XZ Scale", *flux_xz_scale, 1.0, 16.0, "%.2f");
         SliderFloat("Fog", *flux_fog_density, 0.0, 1.0, "%.3f");
         SliderFloat("Fog Exponent", *flux_fog_exponent, 0.25, 8.0, "%.2f");
@@ -207,9 +209,14 @@ flux_write_render_payload :: (win_w: u32, win_h: u32) {
     cam_near := cast(float) 0.08;
     cam_far := cast(float) 12.0;
 
+    flux_time_of_day = clamp(flux_time_of_day, 0.0, 1.0);
     // `light_dir` is used in shading as the vector from surface toward the light.
     // Shadow-map view forward must point from light toward the scene, so use -light_dir.
-    light_dir := flux_safe_normalize3_cpu(Vector3.{-0.55, 0.63, 0.54});
+    tau := cast(float) 6.28318530718;
+    sun_phase := (flux_time_of_day - 0.25) * tau;
+    sun_elev := sin(sun_phase) * cast(float) 0.55;
+    sun_xy := cos(sun_elev);
+    light_dir := flux_safe_normalize3_cpu(Vector3.{cos(sun_phase) * sun_xy, sin(sun_phase) * sun_xy, sin(sun_elev)});
     light_forward := -light_dir;
     light_ref_up := Vector3.{0.0, 0.0, 1.0};
     light_right := cross(light_ref_up, light_forward);
