@@ -139,16 +139,19 @@ shader_hot_reload_tick :: (reload: *Shader_Hot_Reload, frame_num: s64) -> (did_r
 
         reload.last_event_frame = frame_num;
         assign_string(*reload.watcher.last_changed_entry_ids_csv, completed_ids_csv);
-        if completed_ids_csv.count != 0 free(completed_ids_csv);
         if !completed_ok {
             reload.last_result = .BUILD_FAILED;
             shader_hot_reload_set_error(reload, shader_hot_reload_build_failed_message(reload.log_prefix, reload.watcher.last_changed_entry_ids_csv, completed_error));
             if completed_error.count != 0 free(completed_error);
+            if completed_ids_csv.count != 0 free(completed_ids_csv);
             return true, false, false;
         }
         if completed_error.count != 0 free(completed_error);
 
-        _ = SRM.shader_reload_manifest_load_with_context(*reload.watcher.manifest, *reload.watcher.paths);
+        manifest_reloaded := SRM.shader_reload_manifest_load_with_context(*reload.watcher.manifest, *reload.watcher.paths);
+        if !manifest_reloaded {
+            shader_hot_reload_log_manifest_state(reload, "manifest reload failed after build", reload.watcher.last_changed_entry_ids_csv);
+        }
         SRM.shader_reload_watcher_refresh_baseline(*reload.watcher);
 
         apply_ok := shader_hot_reload_apply_registered_pipelines(reload);
@@ -158,6 +161,7 @@ shader_hot_reload_tick :: (reload: *Shader_Hot_Reload, frame_num: s64) -> (did_r
         } else {
             reload.last_result = .SWAP_PARTIAL;
         }
+        if completed_ids_csv.count != 0 free(completed_ids_csv);
         return true, apply_ok, true;
     }
 
@@ -217,6 +221,7 @@ shader_hot_reload_apply_registered_pipelines :: (using reload: *Shader_Hot_Reloa
         entry := SRM.shader_reload_manifest_find_entry(*watcher.manifest, it.entry_id);
         if !entry {
             log_error("% missing graphics entry id=%", log_prefix, it.entry_id);
+            log_missing_entry_context(reload, it.entry_id, "graphics");
             shader_hot_reload_set_error(reload, tprint("% missing graphics entry id=%", log_prefix, it.entry_id));
             ok = false;
             continue;
@@ -239,6 +244,7 @@ shader_hot_reload_apply_registered_pipelines :: (using reload: *Shader_Hot_Reloa
         entry := SRM.shader_reload_manifest_find_entry(*watcher.manifest, it.entry_id);
         if !entry {
             log_error("% missing compute entry id=%", log_prefix, it.entry_id);
+            log_missing_entry_context(reload, it.entry_id, "compute");
             shader_hot_reload_set_error(reload, tprint("% missing compute entry id=%", log_prefix, it.entry_id));
             ok = false;
             continue;
@@ -504,6 +510,7 @@ shader_hot_reload_create_graphics_pipeline_for_entry :: (reload: *Shader_Hot_Rel
     if !reload return 0;
     entry := SRM.shader_reload_manifest_find_entry(*reload.watcher.manifest, entry_id);
     if !entry {
+        log_missing_entry_context(reload, entry_id, "graphics");
         shader_hot_reload_set_error(reload, tprint("% missing graphics entry id=%", reload.log_prefix, entry_id));
         return 0;
     }
@@ -528,6 +535,7 @@ shader_hot_reload_create_compute_pipeline_for_entry :: (reload: *Shader_Hot_Relo
     if !reload return 0;
     entry := SRM.shader_reload_manifest_find_entry(*reload.watcher.manifest, entry_id);
     if !entry {
+        log_missing_entry_context(reload, entry_id, "compute");
         shader_hot_reload_set_error(reload, tprint("% missing compute entry id=%", reload.log_prefix, entry_id));
         return 0;
     }
@@ -547,6 +555,76 @@ shader_hot_reload_create_compute_pipeline_for_manifest_entry :: (reload: *Shader
     }
     use_root_pointer_struct := entry.metal_compute_binding_mode == "ROOT_POINTER_STRUCT";
     return gpu_create_compute_pipeline_from_metallib(metallib_path, entry.metal_compute_entry, use_root_pointer_struct);
+}
+
+shader_hot_reload_log_manifest_state :: (reload: *Shader_Hot_Reload, reason: string, ids_csv: string = "") {
+    if !reload return;
+    using watcher := reload.watcher;
+    log_error("% %: loaded=% manifest=% entries=% declared=% changed_ids=% app=% generated_dir=%",
+        reload.log_prefix,
+        reason,
+        watcher.manifest.loaded,
+        watcher.manifest.source_path,
+        watcher.manifest.entries.count,
+        watcher.manifest.declared_entry_count,
+        ids_csv,
+        watcher.app_source_file,
+        watcher.paths.generated_dir);
+}
+
+log_missing_entry_context :: (reload: *Shader_Hot_Reload, requested_entry_id: string, kind: string) {
+    if !reload return;
+    shader_hot_reload_log_manifest_state(reload, tprint("missing % entry", kind), reload.watcher.last_changed_entry_ids_csv);
+
+    MAX_DUMP_ENTRIES :: 12;
+    if reload.watcher.manifest.entries.count == 0 {
+        log_error("% manifest has zero entries while requesting % id=%", reload.log_prefix, kind, requested_entry_id);
+        return;
+    }
+
+    tail := shader_hot_reload_entry_id_tail_after_target(requested_entry_id);
+    if tail.count != 0 {
+        log_error("% requested % id tail=%", reload.log_prefix, kind, tail);
+    }
+
+    dumped: s64 = 0;
+    matched_tail: s64 = 0;
+    for reload.watcher.manifest.entries {
+        if tail.count != 0 {
+            entry_tail := shader_hot_reload_entry_id_tail_after_target(it.entry_id);
+            if entry_tail == tail {
+                matched_tail += 1;
+                log_error("% candidate same-tail id=% target=% request=%", reload.log_prefix, it.entry_id, it.target, it.request_name);
+            }
+        }
+
+        if dumped < MAX_DUMP_ENTRIES {
+            log_error("% manifest[%] id=% target=% kind=% stage=% request=%",
+                reload.log_prefix, dumped, it.entry_id, it.target, it.shader_kind, it.stage, it.request_name);
+            dumped += 1;
+        }
+    }
+
+    if tail.count != 0 && matched_tail == 0 {
+        log_error("% no manifest entries matched requested tail=%", reload.log_prefix, tail);
+    }
+    if reload.watcher.manifest.entries.count > MAX_DUMP_ENTRIES {
+        log_error("% manifest dump truncated to %/% entries", reload.log_prefix, MAX_DUMP_ENTRIES, reload.watcher.manifest.entries.count);
+    }
+}
+
+shader_hot_reload_entry_id_tail_after_target :: (entry_id: string) -> string {
+    if entry_id.count == 0 return "";
+    pipe_count: s64 = 0;
+    for i: 0..entry_id.count-1 {
+        if entry_id[i] != #char "|" continue;
+        pipe_count += 1;
+        if pipe_count == 2 {
+            if i + 1 >= entry_id.count return "";
+            return .{ count = entry_id.count - (i + 1), data = entry_id.data + i + 1 };
+        }
+    }
+    return "";
 }
 
 #import "Basic";

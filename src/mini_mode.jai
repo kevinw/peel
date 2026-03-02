@@ -19,6 +19,13 @@ handle_focus_transition_after_input_update :: () {
     #if !MINI_MODE_ENABLED return;
     if !window return;
 
+    if !mini_mode_allowed_now() {
+        if app_mini_mode_active exit_mini_mode_window();
+        app_window_unfocused_streak = 0;
+        app_window_has_focus = Input.input_application_has_focus;
+        return;
+    }
+
     focus_now := Input.input_application_has_focus;
 
     if !app_window_focus_initialized {
@@ -43,7 +50,6 @@ handle_focus_transition_after_input_update :: () {
     if app_window_unfocused_streak < MINI_MODE_UNFOCUS_STREAK_FRAMES return;
 
     app_window_has_focus = false;
-    log("calling enter_mini_mode");
     enter_mini_mode_window();
 }
 
@@ -110,6 +116,19 @@ handle_focus_transition_after_input_update :: () {
 
 #scope_file
 Input :: #import "Input";
+
+mini_mode_allowed_now :: () -> bool {
+    if snapshot.enabled return false;
+
+    #if READBACK_ENABLED {
+        if readback_stats_needs_swapchain_readback(*readback_stats) return false;
+    }
+
+    if window_snapshot_mode return false;
+    if window_validate_mode return false;
+
+    return true;
+}
 
 
 #if OS == .MACOS {

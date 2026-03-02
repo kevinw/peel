@@ -28,6 +28,15 @@ perf_capture_gpu_ms_sum: float64 = 0;
 perf_capture_count: s64 = 0;
 perf_capture_gpu_count: s64 = 0;
 perf_capture_reported := false;
+
+snapshot: struct {
+    enabled := false;
+    before_done := false;
+    after_pending := false;
+    after_done := false;
+    after_min_frame: s64 = 0;
+}
+
 #if OS == .MACOS {
     macos_window_focus_hooks_installed := false;
 }
@@ -558,11 +567,3 @@ Window_Type :: WT.Window_Type;
 String :: #import "String";
 Env_Vars :: #import "Env_Vars";
 SHR :: #import,file "shader_hot_reload.jai";
-
-snapshot: struct {
-    enabled := false;
-    before_done := false;
-    after_pending := false;
-    after_done := false;
-    after_min_frame: s64 = 0;
-}
