@@ -8,6 +8,51 @@
         set_layer(view, selector("setLayer:"), layer);
     }
 
+    set_nswindow_background_black :: (window: *NSWindow) {
+        if !window return;
+
+        nscolor_class := objc_getClass("NSColor");
+        if !nscolor_class return;
+
+        get_black_color: (*void, Selector) -> *void #c_call;
+        get_black_color = xx objc_msgSend;
+        black_color := get_black_color(nscolor_class, selector("blackColor"));
+        if !black_color return;
+
+        set_bg_color: (*void, Selector, *void) -> void #c_call;
+        set_bg_color = xx objc_msgSend;
+        set_bg_color(window, selector("setBackgroundColor:"), black_color);
+
+        set_opaque: (*void, Selector, BOOL) -> void #c_call;
+        set_opaque = xx objc_msgSend;
+        set_opaque(window, selector("setOpaque:"), YES);
+    }
+
+    set_metal_layer_background_black :: (metal_layer: *void) {
+        if !metal_layer return;
+
+        nscolor_class := objc_getClass("NSColor");
+        if !nscolor_class return;
+
+        get_black_color: (*void, Selector) -> *void #c_call;
+        get_black_color = xx objc_msgSend;
+        black_color := get_black_color(nscolor_class, selector("blackColor"));
+        if !black_color return;
+
+        get_cg_color: (*void, Selector) -> *void #c_call;
+        get_cg_color = xx objc_msgSend;
+        cg_black := get_cg_color(black_color, selector("CGColor"));
+        if !cg_black return;
+
+        set_bg_color: (*void, Selector, *void) -> void #c_call;
+        set_bg_color = xx objc_msgSend;
+        set_bg_color(metal_layer, selector("setBackgroundColor:"), cg_black);
+
+        set_opaque: (*void, Selector, BOOL) -> void #c_call;
+        set_opaque = xx objc_msgSend;
+        set_opaque(metal_layer, selector("setOpaque:"), YES);
+    }
+
     init_macos_app_for_sgpu :: () {
         if sgpu_macos_application_initialized return;
 
@@ -72,7 +117,7 @@
         wd := context._macos_create_window_delegate();
         NSWindow.setDelegate(window, wd);
         NSWindow.setCollectionBehavior(window, NSWindowCollectionBehaviorFullScreenPrimary | NSWindowCollectionBehaviorManaged);
-        NSWindow.makeKeyAndOrderFront(window, null);
+        set_nswindow_background_black(window);
 
         view := objc_init(objc_alloc(NSView));
         NSView.setWantsLayer(view, YES);
@@ -83,10 +128,12 @@
         metal_layer := objc_init(objc_alloc(metal_layer_class));
         assert(metal_layer != null, "Failed to create CAMetalLayer.");
         autorelease(metal_layer);
+        set_metal_layer_background_black(metal_layer);
         set_nsview_layer(view, cast(*CALayer) metal_layer);
 
         NSWindow.setContentView(window, view);
         NSWindow.makeFirstResponder(window, view);
+        NSWindow.makeKeyAndOrderFront(window, null);
 
         if window_x == -1 && window_y == -1 {
             NSWindow.center(window);
