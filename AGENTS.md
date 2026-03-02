@@ -1,5 +1,6 @@
 # Jai style notes
 
+Jai inits all vars to zero, unless you say foo: int = ---;
 Array slices []u32 or []My_Struct are preferred over pointers and counts. They are more concise and less error-prone.
 Dynamic arrays like [..]string are the go-to data structure for a growing collection.
 Prefer to keep utility functions not used by external callers in #scope_file at the bottom of the file.
