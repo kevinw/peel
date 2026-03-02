@@ -10,10 +10,12 @@ graphics_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 raytracer_params_cpu: *Raytracer_Params;
 raytracer_params_gpu: Gpu_Ptr;
-raytracer_shader_reload: SHR.Shader_Hot_Reload;
 
 camera_pos := Vector3.{0.0, 0.75, 1.95};
 camera_speed: float = 3.0;
+raytracer_prev_mouse_x: s64 = 0;
+raytracer_prev_mouse_y: s64 = 0;
+raytracer_have_prev_mouse := false;
 
 on_dll_init :: () {
     graphics_source := cast([]u8) get_transpiled(.METAL, raytracer_vertex_main, raytracer_fragment_main);
@@ -25,10 +27,7 @@ on_dll_init :: () {
         ],
     };
 
-    hot_reload_enabled_by_default := true;
-    #if RELEASE hot_reload_enabled_by_default = false;
-    _ = SHR.shader_hot_reload_init_auto(*raytracer_shader_reload, "src/apps/raytracer.jai", poll_every_frames = 15, log_prefix = "RAYTRACER_SHADER_RELOAD", enabled_by_default = hot_reload_enabled_by_default);
-    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*raytracer_shader_reload, *graphics_pipeline, graphics_source, raster_desc, .METAL, raytracer_vertex_main, raytracer_fragment_main);
+    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, raytracer_vertex_main, raytracer_fragment_main);
     assert(graphics_ok, "Raytracer graphics pipeline creation failed.");
 
     gpu_arena = gpu_make_arena(64 * 1024, label = "raytracer arena");
@@ -53,14 +52,28 @@ tick :: () {
     if dims_ok && win_w > 0 && win_h > 0 {
         raytracer_params_cpu.resolution = .{cast(float) win_w, cast(float) win_h};
     }
-    if mouse_ok && dims_ok && win_w > 0 && win_h > 0 {
-        u := cast(float) mx / cast(float) win_w;
-        v := cast(float) my / cast(float) win_h;
-        if u < 0.0 u = 0.0;
-        if u > 1.0 u = 1.0;
-        if v < 0.0 v = 0.0;
-        if v > 1.0 v = 1.0;
-        raytracer_params_cpu.mouse_uv = .{u, v};
+    look_down :=
+        (Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_LEFT] & .DOWN) != 0 ||
+        (Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_RIGHT] & .DOWN) != 0 ||
+        (Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_MIDDLE] & .DOWN) != 0;
+    if mouse_ok && dims_ok && win_w > 0 && win_h > 0 && look_down {
+        if raytracer_have_prev_mouse {
+            dx := mx - raytracer_prev_mouse_x;
+            dy := my - raytracer_prev_mouse_y;
+            uv := raytracer_params_cpu.mouse_uv;
+            uv.x += cast(float) dx / cast(float) win_w;
+            uv.y += cast(float) dy / cast(float) win_h;
+            if uv.x < 0.0 uv.x = 0.0;
+            if uv.x > 1.0 uv.x = 1.0;
+            if uv.y < 0.0 uv.y = 0.0;
+            if uv.y > 1.0 uv.y = 1.0;
+            raytracer_params_cpu.mouse_uv = uv;
+        }
+        raytracer_prev_mouse_x = mx;
+        raytracer_prev_mouse_y = my;
+        raytracer_have_prev_mouse = true;
+    } else {
+        raytracer_have_prev_mouse = false;
     }
     yaw := (raytracer_params_cpu.mouse_uv.x - 0.5) * 0.9;
     move_forward := Vector3.{sin(yaw), 0.0, -cos(yaw)};
@@ -101,16 +114,6 @@ tick :: () {
     assert(draw_result == .SUCCESS, tprint("Raytracer draw failed: %", draw_result));
 
     submit_and_present_with_ui(cmd_buff);
-
-    frame_num := cast(s64) frame_count;
-    did_rebuild, swapped_all, rebuild_ok := SHR.shader_hot_reload_tick(*raytracer_shader_reload, frame_num);
-    sgpu_set_debug_status(SHR.shader_hot_reload_status_line(*raytracer_shader_reload));
-    if did_rebuild && !rebuild_ok {
-        log_error("RAYTRACER_SHADER_RELOAD build failed; keeping current runtime shaders.");
-    } else if did_rebuild && !swapped_all {
-        log_error("RAYTRACER_SHADER_RELOAD build succeeded but pipeline swap was partial; keeping remaining old pipelines.");
-    }
-
 } @on_tick
 
 #scope_file

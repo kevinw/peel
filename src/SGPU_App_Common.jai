@@ -28,6 +28,11 @@ perf_capture_gpu_ms_sum: float64 = 0;
 perf_capture_count: s64 = 0;
 perf_capture_gpu_count: s64 = 0;
 perf_capture_reported := false;
+shader_reload_snapshot_mode := false;
+shader_reload_snapshot_before_done := false;
+shader_reload_snapshot_after_pending := false;
+shader_reload_snapshot_after_done := false;
+shader_reload_snapshot_after_min_frame: s64 = 0;
 
 PERF_CAPTURE_START_FRAME :: 5;
 PERF_CAPTURE_END_FRAME :: 30;
@@ -228,6 +233,10 @@ app_update :: (update_ctx: *App_Update_Ctx) {
             } else if did_rebuild && !swapped_all {
                 log_error("SHADER_RELOAD build succeeded but pipeline swap was partial.");
             }
+            if shader_reload_snapshot_mode && did_rebuild && rebuild_ok {
+                shader_reload_snapshot_after_pending = true;
+                shader_reload_snapshot_after_min_frame = cast(s64) frame_count + 1;
+            }
         }
 
         #if READBACK_ENABLED {
@@ -236,6 +245,16 @@ app_update :: (update_ctx: *App_Update_Ctx) {
                 log_error("Error: READBACK_ENABLED but no gpu_current_swapchain_view()");
             } else {
                 per_frame_debug(*readback_stats, cast(s64)frame_count, swapchain_image);
+                if shader_reload_snapshot_mode && frame_count >= 2 {
+                    if !shader_reload_snapshot_before_done {
+                        readback_stats_dump_snapshot(*readback_stats, swapchain_image, cast(s64) frame_count, tprint("%_shader_reload_before", APP_NAME), APP_NAME);
+                        shader_reload_snapshot_before_done = true;
+                    } else if shader_reload_snapshot_after_pending && !shader_reload_snapshot_after_done && cast(s64) frame_count >= shader_reload_snapshot_after_min_frame {
+                        readback_stats_dump_snapshot(*readback_stats, swapchain_image, cast(s64) frame_count, tprint("%_shader_reload_after", APP_NAME), APP_NAME);
+                        shader_reload_snapshot_after_done = true;
+                        app_quit_requested = true;
+                    }
+                }
             }
         }
     }
@@ -308,6 +327,15 @@ host_init :: (init_ctx: Init_Ctx) -> bool {
     perf_capture_count = 0;
     perf_capture_gpu_count = 0;
     perf_capture_reported = false;
+    shader_reload_snapshot_mode = false;
+    shader_reload_snapshot_before_done = false;
+    shader_reload_snapshot_after_pending = false;
+    shader_reload_snapshot_after_done = false;
+    shader_reload_snapshot_after_min_frame = 0;
+    env_reload_snapshot_mode, did_parse_reload_snapshot_mode := Env_Vars.try_parse_env_int("PEEL_SHADER_RELOAD_SNAPSHOT");
+    if did_parse_reload_snapshot_mode {
+        shader_reload_snapshot_mode = env_reload_snapshot_mode > 0;
+    }
     #if OS == {
         case .WINDOWS;
             #if !RELEASE {
@@ -324,13 +352,16 @@ host_init :: (init_ctx: Init_Ctx) -> bool {
 
     #if READBACK_ENABLED {
         frame_debug_init(*readback_stats);
+        if shader_reload_snapshot_mode {
+            gpu_set_swapchain_framebuffer_only(false);
+        }
     }
 
     SHR.shader_hot_reload_init_auto(*shader_reload_ctx,
         app_source_file = APP_NAME,
         poll_every_frames = 15,
         log_prefix = "SHADER_RELOAD",
-        enabled_by_default = !RELEASE);
+        enabled_by_default = !RELEASE || shader_reload_snapshot_mode);
 
     call_event_functions(.dll_init);
 
@@ -338,6 +369,7 @@ host_init :: (init_ctx: Init_Ctx) -> bool {
 }
 
 dummy_on_resize :: () {  } @on_window_resize
+shader_reload_on_ui :: () { SHR.shader_hot_reload_imgui(*shader_reload_ctx, ui_get_monospace_font()); } @on_ui
 
 #scope_file
 

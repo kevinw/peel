@@ -96,8 +96,7 @@ raytracer_fragment_main :: (using in: Raytracer_Vertex_Out, params: *Raytracer_P
         ];
         sphere_refl := float.[0.45, 0.65, 0.55, 0.88];
 
-        for i: 0..3 {
-            s := spheres[i];
+        for s, i: spheres {
             center := Vector3.{s.x, s.y, s.z};
             oc := ro - center;
             b := dot(oc, rd);

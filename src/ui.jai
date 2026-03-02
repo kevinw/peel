@@ -17,11 +17,16 @@ ui_init :: () {
         assert(false, "TODO: ui_init for platform %", OS);
     }
 
-    load_ui_font(GetIO(), 16.5);
+    ui_font_main = load_ui_font(GetIO(), 16.5);
+    ui_font_monospace = load_ui_monospace_font(GetIO(), 15.5);
 } @on_dll_init
 
 ui_get_sync_semaphore :: () -> Gpu_Semaphore {
     return ui_sync_semaphore;
+}
+
+ui_get_monospace_font :: () -> *ImGui.ImFont {
+    return ui_font_monospace;
 }
 
 // Per frame UI info to be passed from ui_render_pre to ui_render
@@ -113,8 +118,10 @@ using,only(file_exists) _ :: #import "File_Utilities";
     ui_command_queue: *MTLCommandQueue;
     ui_sync_semaphore: Gpu_Semaphore;
 }
+ui_font_main: *ImGui.ImFont;
+ui_font_monospace: *ImGui.ImFont;
 
-load_ui_font :: (io: *ImGui.IO, font_size_px: float) -> bool {
+load_ui_font :: (io: *ImGui.IO, font_size_px: float) -> *ImGui.ImFont {
     #if OS == .MACOS {
         candidates :: string.[
             "/System/Library/Fonts/SFNS.ttf",
@@ -136,14 +143,52 @@ load_ui_font :: (io: *ImGui.IO, font_size_px: float) -> bool {
 
     for candidates {
         if file_exists(it) {
-            if io.Fonts.AddFontFromFileTTF(io.Fonts, temp_c_string(it), font_size_px) != null {
-                return true;
+            font := io.Fonts.AddFontFromFileTTF(io.Fonts, temp_c_string(it), font_size_px);
+            if font != null {
+                return font;
             }
         }
     }
 
     cfg: ImFontConfig;
     cfg.SizePixels = font_size_px;
-    io.Fonts.AddFontDefault(io.Fonts, *cfg);
-    return false;
+    return io.Fonts.AddFontDefault(io.Fonts, *cfg);
+}
+
+load_ui_monospace_font :: (io: *ImGui.IO, font_size_px: float) -> *ImGui.ImFont {
+    #if OS == .MACOS {
+        candidates :: string.[
+            "/Library/Fonts/Myna-Regular.ttf",
+            "/System/Library/Fonts/Myna.ttf",
+            "/System/Library/Fonts/Monaco.ttf",
+            "/Library/Fonts/Consolas.ttf",
+            "/System/Library/Fonts/SFNSMono.ttf",
+            "/System/Library/Fonts/SFMono-Regular.otf",
+            "/System/Library/Fonts/Menlo.ttc",
+            "/System/Library/Fonts/Courier.ttc",
+        ];
+    } else #if OS == .WINDOWS {
+        candidates :: string.[
+            "C:/Windows/Fonts/Myna.ttf",
+            "C:/Windows/Fonts/monaco.ttf",
+            "C:/Windows/Fonts/consola.ttf",
+            "C:/Windows/Fonts/consolab.ttf",
+            "C:/Windows/Fonts/cour.ttf",
+        ];
+    } else {
+        candidates :: string.[
+            "/usr/share/fonts/truetype/myna/Myna-Regular.ttf",
+            "/usr/share/fonts/truetype/monaco/Monaco.ttf",
+            "/usr/share/fonts/truetype/msttcorefonts/consola.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+        ];
+    }
+
+    for candidates {
+        if !file_exists(it) continue;
+        font := io.Fonts.AddFontFromFileTTF(io.Fonts, temp_c_string(it), font_size_px);
+        if font != null return font;
+    }
+    return ui_font_main;
 }

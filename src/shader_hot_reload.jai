@@ -20,6 +20,9 @@ Shader_Hot_Reload :: struct {
     worker_has_completed: bool;
     worker_completed_ok: bool;
     worker_completed_ids_csv: string;
+    worker_completed_error_message: string;
+    last_error_message: string;
+    show_error_window: bool;
 }
 
 Shader_Hot_Reload_Last_Result :: enum {
@@ -48,6 +51,8 @@ shader_hot_reload_init_auto :: (reload: *Shader_Hot_Reload, app_source_file: str
     reload.use_background_thread = use_background_thread;
     reload.last_event_frame = -1;
     reload.last_result = .NONE;
+    reload.last_error_message = "";
+    reload.show_error_window = false;
     reload.enabled = SRM.shader_reload_watcher_init_auto(*reload.watcher, app_source_file, poll_every_frames, enabled_by_default);
     if reload.enabled && reload.use_background_thread {
         shader_hot_reload_start_worker_thread(reload);
@@ -65,9 +70,10 @@ shader_hot_reload_register_graphics_pipeline :: (reload: *Shader_Hot_Reload, ent
 }
 
 shader_hot_reload_create_and_register_graphics_pipeline_with_entry_id :: (reload: *Shader_Hot_Reload, entry_id: string, pipeline: *Gpu_Pipeline, source: []u8, raster_desc: Gpu_Raster_Desc) -> bool {
-    if entry_id.count == 0 || !pipeline || source.count == 0 return false;
+    _ = source;
+    if entry_id.count == 0 || !pipeline return false;
 
-    new_pipeline := gpu_create_graphics_pipeline(source, raster_desc);
+    new_pipeline := shader_hot_reload_create_graphics_pipeline_for_entry(reload, entry_id, raster_desc);
     if new_pipeline == 0 return false;
 
     old_pipeline := pipeline.*;
@@ -95,9 +101,10 @@ shader_hot_reload_register_compute_pipeline :: (reload: *Shader_Hot_Reload, entr
 }
 
 shader_hot_reload_create_and_register_compute_pipeline_with_entry_id :: (reload: *Shader_Hot_Reload, entry_id: string, pipeline: *Gpu_Pipeline, source: []u8) -> bool {
-    if entry_id.count == 0 || !pipeline || source.count == 0 return false;
+    _ = source;
+    if entry_id.count == 0 || !pipeline return false;
 
-    new_pipeline := gpu_create_compute_pipeline(source);
+    new_pipeline := shader_hot_reload_create_compute_pipeline_for_entry(reload, entry_id);
     if new_pipeline == 0 return false;
 
     old_pipeline := pipeline.*;
@@ -126,7 +133,8 @@ shader_hot_reload_tick :: (reload: *Shader_Hot_Reload, frame_num: s64) -> (did_r
 
         completed_ok: bool;
         completed_ids_csv: string;
-        has_completed := shader_hot_reload_take_background_completion(reload, *completed_ok, *completed_ids_csv);
+        completed_error: string;
+        has_completed := shader_hot_reload_take_background_completion(reload, *completed_ok, *completed_ids_csv, *completed_error);
         if !has_completed return false, true, true;
 
         reload.last_event_frame = frame_num;
@@ -134,15 +142,22 @@ shader_hot_reload_tick :: (reload: *Shader_Hot_Reload, frame_num: s64) -> (did_r
         if completed_ids_csv.count != 0 free(completed_ids_csv);
         if !completed_ok {
             reload.last_result = .BUILD_FAILED;
+            shader_hot_reload_set_error(reload, shader_hot_reload_build_failed_message(reload.log_prefix, reload.watcher.last_changed_entry_ids_csv, completed_error));
+            if completed_error.count != 0 free(completed_error);
             return true, false, false;
         }
+        if completed_error.count != 0 free(completed_error);
 
         _ = SRM.shader_reload_manifest_load_with_context(*reload.watcher.manifest, *reload.watcher.paths);
         SRM.shader_reload_watcher_refresh_baseline(*reload.watcher);
 
         apply_ok := shader_hot_reload_apply_registered_pipelines(reload);
-        if apply_ok reload.last_result = .SWAP_OK;
-        else reload.last_result = .SWAP_PARTIAL;
+        if apply_ok {
+            reload.last_result = .SWAP_OK;
+            shader_hot_reload_clear_error(reload);
+        } else {
+            reload.last_result = .SWAP_PARTIAL;
+        }
         return true, apply_ok, true;
     }
 
@@ -151,11 +166,17 @@ shader_hot_reload_tick :: (reload: *Shader_Hot_Reload, frame_num: s64) -> (did_r
     reload.last_event_frame = frame_num;
     if !build_ok {
         reload.last_result = .BUILD_FAILED;
+        details := reload.watcher.last_build_error_message;
+        shader_hot_reload_set_error(reload, shader_hot_reload_build_failed_message(reload.log_prefix, reload.watcher.last_changed_entry_ids_csv, details));
         return true, false, false;
     }
     apply_ok := shader_hot_reload_apply_registered_pipelines(reload);
-    if apply_ok reload.last_result = .SWAP_OK;
-    else reload.last_result = .SWAP_PARTIAL;
+    if apply_ok {
+        reload.last_result = .SWAP_OK;
+        shader_hot_reload_clear_error(reload);
+    } else {
+        reload.last_result = .SWAP_PARTIAL;
+    }
     return true, apply_ok, true;
 }
 
@@ -177,8 +198,6 @@ shader_hot_reload_status_line :: (using reload: *Shader_Hot_Reload, max_ids_char
     return tprint("shader_reload=on status=% frame=% ids=%", result_text, last_event_frame, ids_short);
 }
 
-#scope_file
-
 shader_hot_reload_proc_name_from_caller_arg_compile_time :: (call: Code, arg_index: s64) -> string {
     root, _ := compiler_get_nodes(call);
     if !root || root.kind != .PROCEDURE_CALL return "";
@@ -191,32 +210,21 @@ shader_hot_reload_proc_name_from_caller_arg_compile_time :: (call: Code, arg_ind
 
 shader_hot_reload_apply_registered_pipelines :: (using reload: *Shader_Hot_Reload) -> bool {
     ok := true;
+    changed_ids_csv := watcher.last_changed_entry_ids_csv;
 
     for graphics_targets {
+        if changed_ids_csv.count != 0 && !shader_hot_reload_ids_csv_contains(changed_ids_csv, it.entry_id) continue;
         entry := SRM.shader_reload_manifest_find_entry(*watcher.manifest, it.entry_id);
         if !entry {
             log_error("% missing graphics entry id=%", log_prefix, it.entry_id);
+            shader_hot_reload_set_error(reload, tprint("% missing graphics entry id=%", log_prefix, it.entry_id));
             ok = false;
             continue;
         }
 
-        source_path, found := SRM.shader_reload_manifest_find_entry_source_for_manifest(*watcher.manifest, entry, *reload.watcher.paths);
-        if !found {
-            log_error("% missing graphics source request=%", log_prefix, entry.request_name);
-            ok = false;
-            continue;
-        }
-
-        source, read_ok := File.read_entire_file(source_path);
-        if !read_ok || source.count == 0 {
-            log_error("% failed reading graphics source path=%", log_prefix, source_path);
-            ok = false;
-            continue;
-        }
-
-        new_pipeline := gpu_create_graphics_pipeline(cast([]u8) source, it.raster_desc);
+        new_pipeline := shader_hot_reload_create_graphics_pipeline_for_manifest_entry(reload, entry, it.raster_desc);
         if new_pipeline == 0 {
-            log_error("% graphics pipeline recreation failed path=%", log_prefix, source_path);
+            shader_hot_reload_set_error(reload, tprint("% graphics pipeline recreation failed entry=%", log_prefix, it.entry_id));
             ok = false;
             continue;
         }
@@ -227,30 +235,18 @@ shader_hot_reload_apply_registered_pipelines :: (using reload: *Shader_Hot_Reloa
     }
 
     for compute_targets {
+        if changed_ids_csv.count != 0 && !shader_hot_reload_ids_csv_contains(changed_ids_csv, it.entry_id) continue;
         entry := SRM.shader_reload_manifest_find_entry(*watcher.manifest, it.entry_id);
         if !entry {
             log_error("% missing compute entry id=%", log_prefix, it.entry_id);
+            shader_hot_reload_set_error(reload, tprint("% missing compute entry id=%", log_prefix, it.entry_id));
             ok = false;
             continue;
         }
 
-        source_path, found := SRM.shader_reload_manifest_find_entry_source_for_manifest(*watcher.manifest, entry, *watcher.paths);
-        if !found {
-            log_error("% missing compute source request=%", log_prefix, entry.request_name);
-            ok = false;
-            continue;
-        }
-
-        source, read_ok := File.read_entire_file(source_path);
-        if !read_ok || source.count == 0 {
-            log_error("% failed reading compute source path=%", log_prefix, source_path);
-            ok = false;
-            continue;
-        }
-
-        new_pipeline := gpu_create_compute_pipeline(cast([]u8) source);
+        new_pipeline := shader_hot_reload_create_compute_pipeline_for_manifest_entry(reload, entry);
         if new_pipeline == 0 {
-            log_error("% compute pipeline recreation failed path=%", log_prefix, source_path);
+            shader_hot_reload_set_error(reload, tprint("% compute pipeline recreation failed entry=%", log_prefix, it.entry_id));
             ok = false;
             continue;
         }
@@ -263,6 +259,29 @@ shader_hot_reload_apply_registered_pipelines :: (using reload: *Shader_Hot_Reloa
     if ok log("% swapped pipelines for ids=%", log_prefix, watcher.last_changed_entry_ids_csv);
     return ok;
 }
+
+shader_hot_reload_imgui :: (reload: *Shader_Hot_Reload, monospace_font: *ImGui.ImFont = null) {
+    if !reload || !reload.show_error_window || reload.last_error_message.count == 0 return;
+    io := ImGui.GetIO();
+    overlay_height := clamp(io.DisplaySize.y * 0.45, 220.0, io.DisplaySize.y - 24.0);
+    ImGui.SetNextWindowPos(.{0.0, io.DisplaySize.y - overlay_height}, .Always);
+    ImGui.SetNextWindowSize(.{io.DisplaySize.x, overlay_height}, .Always);
+    open := true;
+    window_flags: ImGui.WindowFlags = .NoMove | .NoResize | .NoCollapse | .NoSavedSettings | .NoNav | .NoBringToFrontOnFocus;
+    if ImGui.Begin("Live shader reload failed.", *open, window_flags) {
+        if monospace_font != null ImGui.PushFont(monospace_font, 0.0);
+        defer if monospace_font != null ImGui.PopFont();
+        avail := ImGui.GetContentRegionAvail();
+        if ImGui.BeginChild("shader_reload_error_text", .{avail.x, avail.y}, .None) {
+            shader_hot_reload_draw_error_message_with_links(reload.last_error_message);
+        }
+        ImGui.EndChild();
+    }
+    ImGui.End();
+    if !open reload.show_error_window = false;
+}
+
+#scope_file
 
 shader_hot_reload_start_worker_thread :: (using reload: *Shader_Hot_Reload) {
     init(*worker_wake, 0);
@@ -294,7 +313,7 @@ shader_hot_reload_queue_background_build :: (using reload: *Shader_Hot_Reload, c
     signal(*worker_wake);
 }
 
-shader_hot_reload_take_background_completion :: (using reload: *Shader_Hot_Reload, completed_ok: *bool, completed_ids_csv: *string) -> bool {
+shader_hot_reload_take_background_completion :: (using reload: *Shader_Hot_Reload, completed_ok: *bool, completed_ids_csv: *string, completed_error: *string) -> bool {
     if !worker_started return false;
     lock(*worker_mutex);
     defer unlock(*worker_mutex);
@@ -303,7 +322,9 @@ shader_hot_reload_take_background_completion :: (using reload: *Shader_Hot_Reloa
     worker_has_completed = false;
     completed_ok.* = worker_completed_ok;
     completed_ids_csv.* = worker_completed_ids_csv;
+    completed_error.* = worker_completed_error_message;
     worker_completed_ids_csv = "";
+    worker_completed_error_message = "";
     return true;
 }
 
@@ -330,15 +351,18 @@ shader_hot_reload_worker_proc :: (thread: *Thread) -> s64 {
         worker_build_in_flight = true;
         unlock(*worker_mutex);
 
-        build_ok := SRM.shader_reload_build_entry_ids_with_context(*watcher.paths, watcher.app_source_file, ids_csv);
+        build_error: string;
+        build_ok := SRM.shader_reload_build_entry_ids_with_context(*watcher.paths, watcher.app_source_file, ids_csv, out_error = *build_error);
 
         lock(*worker_mutex);
         worker_build_in_flight = false;
         worker_completed_ok = build_ok;
         assign_string(*worker_completed_ids_csv, ids_csv);
+        assign_string(*worker_completed_error_message, build_error);
         worker_has_completed = true;
         unlock(*worker_mutex);
         if ids_csv.count != 0 free(ids_csv);
+        if build_error.count != 0 free(build_error);
     }
 
     return 0;
@@ -352,9 +376,184 @@ assign_string :: (dst: *string, src: string) {
     if src.count != 0 dst.* = copy_string(src);
 }
 
+shader_hot_reload_ids_csv_contains :: (ids_csv: string, entry_id: string) -> bool {
+    if ids_csv.count == 0 || entry_id.count == 0 return false;
+    for String.split(ids_csv, #char ",") {
+        if shader_hot_reload_trim_ascii_whitespace(it) == entry_id return true;
+    }
+    return false;
+}
+
+shader_hot_reload_trim_ascii_whitespace :: (in: string) -> string {
+    if in.count == 0 return in;
+    start: s64 = 0;
+    last := in.count - 1;
+    while start <= last && (in[start] == #char " " || in[start] == #char "\t" || in[start] == #char "\n" || in[start] == #char "\r")
+        start += 1;
+    while last >= start && (in[last] == #char " " || in[last] == #char "\t" || in[last] == #char "\n" || in[last] == #char "\r")
+        last -= 1;
+    out: string;
+    out.data = in.data + start;
+    out.count = last - start + 1;
+    return out;
+}
+
+shader_hot_reload_set_error :: (reload: *Shader_Hot_Reload, message: string) {
+    if !reload return;
+    if message.count == 0 return;
+    log_error("%", message);
+    assign_string(*reload.last_error_message, message);
+    reload.show_error_window = true;
+}
+
+shader_hot_reload_build_failed_message :: (log_prefix: string, ids_csv: string, details: string) -> string {
+    base := tprint("% build failed for ids=%", log_prefix, ids_csv);
+    if details.count == 0 return base;
+    return tprint("%\n\n%", base, details);
+}
+
+shader_hot_reload_draw_error_message_with_links :: (message: string) {
+    if message.count == 0 return;
+    line_idx: s64 = 0;
+    for String.split(message, #char "\n") {
+        path: string;
+        line_no: s64;
+        col_no: s64;
+        has_loc := shader_hot_reload_parse_source_location(it, *path, *line_no, *col_no);
+        if has_loc {
+            label := tprint("Open##shader_reload_open_%", line_idx);
+            if ImGui.SmallButton(temp_c_string(label)) {
+                arg := tprint("%:%", path, line_no);
+                _ = Process.run_command("zed", arg, timeout_ms = 5000);
+            }
+            ImGui.SameLine();
+        }
+        ImGui.TextUnformatted(it);
+        line_idx += 1;
+    }
+}
+
+shader_hot_reload_parse_source_location :: (line: string, out_path: *string, out_line: *s64, out_col: *s64) -> bool {
+    if line.count == 0 return false;
+    jai_marker := ".jai:";
+    marker_at: s64 = -1;
+    if line.count >= jai_marker.count {
+        max_start := line.count - jai_marker.count;
+        for i: 0..max_start {
+            match := true;
+            for j: 0..jai_marker.count-1 {
+                if line[i + j] != jai_marker[j] {
+                    match = false;
+                    break;
+                }
+            }
+            if match {
+                marker_at = i;
+                break;
+            }
+        }
+    }
+    if marker_at <= 0 return false;
+    if line[0] != #char "/" return false;
+
+    path_len := marker_at + 4;
+    path: string = .{count = path_len, data = line.data};
+    i := marker_at + jai_marker.count;
+    if i >= line.count return false;
+
+    line_no: s64 = 0;
+    has_line_digits := false;
+    while i < line.count {
+        c := line[i];
+        if c < #char "0" || c > #char "9" break;
+        has_line_digits = true;
+        line_no = line_no * 10 + cast(s64) (c - #char "0");
+        i += 1;
+    }
+    if !has_line_digits return false;
+
+    col_no: s64 = 0;
+    if i < line.count && line[i] == #char "," {
+        i += 1;
+        has_col_digits := false;
+        while i < line.count {
+            c := line[i];
+            if c < #char "0" || c > #char "9" break;
+            has_col_digits = true;
+            col_no = col_no * 10 + cast(s64) (c - #char "0");
+            i += 1;
+        }
+        if !has_col_digits col_no = 0;
+    }
+
+    if i >= line.count || line[i] != #char ":" return false;
+
+    out_path.* = path;
+    out_line.* = line_no;
+    out_col.* = col_no;
+    return true;
+}
+
+shader_hot_reload_clear_error :: (reload: *Shader_Hot_Reload) {
+    if !reload return;
+    assign_string(*reload.last_error_message, "");
+    reload.show_error_window = false;
+}
+
+shader_hot_reload_create_graphics_pipeline_for_entry :: (reload: *Shader_Hot_Reload, entry_id: string, raster_desc: Gpu_Raster_Desc) -> Gpu_Pipeline {
+    if !reload return 0;
+    entry := SRM.shader_reload_manifest_find_entry(*reload.watcher.manifest, entry_id);
+    if !entry {
+        shader_hot_reload_set_error(reload, tprint("% missing graphics entry id=%", reload.log_prefix, entry_id));
+        return 0;
+    }
+    return shader_hot_reload_create_graphics_pipeline_for_manifest_entry(reload, entry, raster_desc);
+}
+
+shader_hot_reload_create_graphics_pipeline_for_manifest_entry :: (reload: *Shader_Hot_Reload, entry: *SRM.Shader_Reload_Manifest_Entry, raster_desc: Gpu_Raster_Desc) -> Gpu_Pipeline {
+    if !reload || !entry return 0;
+    metallib_path, found := SRM.shader_reload_manifest_find_entry_metallib_for_manifest(*reload.watcher.manifest, entry, *reload.watcher.paths);
+    if !found {
+        shader_hot_reload_set_error(reload, tprint("% missing metallib for graphics entry=% request=%", reload.log_prefix, entry.entry_id, entry.request_name));
+        return 0;
+    }
+    if entry.metal_vertex_entry.count == 0 || entry.metal_fragment_entry.count == 0 {
+        shader_hot_reload_set_error(reload, tprint("% missing metal vertex/fragment entry names for id=%", reload.log_prefix, entry.entry_id));
+        return 0;
+    }
+    return gpu_create_graphics_pipeline_from_metallib(metallib_path, entry.metal_vertex_entry, entry.metal_fragment_entry, raster_desc);
+}
+
+shader_hot_reload_create_compute_pipeline_for_entry :: (reload: *Shader_Hot_Reload, entry_id: string) -> Gpu_Pipeline {
+    if !reload return 0;
+    entry := SRM.shader_reload_manifest_find_entry(*reload.watcher.manifest, entry_id);
+    if !entry {
+        shader_hot_reload_set_error(reload, tprint("% missing compute entry id=%", reload.log_prefix, entry_id));
+        return 0;
+    }
+    return shader_hot_reload_create_compute_pipeline_for_manifest_entry(reload, entry);
+}
+
+shader_hot_reload_create_compute_pipeline_for_manifest_entry :: (reload: *Shader_Hot_Reload, entry: *SRM.Shader_Reload_Manifest_Entry) -> Gpu_Pipeline {
+    if !reload || !entry return 0;
+    metallib_path, found := SRM.shader_reload_manifest_find_entry_metallib_for_manifest(*reload.watcher.manifest, entry, *reload.watcher.paths);
+    if !found {
+        shader_hot_reload_set_error(reload, tprint("% missing metallib for compute entry=% request=%", reload.log_prefix, entry.entry_id, entry.request_name));
+        return 0;
+    }
+    if entry.metal_compute_entry.count == 0 {
+        shader_hot_reload_set_error(reload, tprint("% missing metal compute entry name for id=%", reload.log_prefix, entry.entry_id));
+        return 0;
+    }
+    use_root_pointer_struct := entry.metal_compute_binding_mode == "ROOT_POINTER_STRUCT";
+    return gpu_create_compute_pipeline_from_metallib(metallib_path, entry.metal_compute_entry, use_root_pointer_struct);
+}
+
 #import "Basic";
 #import "Compiler";
 #import "sgpu";
-File :: #import "File";
 #import "Thread";
+String :: #import "String";
+Process :: #import "Process";
 JTS :: #import "Jai-Shader-Transpiler";
+ImGui :: #import "ImGui";

@@ -54,3 +54,4 @@ dist/sand_toy.dylib
 dist/terrain_test.dylib
 dist/flux
 dist/flux.dylib
+dist/textured_triangle.dylib
