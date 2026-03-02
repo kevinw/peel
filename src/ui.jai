@@ -17,7 +17,7 @@ ui_init :: () {
         assert(false, "TODO: ui_init for platform %", OS);
     }
 
-    load_ui_font(GetIO(), 14.0);
+    load_ui_font(GetIO(), 16.5);
 } @on_dll_init
 
 ui_get_sync_semaphore :: () -> Gpu_Semaphore {

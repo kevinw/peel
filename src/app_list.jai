@@ -10,6 +10,7 @@ APP_FILES :: string.[
     "raytracer.jai",
     "fluid2d.jai",
     "ripple_heightfield.jai",
+    "flux.jai",
     "sand_toy.jai",
     "gizmos_test.jai",
     "terrain_test.jai",

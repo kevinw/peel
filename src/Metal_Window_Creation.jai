@@ -1,5 +1,6 @@
 #if OS == .MACOS {
     sgpu_macos_application_initialized := false;
+    sgpu_macos_activation_pumped := false;
 
     set_nsview_layer :: (view: *NSView, layer: *CALayer) {
         set_layer: (*void, Selector, *CALayer) -> void #c_call;
@@ -35,8 +36,20 @@
 
         NSApplication.setAppleMenu(NSApp, app_menu);
         NSApplication.finishLaunching(NSApp);
+        NSApplication.setActivationPolicy(NSApp, NSApplicationActivationPolicyRegular);
+        NSApplication.activateIgnoringOtherApps(NSApp, YES);
 
         sgpu_macos_application_initialized = true;
+    }
+
+    #scope_export
+    ensure_macos_window_frontmost :: (window: *NSWindow) {
+        if !NSApp || !window return;
+
+        NSApplication.setActivationPolicy(NSApp, NSApplicationActivationPolicyRegular);
+        NSApplication.activateIgnoringOtherApps(NSApp, YES);
+        NSWindow.makeKeyAndOrderFront(window, null);
+        NSWindow.orderFront(window, null);
     }
 
     create_metal_window :: (width: int, height: int, window_name: string, window_x := -1, window_y := -1) -> *NSWindow {
@@ -79,6 +92,10 @@
             NSWindow.center(window);
         }
 
+        // Keep a hard activation pass here for terminal-launched + heavy-startup apps.
+        ensure_macos_window_frontmost(window);
+        sgpu_macos_activation_pumped = true;
+
         return window;
     }
 
@@ -102,6 +119,7 @@
         if !NSApp return 0, 0, false;
 
         win := NSApplication.keyWindow(NSApp);
+        if !win win = NSApplication.mainWindow(NSApp);
         if !win return 0, 0, false;
 
         x, y, success := get_mouse_pointer_position(win, right_handed);

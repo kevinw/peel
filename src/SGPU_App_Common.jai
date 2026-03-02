@@ -250,9 +250,10 @@ app_update :: (update_ctx: *App_Update_Ctx) {
 
 create_window_and_init_sgpu :: () {
     #if OS == .MACOS {
-        window = create_metal_window(2000, 1500, "hello peel");
+        window = create_metal_window(2500, 2000, "hello peel");
+        ensure_macos_window_frontmost(window);
     } else {
-        window = create_window(2000, 1500, "hello peel");
+        window = create_window(2500, 2000, "hello peel");
     }
     result := gpu_init();
     assert(result == .SUCCESS);
@@ -262,6 +263,7 @@ create_window_and_init_sgpu :: () {
     #if OS == .MACOS {
         // HACK to make sure the window appears before we begin gpu stuff, which may cause it not to raise.
         // there's probably a better fix for this!
+        ensure_macos_window_frontmost(window);
         Input.update_window_events();
     }
 }
@@ -392,8 +394,11 @@ Window_Type :: WT.Window_Type;
     set_window_title :: NSWindow.setTitle;
 
     backend_metal_window_did_resize :: (window: *NSWindow, width: s32, height: s32) {
-        r := NSRect.{ .{0, 0}, .{ xx width, xx height }};
-        r = window.convertRectToBacking(window, .{.{0, 0}, .{xx width, xx height}});
+        _ = width;
+        _ = height;
+        content_view := NSWindow.contentView(window);
+        bounds := NSView.bounds(content_view);
+        r := NSView.convertRectToBacking(content_view, bounds);
         layer := metal_layer(window);
         layer.setDrawableSize(layer, r.size);
         window.display(window);

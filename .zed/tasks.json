@@ -1,5 +1,9 @@
 [
   {
+    "label": "flux",
+    "command": "jai ~/src/peel/build.jai - src/apps/flux.jai -run -dll",
+  },
+  {
     "label": "sand_toy",
     "command": "jai ~/src/peel/build.jai - src/apps/sand_toy.jai -run -dll",
   },
