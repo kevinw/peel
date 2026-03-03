@@ -63,6 +63,7 @@ grass_spawn_near_boost: float = 3.0;
 grass_spawn_far_density: float = 1.0;
 grass_fade_start: float = 8.46;
 grass_fade_end: float = 22.58;
+wind: float = 0.07;
 
 cam_target := Vector3.{0.0, 0.0, 0.0};
 cam_yaw: float = 0.78;
@@ -180,6 +181,7 @@ flux_ui :: () {
         Persist.SliderFloat("Grass Fade Start", *grass_fade_start, 0.5, 12.0, "%.2f");
         Persist.SliderFloat("Grass Fade End", *grass_fade_end, 1.0, 24.0, "%.2f");
         Persist.SliderFloat("Camera Radius", *cam_radius, FLUX_CAMERA_RADIUS_MIN, FLUX_CAMERA_RADIUS_MAX, "%.2f");
+        Persist.SliderFloat("Wind", *wind, 0, 0.5, "%.2f");
         Persist.Checkbox("Show Shadow Debug", *show_shadow_debug);
     }
     End();
@@ -249,7 +251,7 @@ flux_write_render_payload :: (win_w: u32, win_h: u32) {
 
     shadow_tex_sampler_bias_texel = .{shadow_tex_idx, shadow_sampler_idx, shadow_bias, shadow_texel};
     sun_dir_xz_scale = .{light_dir.x, light_dir.y, light_dir.z, xz_scale};
-    fog_time_wind_gain = .{fog_density, fog_exponent, cast(float) time, 0.20};
+    fog_time_wind_gain = .{fog_density, fog_exponent, cast(float) time, wind};
     grass_count_spacing_scale = .{cast(float) FLUX_GRASS_INSTANCE_COUNT, grass_spacing, grass_blade_scale, 0.0};
     grass_spawn_lod = .{grass_spawn_near, grass_spawn_far, grass_spawn_near_boost, grass_spawn_far_density};
     grass_fade_near_far = .{grass_fade_start, grass_fade_end, 0.0, 0.0};
