@@ -11,7 +11,7 @@ FLUX_MESH_VERTS :: (FLUX_MESH_WIDTH - 1) * (FLUX_MESH_HEIGHT - 1) * 6;
 FLUX_GRASS_INSTANCE_COUNT :: 44000;
 FLUX_GRASS_VERTS_PER_INSTANCE :: 6;
 
-FLUX_PARAM_V4_COUNT :: 12;
+FLUX_PARAM_V4_COUNT :: 14;
 FLUX_STATE_OFFSET :: FLUX_PARAM_V4_COUNT;
 FLUX_GRASS_DATA_OFFSET :: FLUX_STATE_OFFSET + FLUX_CELL_COUNT * 2;
 FLUX_PAYLOAD_TOTAL_V4_COUNT :: FLUX_GRASS_DATA_OFFSET + FLUX_GRASS_INSTANCE_COUNT;
@@ -28,6 +28,8 @@ FLUX_PARAM_SHADOW_TEX_SAMPLER_BIAS_TEXEL  :: 8;
 FLUX_PARAM_SUN_DIR_XZ_SCALE               :: 9;
 FLUX_PARAM_FOG_TIME_WIND_GAIN             :: 10;
 FLUX_PARAM_GRASS_COUNT_SPACING_SCALE      :: 11;
+FLUX_PARAM_GRASS_SPAWN_LOD                :: 12;
+FLUX_PARAM_GRASS_FADE_NEAR_FAR            :: 13;
 
 Flux_Render_Params :: struct {
     camera_pos_proj_x: Vector4;
@@ -42,6 +44,8 @@ Flux_Render_Params :: struct {
     sun_dir_xz_scale: Vector4;
     fog_time_wind_gain: Vector4;
     grass_count_spacing_scale: Vector4;
+    grass_spawn_lod: Vector4;
+    grass_fade_near_far: Vector4;
 }
 
 #assert(size_of(Flux_Render_Params) == FLUX_PARAM_V4_COUNT * size_of(Vector4));
@@ -241,6 +245,8 @@ flux_param_shadow_tex_sampler_bias_texel :: (payload: *Vector4) -> Vector4 { ret
 flux_param_sun_dir_xz_scale :: (payload: *Vector4) -> Vector4 { return payload[FLUX_PARAM_SUN_DIR_XZ_SCALE]; }
 flux_param_fog_time_wind_gain :: (payload: *Vector4) -> Vector4 { return payload[FLUX_PARAM_FOG_TIME_WIND_GAIN]; }
 flux_param_grass_count_spacing_scale :: (payload: *Vector4) -> Vector4 { return payload[FLUX_PARAM_GRASS_COUNT_SPACING_SCALE]; }
+flux_param_grass_spawn_lod :: (payload: *Vector4) -> Vector4 { return payload[FLUX_PARAM_GRASS_SPAWN_LOD]; }
+flux_param_grass_fade_near_far :: (payload: *Vector4) -> Vector4 { return payload[FLUX_PARAM_GRASS_FADE_NEAR_FAR]; }
 
 flux_sim_src_offset :: (payload: *Vector4) -> u32 {
     use_b_f := flux_param_light_center_use_b_as_src(payload).w;
@@ -496,6 +502,19 @@ flux_grass_spawn_compute :: (using in: Flux_Grass_Compute_In, payload: *Vector4)
     wz := center.x * 0.34;
 
     keep_prob := 1.0 / (spacing * spacing);
+    p0 := flux_param_camera_pos_proj_x(payload);
+    cam_xy := Vector2.{p0.x, p0.y};
+    to_cam_x := wx - cam_xy.x;
+    to_cam_y := wy - cam_xy.y;
+    cam_dist := sqrt(to_cam_x * to_cam_x + to_cam_y * to_cam_y);
+    p12 := flux_param_grass_spawn_lod(payload);
+    spawn_near := max(p12.x, 0.0);
+    spawn_far := max(p12.y, spawn_near + 0.001);
+    spawn_near_boost := max(p12.z, 0.0);
+    spawn_far_density := max(p12.w, 0.0);
+    lod_t := clamp((cam_dist - spawn_near) / (spawn_far - spawn_near), 0.0, 1.0);
+    density_mul := mix(spawn_near_boost, spawn_far_density, lod_t);
+    keep_prob = clamp(keep_prob * density_mul, 0.0, 1.0);
     keep_roll := flux_rand01_from_id(id, 0.4385780, 0.3317);
     spawn_mask := 0.0;
     if slope < 0.20 && center.w < 1.35 && center.x > -3.0 {
@@ -754,8 +773,10 @@ flux_grass_vertex_main :: (using in: Flux_Vertex_In, payload: *Vector4) -> Flux_
 } @vertex_shader
 
 flux_grass_fragment_main :: (using in: Flux_Grass_Fragment_In, payload: *Vector4) -> struct { out_color: Vector4; } {
+    p0 := flux_param_camera_pos_proj_x(payload);
     p9 := flux_param_sun_dir_xz_scale(payload);
     p10 := flux_param_fog_time_wind_gain(payload);
+    p13 := flux_param_grass_fade_near_far(payload);
     light_dir := flux_safe_normalize3(.{p9.x, p9.y, p9.z});
     n := flux_safe_normalize3(normal);
     ndotl := clamp(dot(n, light_dir), 0.0, 1.0);
@@ -768,10 +789,20 @@ flux_grass_fragment_main :: (using in: Flux_Grass_Fragment_In, payload: *Vector4
     diffuse := 0.85 * ndotl * shadow;
     col := base * (ambient + diffuse);
 
-    p0 := flux_param_camera_pos_proj_x(payload);
     cam_pos := Vector3.{p0.x, p0.y, p0.z};
     view_vec := world_pos - cam_pos;
     dist := sqrt(max(dot(view_vec, view_vec), 0.0));
+    fade_start := max(p13.x, 0.0);
+    fade_end := max(p13.y, fade_start + 0.001);
+    fade_t := clamp((fade_end - dist) / (fade_end - fade_start), 0.0, 1.0);
+    if fade_t <= 0.0 {
+        discard();
+    }
+    dither_seed := world_pos.x * cast(float) 12.9898 + world_pos.y * cast(float) 78.233 + world_pos.z * cast(float) 37.719 + blade_t * cast(float) 5.173;
+    dither := flux_fract(sin(dither_seed) * cast(float) 43758.5453);
+    if dither > fade_t {
+        discard();
+    }
     fog_density := max(p10.x, 0.0);
     fog_exponent := max(p10.y, 0.0001);
     view_dir := flux_safe_normalize3(view_vec);

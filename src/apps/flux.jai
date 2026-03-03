@@ -54,9 +54,15 @@ flux_xz_scale: float = 2.6;
 flux_fog_density: float = 0.18;
 flux_fog_exponent: float = 1.0;
 flux_time_of_day: float = 0.36;
-flux_grass_blade_count: s32 = 16000;
-flux_grass_spacing: float = 1.0;
+flux_grass_blade_count: s32 = 32000;
+flux_grass_spacing: float = 1.2;
 flux_grass_blade_scale: float = 0.2;
+flux_grass_spawn_near: float = 1.8;
+flux_grass_spawn_far: float = 5.2;
+flux_grass_spawn_near_boost: float = 3.0;
+flux_grass_spawn_far_density: float = 0.08;
+flux_grass_fade_start: float = 2.4;
+flux_grass_fade_end: float = 3.9;
 
 flux_cam_target := Vector3.{0.0, 0.0, 0.0};
 flux_cam_yaw: float = 0.78;
@@ -165,6 +171,12 @@ flux_ui :: () {
         SliderInt("Grass Blades", *flux_grass_blade_count, 0, FLUX_GRASS_INSTANCE_COUNT);
         SliderFloat("Grass Spacing", *flux_grass_spacing, 0.6, 3.0, "%.2f");
         SliderFloat("Grass Blade Scale", *flux_grass_blade_scale, 0.05, 2.0, "%.2f");
+        SliderFloat("Grass Spawn Near", *flux_grass_spawn_near, 0.2, 8.0, "%.2f");
+        SliderFloat("Grass Spawn Far", *flux_grass_spawn_far, 0.5, 16.0, "%.2f");
+        SliderFloat("Grass Near Boost", *flux_grass_spawn_near_boost, 0.0, 4.0, "%.2f");
+        SliderFloat("Grass Far Density", *flux_grass_spawn_far_density, 0.0, 1.0, "%.2f");
+        SliderFloat("Grass Fade Start", *flux_grass_fade_start, 0.5, 12.0, "%.2f");
+        SliderFloat("Grass Fade End", *flux_grass_fade_end, 1.0, 24.0, "%.2f");
         SliderFloat("Camera Radius", *flux_cam_radius, FLUX_CAMERA_RADIUS_MIN, FLUX_CAMERA_RADIUS_MAX, "%.2f");
         Checkbox("Show Shadow Debug", *flux_show_shadow_debug);
     }
@@ -180,6 +192,12 @@ flux_write_render_payload :: (win_w: u32, win_h: u32) {
     flux_grass_spacing = clamp(flux_grass_spacing, 0.6, 3.0);
     flux_grass_blade_count = clamp(flux_grass_blade_count, 0, FLUX_GRASS_INSTANCE_COUNT);
     flux_grass_blade_scale = clamp(flux_grass_blade_scale, 0.05, 2.0);
+    flux_grass_spawn_near = clamp(flux_grass_spawn_near, 0.0, 64.0);
+    flux_grass_spawn_far = clamp(flux_grass_spawn_far, flux_grass_spawn_near + 0.001, 128.0);
+    flux_grass_spawn_near_boost = clamp(flux_grass_spawn_near_boost, 0.0, 8.0);
+    flux_grass_spawn_far_density = clamp(flux_grass_spawn_far_density, 0.0, 8.0);
+    flux_grass_fade_start = clamp(flux_grass_fade_start, 0.0, 128.0);
+    flux_grass_fade_end = clamp(flux_grass_fade_end, flux_grass_fade_start + 0.001, 256.0);
 
     cam_pos, cam_right, cam_up, cam_forward: Vector3;
     proj_x, proj_y: float;
@@ -232,6 +250,8 @@ flux_write_render_payload :: (win_w: u32, win_h: u32) {
     sun_dir_xz_scale = .{light_dir.x, light_dir.y, light_dir.z, flux_xz_scale};
     fog_time_wind_gain = .{flux_fog_density, flux_fog_exponent, cast(float) time, 0.20};
     grass_count_spacing_scale = .{cast(float) flux_grass_blade_count, flux_grass_spacing, flux_grass_blade_scale, 0.0};
+    grass_spawn_lod = .{flux_grass_spawn_near, flux_grass_spawn_far, flux_grass_spawn_near_boost, flux_grass_spawn_far_density};
+    grass_fade_near_far = .{flux_grass_fade_start, flux_grass_fade_end, 0.0, 0.0};
 }
 
 on_dll_init :: () {
