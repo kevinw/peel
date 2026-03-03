@@ -203,6 +203,38 @@ flux_rand01_from_id :: (id: u32, mul: float, add: float) -> float {
     return flux_fract((cast(float) id + 0.5) * mul + add);
 }
 
+flux_hash12 :: (p: Vector2) -> float {
+    phase := p.x * cast(float) 127.1 + p.y * cast(float) 311.7;
+    return flux_fract(sin(phase) * cast(float) 43758.5453);
+}
+
+flux_noise2d :: (p: Vector2) -> float {
+    ix := floor(p.x);
+    iy := floor(p.y);
+    fx := flux_fract(p.x);
+    fy := flux_fract(p.y);
+    ux := fx * fx * (3.0 - 2.0 * fx);
+    uy := fy * fy * (3.0 - 2.0 * fy);
+
+    a := flux_hash12(.{ix, iy});
+    b := flux_hash12(.{ix + 1.0, iy});
+    c := flux_hash12(.{ix, iy + 1.0});
+    d := flux_hash12(.{ix + 1.0, iy + 1.0});
+    m0 := mix(a, b, ux);
+    m1 := mix(c, d, ux);
+    return mix(m0, m1, uy) * 2.0 - 1.0;
+}
+
+flux_turbulence2d :: (p: Vector2) -> float {
+    // Turbulence (abs-noise FBM) gives sharper, gusty flutter than plain Perlin-style noise.
+    n0 := abs(flux_noise2d(p));
+    p1 := Vector2.{p.x * 2.03 + 19.1, p.y * 2.03 + 7.7};
+    p2 := Vector2.{p.x * 4.07 + 3.3, p.y * 4.07 + 27.9};
+    n1 := abs(flux_noise2d(p1));
+    n2 := abs(flux_noise2d(p2));
+    return n0 * 0.57 + n1 * 0.29 + n2 * 0.14;
+}
+
 flux_safe_normalize3 :: (v: Vector3) -> Vector3 {
     len2 := v.x * v.x + v.y * v.y + v.z * v.z;
     if len2 < 0.000001 return .{0.0, 0.0, 1.0};
@@ -271,6 +303,43 @@ flux_read_state_uv :: (params: *Flux_Payload, uv: Vector2) -> Vector4 {
 
 flux_grass_data_at :: (params: *Flux_Payload, instance_id: u32) -> Vector4 {
     return params.grass_data[instance_id];
+}
+
+flux_grass_wind_bend :: (base: Vector3, r2: float, vt: float, blade_scale: float, p10: Vector4, p11: Vector4, p13: Vector4) -> Vector3 {
+    wind_time := p10.z;
+    wind_gain := max(p10.w, 0.0);
+    if wind_gain <= 0.0 return .{0.0, 0.0, 0.0};
+
+    macro_amp := clamp(p11.w, 0.0, 2.0);
+    turb_amp := clamp(p13.z, 0.0, 2.0);
+    turb_freq := max(p13.w, 0.01);
+
+    wind_dir := flux_safe_normalize3(.{sin(wind_time * 0.19), cos(wind_time * 0.23), 0.0});
+    cross_dir := Vector3.{-wind_dir.y, wind_dir.x, 0.0};
+    phase := r2 * cast(float) 23.17 + base.x * cast(float) 0.11 + base.y * cast(float) 0.07;
+    flow_x := wind_dir.x;
+    flow_y := wind_dir.y;
+    cross_x := cross_dir.x;
+    cross_y := cross_dir.y;
+    base_x := base.x;
+    base_y := base.y;
+
+    macro_wave := sin((base_x * flow_x + base_y * flow_y) * cast(float) 0.22 + phase + wind_time * (cast(float) 0.75 + r2 * cast(float) 0.35));
+    gust_wave := sin((base_x * cross_x + base_y * cross_y) * cast(float) 0.41 - wind_time * cast(float) 1.65 + phase * cast(float) 1.7);
+
+    adv := wind_time * (cast(float) 0.35 + r2 * cast(float) 0.55);
+    turb_pos := Vector2.{
+        base_x * turb_freq + flow_x * adv + r2 * cast(float) 7.1,
+        base_y * turb_freq + flow_y * adv + r2 * cast(float) 13.7,
+    };
+    turb := flux_turbulence2d(turb_pos);
+    flutter := (turb * 2.0 - 1.0) * (0.35 + 0.65 * vt);
+
+    bend_weight := vt * vt * (0.35 + 0.65 * vt);
+    bend_signal := macro_wave * macro_amp + gust_wave * cast(float) 0.45 + flutter * turb_amp;
+    bend_amount := wind_gain * blade_scale * cast(float) 0.55 * bend_signal * bend_weight;
+    bend_dir := flux_safe_normalize3(wind_dir + cross_dir * (gust_wave * cast(float) 0.35 + flutter * cast(float) 0.25));
+    return bend_dir * bend_amount;
 }
 
 flux_decode_world_pos :: (vertex_id: u32, params: *Flux_Payload, uv_out: *Vector2) -> Vector3 {
@@ -560,13 +629,10 @@ flux_grass_shadow_vertex_main :: (using in: Flux_Vertex_In, params: *Flux_Payloa
     else { vx = -0.32; vt = 1.0; }
 
     p10 := params.fog_time_wind_gain;
-    wind_time := p10.z;
-    wind_gain := max(p10.w, 0.0);
-    wind_dir := flux_safe_normalize3(.{sin(wind_time * 0.19), cos(wind_time * 0.23), 0.0});
-    sway := sin(wind_time * 1.8 + r2 * 12.0 + base.x * 0.9 + base.y * 1.1) * wind_gain * blade_scale;
-    bend := sway * vt * vt;
-
-    world_pos := base + right * (vx * w) + Vector3.{0.0, 0.0, vt * h} + wind_dir * bend;
+    p11 := params.grass_count_spacing_scale;
+    p13 := params.grass_fade_near_far;
+    bend_vec := flux_grass_wind_bend(base, r2, vt, blade_scale, p10, p11, p13);
+    world_pos := base + right * (vx * w) + Vector3.{0.0, 0.0, vt * h} + bend_vec;
     lndc := flux_project_light(world_pos, params);
     gl_Position = .{lndc.x, lndc.y, clamp(lndc.z, 0.0, 1.0), 1.0};
     depth01 = clamp(lndc.z, 0.0, 1.0);
@@ -790,16 +856,14 @@ flux_grass_vertex_main :: (using in: Flux_Vertex_In, params: *Flux_Payload) -> F
     else { vx = -0.32; vt = 1.0; }
 
     p10 := params.fog_time_wind_gain;
-    wind_time := p10.z;
-    wind_gain := max(p10.w, 0.0);
-    wind_dir := flux_safe_normalize3(.{sin(wind_time * 0.19), cos(wind_time * 0.23), 0.0});
-    sway := sin(wind_time * 1.8 + r2 * 12.0 + base.x * 0.9 + base.y * 1.1) * wind_gain * blade_scale;
-    bend := sway * vt * vt;
-
-    world_pos = base + right * (vx * w) + Vector3.{0.0, 0.0, vt * h} + wind_dir * bend;
+    p11 := params.grass_count_spacing_scale;
+    p13 := params.grass_fade_near_far;
+    bend_vec := flux_grass_wind_bend(base, r2, vt, blade_scale, p10, p11, p13);
+    world_pos = base + right * (vx * w) + Vector3.{0.0, 0.0, vt * h} + bend_vec;
     gl_Position = flux_project_camera(world_pos, params);
 
-    tip_dir := flux_safe_normalize3(.{wind_dir.x * bend, wind_dir.y * bend, 1.0});
+    // Keep motion visible, but avoid over-amplifying normal tilt into large coherent light bands.
+    tip_dir := flux_safe_normalize3(.{bend_vec.x * 0.75, bend_vec.y * 0.75, 1.0});
     n := flux_safe_normalize3(cross(tangent, tip_dir));
     normal = n;
     blade_t = vt;
@@ -819,12 +883,20 @@ flux_grass_fragment_main :: (using in: Flux_Grass_Fragment_In, using params: *Fl
     ndotl := clamp(dot(n, light_dir), 0.0, 1.0);
     shadow := flux_shadow_visibility(params, shadow_uvz);
 
-    low := Vector3.{0.065, 0.20, 0.07};
-    high := Vector3.{0.26, 0.56, 0.17};
-    base := mix(low, high, blade_t);
+    dry_root := Vector3.{0.34, 0.27, 0.11};
+    dry_tip := Vector3.{0.79, 0.67, 0.33};
+    base := mix(dry_root, dry_tip, blade_t);
+    // Stable world-space tint variation to break artificial stripe coherence.
+    tint_noise := flux_noise2d(Vector2.{world_pos.x * 0.18 + 13.7, world_pos.y * 0.18 - 5.1}) * 0.5 + 0.5;
+    clump_noise := flux_turbulence2d(Vector2.{world_pos.x * 0.045 + 2.3, world_pos.y * 0.045 - 7.9});
+    tint_t := clamp(tint_noise * 0.7 + clump_noise * 0.3, 0.0, 1.0);
+    cool_tint := Vector3.{0.90, 0.96, 1.03};
+    warm_tint := Vector3.{1.08, 1.02, 0.90};
+    base = base * mix(cool_tint, warm_tint, tint_t);
     ambient := 0.24;
     diffuse := 0.85 * ndotl * shadow;
-    col := base * (ambient + diffuse);
+    backlit := pow(clamp(1.0 - dot(n, light_dir), 0.0, 1.0), 2.2) * 0.14;
+    col := base * (ambient + diffuse) + Vector3.{backlit * 0.75, backlit * 0.62, backlit * 0.32};
 
     cam_pos := camera_pos_proj_x.xyz;
     view_vec := world_pos - cam_pos;

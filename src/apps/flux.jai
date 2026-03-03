@@ -65,6 +65,9 @@ grass_spawn_far_density: float = 1.0;
 grass_fade_start: float = 8.46;
 grass_fade_end: float = 22.58;
 wind: float = 0.07;
+grass_wind_macro: float = 0.95;
+grass_wind_turbulence: float = 0.62;
+grass_wind_turbulence_freq: float = 0.75;
 
 cam_target := Vector3.{0.0, 0.0, 0.0};
 cam_yaw: float = 0.78;
@@ -181,6 +184,9 @@ flux_ui :: () {
         Persist.SliderFloat("Grass Far Density", *grass_spawn_far_density, 0.0, 1.0, "%.2f");
         Persist.SliderFloat("Grass Fade Start", *grass_fade_start, 0.5, 12.0, "%.2f");
         Persist.SliderFloat("Grass Fade End", *grass_fade_end, 1.0, 24.0, "%.2f");
+        Persist.SliderFloat("Grass Wind Macro", *grass_wind_macro, 0.0, 2.0, "%.2f");
+        Persist.SliderFloat("Grass Turbulence", *grass_wind_turbulence, 0.0, 2.0, "%.2f");
+        Persist.SliderFloat("Grass Turb Freq", *grass_wind_turbulence_freq, 0.1, 3.0, "%.2f");
         Persist.SliderFloat("Camera Radius", *cam_radius, FLUX_CAMERA_RADIUS_MIN, FLUX_CAMERA_RADIUS_MAX, "%.2f");
         Persist.SliderFloat("Wind", *wind, 0, 0.5, "%.2f");
         Persist.Checkbox("Show Shadow Debug", *show_shadow_debug);
@@ -202,6 +208,9 @@ flux_write_render_payload :: (win_w: u32, win_h: u32) {
     grass_spawn_far_density = clamp(grass_spawn_far_density, 0.0, 8.0);
     grass_fade_start = clamp(grass_fade_start, 0.0, 128.0);
     grass_fade_end = clamp(grass_fade_end, grass_fade_start + 0.001, 256.0);
+    grass_wind_macro = clamp(grass_wind_macro, 0.0, 2.0);
+    grass_wind_turbulence = clamp(grass_wind_turbulence, 0.0, 2.0);
+    grass_wind_turbulence_freq = clamp(grass_wind_turbulence_freq, 0.1, 3.0);
 
     cam_pos, cam_right, cam_up, cam_forward: Vector3;
     proj_x, proj_y: float;
@@ -252,9 +261,9 @@ flux_write_render_payload :: (win_w: u32, win_h: u32) {
     shadow_tex_sampler_bias_texel = .{shadow_tex_idx, shadow_sampler_idx, shadow_bias, shadow_texel};
     sun_dir_xz_scale = .{light_dir.x, light_dir.y, light_dir.z, xz_scale};
     fog_time_wind_gain = .{fog_density, fog_exponent, cast(float) time, wind};
-    grass_count_spacing_scale = .{cast(float) FLUX_GRASS_INSTANCE_COUNT, grass_spacing, grass_blade_scale, 0.0};
+    grass_count_spacing_scale = .{cast(float) FLUX_GRASS_INSTANCE_COUNT, grass_spacing, grass_blade_scale, grass_wind_macro};
     grass_spawn_lod = .{grass_spawn_near, grass_spawn_far, grass_spawn_near_boost, grass_spawn_far_density};
-    grass_fade_near_far = .{grass_fade_start, grass_fade_end, 0.0, 0.0};
+    grass_fade_near_far = .{grass_fade_start, grass_fade_end, grass_wind_turbulence, grass_wind_turbulence_freq};
 }
 
 on_dll_init :: () {
