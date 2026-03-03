@@ -79,6 +79,8 @@ shader_hot_reload_create_and_register_graphics_pipeline_with_entry_id :: (reload
         log_error("% falling back to source graphics compile for id=%", reload.log_prefix, entry_id);
         new_pipeline = gpu_create_graphics_pipeline(source, raster_desc);
     }
+
+    assert(new_pipeline != 0, "Graphics pipeline creation failed.");
     if new_pipeline == 0 return false;
 
     old_pipeline := pipeline.*;
@@ -89,13 +91,16 @@ shader_hot_reload_create_and_register_graphics_pipeline_with_entry_id :: (reload
     return true;
 }
 
+gfx_pipeline :: shader_hot_reload_create_and_register_graphics_pipeline;
+
 shader_hot_reload_create_and_register_graphics_pipeline :: (reload: *Shader_Hot_Reload, pipeline: *Gpu_Pipeline, source: []u8, raster_desc: Gpu_Raster_Desc, target: JTS.Transpiled_Target, $vertex_shader: $VERTEX_SHADER, $fragment_shader: $FRAGMENT_SHADER, call: Code = #caller_code) -> bool #expand {
-    vertex_name := #run shader_hot_reload_proc_name_from_caller_arg_compile_time(call, 5);
+    vertex_name   := #run shader_hot_reload_proc_name_from_caller_arg_compile_time(call, 5);
     fragment_name := #run shader_hot_reload_proc_name_from_caller_arg_compile_time(call, 6);
-    target_name := tprint("%", target);
-    entry_id := tprint("pair|%|%|%", target_name, vertex_name, fragment_name);
+    target_name   := tprint("%", target);
+    entry_id      := tprint("pair|%|%|%", target_name, vertex_name, fragment_name);
     return shader_hot_reload_create_and_register_graphics_pipeline_with_entry_id(reload, entry_id, pipeline, source, raster_desc);
 }
+
 
 shader_hot_reload_register_compute_pipeline :: (reload: *Shader_Hot_Reload, entry_id: string, pipeline: *Gpu_Pipeline) {
     if entry_id.count == 0 || !pipeline return;
@@ -115,7 +120,10 @@ shader_hot_reload_create_and_register_compute_pipeline_with_entry_id :: (reload:
         log_error("% falling back to source compute compile for id=%", reload.log_prefix, entry_id);
         new_pipeline = gpu_create_compute_pipeline(source);
     }
-    if new_pipeline == 0 return false;
+    assert(new_pipeline != 0, "Compute pipeline creation failed.");
+    if new_pipeline == 0 {
+        return false;
+    }
 
     old_pipeline := pipeline.*;
     pipeline.* = new_pipeline;
@@ -125,6 +133,7 @@ shader_hot_reload_create_and_register_compute_pipeline_with_entry_id :: (reload:
     return true;
 }
 
+compute_pipeline :: shader_hot_reload_create_and_register_compute_pipeline;
 shader_hot_reload_create_and_register_compute_pipeline :: (reload: *Shader_Hot_Reload, pipeline: *Gpu_Pipeline, source: []u8, target: JTS.Transpiled_Target, $compute_shader: $COMPUTE_SHADER, call: Code = #caller_code) -> bool #expand {
     compute_name := #run shader_hot_reload_proc_name_from_caller_arg_compile_time(call, 4);
     target_name := tprint("%", target);

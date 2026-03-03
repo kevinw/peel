@@ -21,53 +21,53 @@ grass_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
 
-flux_depth_texture: Gpu_Texture;
-flux_depth_view: Gpu_Texture_View;
-flux_depth_w: u32;
-flux_depth_h: u32;
+depth_texture: Gpu_Texture;
+depth_view: Gpu_Texture_View;
+depth_w: u32;
+depth_h: u32;
 
-flux_shadow_map_texture: Gpu_Texture;
-flux_shadow_map_view: Gpu_Texture_View;
-flux_shadow_depth_texture: Gpu_Texture;
-flux_shadow_depth_view: Gpu_Texture_View;
-flux_shadow_sampler: Gpu_Sampler;
+shadow_map_texture: Gpu_Texture;
+shadow_map_view: Gpu_Texture_View;
+shadow_depth_texture: Gpu_Texture;
+shadow_depth_view: Gpu_Texture_View;
+shadow_sampler: Gpu_Sampler;
 
-flux_payload_cpu: *[FLUX_PAYLOAD_TOTAL_V4_COUNT] Vector4;
-flux_payload_gpu: Gpu_Ptr;
-flux_state: AB_Buffer([FLUX_CELL_COUNT] Vector4);
-flux_state_initialized := false;
-flux_control_ring_cpu: *[SGPU_FRAMES_IN_FLIGHT] Flux_Compute_Control;
-flux_control_ring_gpu: Gpu_Ptr;
+payload_cpu: *[FLUX_PAYLOAD_TOTAL_V4_COUNT] Vector4;
+payload_gpu: Gpu_Ptr;
+state: AB_Buffer([FLUX_CELL_COUNT] Vector4);
+state_initialized := false;
+control_ring_cpu: *[SGPU_FRAMES_IN_FLIGHT] Flux_Compute_Control;
+control_ring_gpu: Gpu_Ptr;
 
-flux_last_mouse_uv: Vector2;
-flux_have_last_mouse_uv := false;
-flux_last_mouse_x: s64;
-flux_last_mouse_y: s64;
-flux_have_last_mouse_px := false;
+last_mouse_uv: Vector2;
+have_last_mouse_uv := false;
+last_mouse_x: s64;
+last_mouse_y: s64;
+have_last_mouse_px := false;
 
-flux_brush_mode := Brush_Type.RAISE;
-flux_brush_radius_px: float = 82.0;
-flux_brush_strength: float = 0.018;
-flux_time_scale: float = 0.35;
-flux_show_shadow_debug := true;
-flux_xz_scale: float = 2.6;
-flux_fog_density: float = 0.18;
-flux_fog_exponent: float = 1.0;
-flux_time_of_day: float = 0.36;
-flux_grass_blade_count: s32 = 32000;
-flux_grass_spacing: float = 1.2;
-flux_grass_blade_scale: float = 0.2;
-flux_grass_spawn_near: float = 1.8;
-flux_grass_spawn_far: float = 5.2;
-flux_grass_spawn_near_boost: float = 3.0;
-flux_grass_spawn_far_density: float = 0.08;
-flux_grass_fade_start: float = 2.4;
-flux_grass_fade_end: float = 3.9;
+brush_mode := Brush_Type.RAISE;
+brush_radius_px: float = 82.0;
+brush_strength: float = 0.018;
+time_scale: float = 0.35;
+show_shadow_debug := true;
+xz_scale: float = 2.6;
+fog_density: float = 0.18;
+fog_exponent: float = 1.0;
+time_of_day: float = 0.61;
+grass_blade_count: s32 = 44000;
+grass_spacing: float = 1.2;
+grass_blade_scale: float = 0.59297; @0.05..3.0
+grass_spawn_near: float = 1.8;
+grass_spawn_far: float = 5.2;
+grass_spawn_near_boost: float = 3.0;
+grass_spawn_far_density: float = 0.08;
+grass_fade_start: float = 2.4;
+grass_fade_end: float = 3.9;
 
-flux_cam_target := Vector3.{0.0, 0.0, 0.0};
-flux_cam_yaw: float = 0.78;
-flux_cam_pitch: float = 0.58;
-flux_cam_radius: float = 2.9;
+cam_target := Vector3.{0.0, 0.0, 0.0};
+cam_yaw: float = 0.78;
+cam_pitch: float = 0.58;
+cam_radius: float = 2.9;
 FLUX_CAMERA_RADIUS_MIN :: 2.4;
 FLUX_CAMERA_RADIUS_MAX :: 6.0;
 
@@ -89,12 +89,12 @@ flux_compute_camera_basis :: (win_w: u32, win_h: u32, cam_pos: *Vector3, cam_rig
 
     // Z-up spherical orbit: yaw spins around world up (Z), pitch tilts up/down.
     cam_dir := Vector3.{
-        cos(flux_cam_pitch) * cos(flux_cam_yaw),
-        cos(flux_cam_pitch) * sin(flux_cam_yaw),
-        sin(flux_cam_pitch),
+        cos(cam_pitch) * cos(cam_yaw),
+        cos(cam_pitch) * sin(cam_yaw),
+        sin(cam_pitch),
     };
-    cam_pos.* = flux_cam_target + cam_dir * flux_cam_radius;
-    cam_forward.* = flux_safe_normalize3_cpu(flux_cam_target - cam_pos.*);
+    cam_pos.* = cam_target + cam_dir * cam_radius;
+    cam_forward.* = flux_safe_normalize3_cpu(cam_target - cam_pos.*);
 
     world_up := Vector3.{0.0, 0.0, 1.0};
     cam_right.* = cross(cam_forward.*, world_up);
@@ -129,9 +129,9 @@ flux_mouse_ray_to_terrain_uv :: (mouse_x: s64, mouse_y: s64, win_w: u32, win_h: 
     if t <= 0.0 return false;
 
     hit := cam_pos + ray_dir * t;
-    xz_scale := max(flux_xz_scale, 0.0001);
-    hit_u := hit.x / (2.0 * xz_scale) + 0.5;
-    hit_v := hit.y / (2.0 * xz_scale) + 0.5;
+    terrain_xz_scale := max(xz_scale, 0.0001);
+    hit_u := hit.x / (2.0 * terrain_xz_scale) + 0.5;
+    hit_v := hit.y / (2.0 * terrain_xz_scale) + 0.5;
     if hit_u < 0.0 || hit_u > 1.0 || hit_v < 0.0 || hit_v > 1.0 return false;
 
     uv.* = .{hit_u, hit_v};
@@ -140,6 +140,7 @@ flux_mouse_ray_to_terrain_uv :: (mouse_x: s64, mouse_y: s64, win_w: u32, win_h: 
 
 flux_ui :: () {
     using,except(Viewport) _ :: #import "ImGui";
+    Persist :: #import,file "../ui/persist_controls.jai";
 
     inspect_globals();
 
@@ -152,52 +153,54 @@ flux_ui :: () {
         Separator();
 
         Text("Brush Mode:");
-        if RadioButton("Raise", flux_brush_mode == FLUX_BRUSH_RAISE) flux_brush_mode = .RAISE; SameLine();
-        if RadioButton("Carve", flux_brush_mode == FLUX_BRUSH_CARVE) flux_brush_mode = .CARVE; SameLine();
-        if RadioButton("Heat", flux_brush_mode == FLUX_BRUSH_HEAT)   flux_brush_mode = .HEAT;
-        if flux_brush_mode == {
+        if RadioButton("Raise", brush_mode == FLUX_BRUSH_RAISE) brush_mode = .RAISE; SameLine();
+        if RadioButton("Carve", brush_mode == FLUX_BRUSH_CARVE) brush_mode = .CARVE; SameLine();
+        if RadioButton("Heat", brush_mode == FLUX_BRUSH_HEAT)   brush_mode = .HEAT;
+        if brush_mode == {
             case .RAISE; Text("Raise: builds terrain upward.");
             case .CARVE; Text("Carve: cuts terrain downward.");
             case .HEAT;  Text("Heat: adds thermal energy and slight uplift.");
         }
         Separator();
-        SliderFloat("Brush Radius", *flux_brush_radius_px, 10.0, 150.0, "%.1f px");
-        SliderFloat("Brush Strength", *flux_brush_strength, 0.001, 0.025, "%.3f");
-        SliderFloat("Time Scale", *flux_time_scale, 0.01, 2.0, "%.2f");
-        SliderFloat("Time of Day", *flux_time_of_day, 0.0, 1.0, "%.2f");
-        SliderFloat("XZ Scale", *flux_xz_scale, 1.0, 16.0, "%.2f");
-        SliderFloat("Fog", *flux_fog_density, 0.0, 1.0, "%.3f");
-        SliderFloat("Fog Exponent", *flux_fog_exponent, 0.25, 8.0, "%.2f");
-        SliderInt("Grass Blades", *flux_grass_blade_count, 0, FLUX_GRASS_INSTANCE_COUNT);
-        SliderFloat("Grass Spacing", *flux_grass_spacing, 0.6, 3.0, "%.2f");
-        SliderFloat("Grass Blade Scale", *flux_grass_blade_scale, 0.05, 2.0, "%.2f");
-        SliderFloat("Grass Spawn Near", *flux_grass_spawn_near, 0.2, 8.0, "%.2f");
-        SliderFloat("Grass Spawn Far", *flux_grass_spawn_far, 0.5, 16.0, "%.2f");
-        SliderFloat("Grass Near Boost", *flux_grass_spawn_near_boost, 0.0, 4.0, "%.2f");
-        SliderFloat("Grass Far Density", *flux_grass_spawn_far_density, 0.0, 1.0, "%.2f");
-        SliderFloat("Grass Fade Start", *flux_grass_fade_start, 0.5, 12.0, "%.2f");
-        SliderFloat("Grass Fade End", *flux_grass_fade_end, 1.0, 24.0, "%.2f");
-        SliderFloat("Camera Radius", *flux_cam_radius, FLUX_CAMERA_RADIUS_MIN, FLUX_CAMERA_RADIUS_MAX, "%.2f");
-        Checkbox("Show Shadow Debug", *flux_show_shadow_debug);
+
+        using Persist;
+        SliderFloat("Brush Radius", *brush_radius_px, 10.0, 150.0, "%.1f px");
+        SliderFloat("Brush Strength", *brush_strength, 0.001, 0.025, "%.3f");
+        SliderFloat("Time Scale", *time_scale, 0.01, 2.0, "%.2f");
+        SliderFloat("Time of Day", *time_of_day, 0.0, 1.0, "%.2f");
+        SliderFloat("XZ Scale", *xz_scale, 1.0, 16.0, "%.2f");
+        SliderFloat("Fog", *fog_density, 0.0, 1.0, "%.3f");
+        SliderFloat("Fog Exponent", *fog_exponent, 0.25, 8.0, "%.2f");
+        SliderInt("Grass Blades", *grass_blade_count, 0, FLUX_GRASS_INSTANCE_COUNT);
+        SliderFloat("Grass Spacing", *grass_spacing, 0.6, 3.0, "%.2f");
+        SliderFloat("Grass Blade Scale", *grass_blade_scale, 0.05, 2.0, "%.2f");
+        SliderFloat("Grass Spawn Near", *grass_spawn_near, 0.2, 8.0, "%.2f");
+        SliderFloat("Grass Spawn Far", *grass_spawn_far, 0.5, 16.0, "%.2f");
+        SliderFloat("Grass Near Boost", *grass_spawn_near_boost, 0.0, 4.0, "%.2f");
+        SliderFloat("Grass Far Density", *grass_spawn_far_density, 0.0, 1.0, "%.2f");
+        SliderFloat("Grass Fade Start", *grass_fade_start, 0.5, 12.0, "%.2f");
+        SliderFloat("Grass Fade End", *grass_fade_end, 1.0, 24.0, "%.2f");
+        SliderFloat("Camera Radius", *cam_radius, FLUX_CAMERA_RADIUS_MIN, FLUX_CAMERA_RADIUS_MAX, "%.2f");
+        Checkbox("Show Shadow Debug", *show_shadow_debug);
     }
     End();
 }
 
 flux_write_render_payload :: (win_w: u32, win_h: u32) {
-    params := cast(*Flux_Render_Params) flux_payload_cpu;
-    flux_cam_radius = clamp(flux_cam_radius, FLUX_CAMERA_RADIUS_MIN, FLUX_CAMERA_RADIUS_MAX);
-    flux_xz_scale = clamp(flux_xz_scale, 1.0, 16.0);
-    flux_fog_density = clamp(flux_fog_density, 0.0, 2.0);
-    flux_fog_exponent = clamp(flux_fog_exponent, 0.25, 8.0);
-    flux_grass_spacing = clamp(flux_grass_spacing, 0.6, 3.0);
-    flux_grass_blade_count = clamp(flux_grass_blade_count, 0, FLUX_GRASS_INSTANCE_COUNT);
-    flux_grass_blade_scale = clamp(flux_grass_blade_scale, 0.05, 2.0);
-    flux_grass_spawn_near = clamp(flux_grass_spawn_near, 0.0, 64.0);
-    flux_grass_spawn_far = clamp(flux_grass_spawn_far, flux_grass_spawn_near + 0.001, 128.0);
-    flux_grass_spawn_near_boost = clamp(flux_grass_spawn_near_boost, 0.0, 8.0);
-    flux_grass_spawn_far_density = clamp(flux_grass_spawn_far_density, 0.0, 8.0);
-    flux_grass_fade_start = clamp(flux_grass_fade_start, 0.0, 128.0);
-    flux_grass_fade_end = clamp(flux_grass_fade_end, flux_grass_fade_start + 0.001, 256.0);
+    params := cast(*Flux_Render_Params) payload_cpu;
+    cam_radius = clamp(cam_radius, FLUX_CAMERA_RADIUS_MIN, FLUX_CAMERA_RADIUS_MAX);
+    xz_scale = clamp(xz_scale, 1.0, 16.0);
+    fog_density = clamp(fog_density, 0.0, 2.0);
+    fog_exponent = clamp(fog_exponent, 0.25, 8.0);
+    grass_spacing = clamp(grass_spacing, 0.6, 3.0);
+    grass_blade_count = clamp(grass_blade_count, 0, FLUX_GRASS_INSTANCE_COUNT);
+    grass_blade_scale = clamp(grass_blade_scale, 0.05, 2.0);
+    grass_spawn_near = clamp(grass_spawn_near, 0.0, 64.0);
+    grass_spawn_far = clamp(grass_spawn_far, grass_spawn_near + 0.001, 128.0);
+    grass_spawn_near_boost = clamp(grass_spawn_near_boost, 0.0, 8.0);
+    grass_spawn_far_density = clamp(grass_spawn_far_density, 0.0, 8.0);
+    grass_fade_start = clamp(grass_fade_start, 0.0, 128.0);
+    grass_fade_end = clamp(grass_fade_end, grass_fade_start + 0.001, 256.0);
 
     cam_pos, cam_right, cam_up, cam_forward: Vector3;
     proj_x, proj_y: float;
@@ -205,11 +208,11 @@ flux_write_render_payload :: (win_w: u32, win_h: u32) {
     cam_near := cast(float) 0.08;
     cam_far := cast(float) 12.0;
 
-    flux_time_of_day = clamp(flux_time_of_day, 0.0, 1.0);
+    time_of_day = clamp(time_of_day, 0.0, 1.0);
     // `light_dir` is used in shading as the vector from surface toward the light.
     // Shadow-map view forward must point from light toward the scene, so use -light_dir.
     tau := cast(float) 6.28318530718;
-    sun_phase := (flux_time_of_day - 0.25) * tau;
+    sun_phase := (time_of_day - 0.25) * tau;
     sun_elev := sin(sun_phase) * cast(float) 0.55;
     sun_xy := cos(sun_elev);
     light_dir := flux_safe_normalize3_cpu(Vector3.{cos(sun_phase) * sun_xy, sin(sun_phase) * sun_xy, sin(sun_elev)});
@@ -223,14 +226,14 @@ flux_write_render_payload :: (win_w: u32, win_h: u32) {
     light_right = flux_safe_normalize3_cpu(light_right);
     light_up := flux_safe_normalize3_cpu(cross(light_forward, light_right));
 
-    light_extent := max(cast(float) 2.0, flux_xz_scale * 1.15);
+    light_extent := max(cast(float) 2.0, xz_scale * 1.15);
     light_near := cast(float) -3.0;
     light_far := cast(float) 3.0;
     light_center := Vector3.{0.0, 0.0, 0.0};
 
-    use_b_as_src_f := ifx flux_state.src_is_a then cast(float) 0.0 else cast(float) 1.0;
-    shadow_tex_idx := cast(float) (cast(u32) flux_shadow_map_view - 1);
-    shadow_sampler_idx := cast(float) (cast(u32) flux_shadow_sampler - 1);
+    use_b_as_src_f := ifx state.src_is_a then cast(float) 0.0 else cast(float) 1.0;
+    shadow_tex_idx := cast(float) (cast(u32) shadow_map_view - 1);
+    shadow_sampler_idx := cast(float) (cast(u32) shadow_sampler - 1);
     shadow_bias := cast(float) 0.0035;
     shadow_texel := 1.0 / cast(float) FLUX_SHADOW_MAP_SIZE;
 
@@ -247,11 +250,11 @@ flux_write_render_payload :: (win_w: u32, win_h: u32) {
     light_center_use_b_as_src = .{light_center.x, light_center.y, light_center.z, use_b_as_src_f};
 
     shadow_tex_sampler_bias_texel = .{shadow_tex_idx, shadow_sampler_idx, shadow_bias, shadow_texel};
-    sun_dir_xz_scale = .{light_dir.x, light_dir.y, light_dir.z, flux_xz_scale};
-    fog_time_wind_gain = .{flux_fog_density, flux_fog_exponent, cast(float) time, 0.20};
-    grass_count_spacing_scale = .{cast(float) flux_grass_blade_count, flux_grass_spacing, flux_grass_blade_scale, 0.0};
-    grass_spawn_lod = .{flux_grass_spawn_near, flux_grass_spawn_far, flux_grass_spawn_near_boost, flux_grass_spawn_far_density};
-    grass_fade_near_far = .{flux_grass_fade_start, flux_grass_fade_end, 0.0, 0.0};
+    sun_dir_xz_scale = .{light_dir.x, light_dir.y, light_dir.z, xz_scale};
+    fog_time_wind_gain = .{fog_density, fog_exponent, cast(float) time, 0.20};
+    grass_count_spacing_scale = .{cast(float) grass_blade_count, grass_spacing, grass_blade_scale, 0.0};
+    grass_spawn_lod = .{grass_spawn_near, grass_spawn_far, grass_spawn_near_boost, grass_spawn_far_density};
+    grass_fade_near_far = .{grass_fade_start, grass_fade_end, 0.0, 0.0};
 }
 
 on_dll_init :: () {
@@ -311,35 +314,35 @@ on_dll_init :: () {
     gpu_arena = gpu_make_arena(1024 * 1024 * 196, label = "flux arena");
 
     payload_storage, payload_storage_gpu := gpu_arena_alloc(*gpu_arena, [FLUX_PAYLOAD_TOTAL_V4_COUNT] Vector4);
-    flux_payload_cpu = payload_storage;
-    flux_payload_gpu = payload_storage_gpu;
+    payload_cpu = payload_storage;
+    payload_gpu = payload_storage_gpu;
 
-    sim_a_cpu := cast(*[FLUX_CELL_COUNT] Vector4) (cast(*Vector4) flux_payload_cpu + FLUX_STATE_OFFSET);
-    sim_b_cpu := cast(*[FLUX_CELL_COUNT] Vector4) (cast(*Vector4) flux_payload_cpu + FLUX_STATE_OFFSET + FLUX_CELL_COUNT);
+    sim_a_cpu := cast(*[FLUX_CELL_COUNT] Vector4) (cast(*Vector4) payload_cpu + FLUX_STATE_OFFSET);
+    sim_b_cpu := cast(*[FLUX_CELL_COUNT] Vector4) (cast(*Vector4) payload_cpu + FLUX_STATE_OFFSET + FLUX_CELL_COUNT);
 
-    sim_a_gpu := flux_payload_gpu + (FLUX_STATE_OFFSET * size_of(Vector4)).(Gpu_Ptr);
+    sim_a_gpu := payload_gpu + (FLUX_STATE_OFFSET * size_of(Vector4)).(Gpu_Ptr);
     sim_b_gpu := sim_a_gpu + (FLUX_CELL_COUNT * size_of(Vector4)).(Gpu_Ptr);
-    flux_state = .{
+    state = .{
         a_cpu = sim_a_cpu,
         b_cpu = sim_b_cpu,
         a_gpu = sim_a_gpu,
         b_gpu = sim_b_gpu,
         src_is_a = true,
     };
-    flux_state_initialized = false;
+    state_initialized = false;
 
     for i: FLUX_GRASS_DATA_OFFSET..FLUX_PAYLOAD_TOTAL_V4_COUNT-1 {
-        flux_payload_cpu.*[i] = .{0.0, 0.0, 0.0, 0.0};
+        payload_cpu.*[i] = .{0.0, 0.0, 0.0, 0.0};
     }
 
-    flux_control_ring_cpu, flux_control_ring_gpu = sgpu_arena_alloc_frame_ring(*gpu_arena, Flux_Compute_Control);
+    control_ring_cpu, control_ring_gpu = sgpu_arena_alloc_frame_ring(*gpu_arena, Flux_Compute_Control);
     for 0..SGPU_FRAMES_IN_FLIGHT-1 {
-        flux_control_ring_cpu.*[it] = .{
+        control_ring_cpu.*[it] = .{
             cursor_uv = .{-1.0, -1.0},
             cursor_delta_uv = .{0.0, 0.0},
-            brush_radius_px = flux_brush_radius_px,
-            brush_strength = flux_brush_strength,
-            time_scale = flux_time_scale,
+            brush_radius_px = brush_radius_px,
+            brush_strength = brush_strength,
+            time_scale = time_scale,
             use_b_as_src = 0,
             brush_active = 0,
             brush_mode = .RAISE,
@@ -347,7 +350,7 @@ on_dll_init :: () {
         };
     }
 
-    flux_shadow_sampler = gpu_create_sampler(.{
+    shadow_sampler = gpu_create_sampler(.{
         min_filter = .LINEAR,
         mag_filter = .LINEAR,
         mip_filter = .NEAREST,
@@ -357,10 +360,10 @@ on_dll_init :: () {
         address_mode_v = .CLAMP_TO_EDGE,
         address_mode_w = .CLAMP_TO_EDGE,
     });
-    assert(flux_shadow_sampler != 0, "Flux shadow sampler creation failed.");
+    assert(shadow_sampler != 0, "Flux shadow sampler creation failed.");
 
     draw_data = .{
-        vertex_params_gpu = flux_payload_gpu,
+        vertex_params_gpu = payload_gpu,
         pixel_gpu = 0,
         index_gpu = 0,
         num_vertices = FLUX_MESH_VERTS,
@@ -399,14 +402,14 @@ tick :: () {
     using,only(GetIO) _ :: #import "ImGui";
     imgui_wants_mouse := GetIO().WantCaptureMouse;
 
-    control := sgpu_frame_ring_cpu_slot(flux_control_ring_cpu);
-    control.use_b_as_src = ifx flux_state.src_is_a then cast(u32) 0 else cast(u32) 1;
+    control := sgpu_frame_ring_cpu_slot(control_ring_cpu);
+    control.use_b_as_src = ifx state.src_is_a then cast(u32) 0 else cast(u32) 1;
     control.cursor_uv = .{-1.0, -1.0};
     control.cursor_delta_uv = .{0.0, 0.0};
-    control.brush_radius_px = flux_brush_radius_px;
-    control.brush_strength = flux_brush_strength;
-    control.time_scale = flux_time_scale;
-    control.brush_mode = flux_brush_mode;
+    control.brush_radius_px = brush_radius_px;
+    control.brush_strength = brush_strength;
+    control.time_scale = time_scale;
+    control.brush_mode = brush_mode;
     control.brush_active = 0;
     control.frame_index = cast(u32) frame_count;
 
@@ -434,7 +437,7 @@ tick :: () {
         if move_len2 > 0.00001 {
             move = flux_safe_normalize3_cpu(move);
             move_speed := 2.6 * dt;
-            flux_cam_target += move * move_speed;
+            cam_target += move * move_speed;
         }
     }
 
@@ -444,60 +447,60 @@ tick :: () {
         right_down := (Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_RIGHT] & .DOWN) != 0;
 
         if right_down {
-            if flux_have_last_mouse_px {
-                dx := cast(float) (mx - flux_last_mouse_x);
-                dy := cast(float) (my - flux_last_mouse_y);
-                flux_cam_yaw -= dx * 0.0085;
-                flux_cam_pitch -= dy * 0.0065;
-                flux_cam_pitch = clamp(flux_cam_pitch, -1.40, 1.40);
+            if have_last_mouse_px {
+                dx := cast(float) (mx - last_mouse_x);
+                dy := cast(float) (my - last_mouse_y);
+                cam_yaw -= dx * 0.0085;
+                cam_pitch -= dy * 0.0065;
+                cam_pitch = clamp(cam_pitch, -1.40, 1.40);
             }
-            flux_have_last_mouse_uv = false;
+            have_last_mouse_uv = false;
         } else if left_down {
             hit_uv: Vector2;
             if flux_mouse_ray_to_terrain_uv(mx, my, cast(u32) win_w, cast(u32) win_h, *hit_uv) {
                 control.cursor_uv = hit_uv;
                 control.brush_active = 1;
-                if flux_have_last_mouse_uv {
-                    control.cursor_delta_uv = .{hit_uv.x - flux_last_mouse_uv.x, hit_uv.y - flux_last_mouse_uv.y};
+                if have_last_mouse_uv {
+                    control.cursor_delta_uv = .{hit_uv.x - last_mouse_uv.x, hit_uv.y - last_mouse_uv.y};
                 }
-                flux_last_mouse_uv = hit_uv;
-                flux_have_last_mouse_uv = true;
+                last_mouse_uv = hit_uv;
+                have_last_mouse_uv = true;
             } else {
-                flux_have_last_mouse_uv = false;
+                have_last_mouse_uv = false;
             }
         } else {
-            flux_have_last_mouse_uv = false;
+            have_last_mouse_uv = false;
         }
 
-        flux_last_mouse_x = mx;
-        flux_last_mouse_y = my;
-        flux_have_last_mouse_px = true;
+        last_mouse_x = mx;
+        last_mouse_y = my;
+        have_last_mouse_px = true;
     } else {
-        flux_have_last_mouse_uv = false;
-        flux_have_last_mouse_px = false;
+        have_last_mouse_uv = false;
+        have_last_mouse_px = false;
     }
 
     main_queue := gpu_get_queue(.MAIN, 0);
     result=, cmd_buff := gpu_start_command_recording(main_queue);
     assert(result == .SUCCESS);
 
-    if !flux_state_initialized {
+    if !state_initialized {
         init_state_start := current_time_monotonic();
         result = gpu_set_pipeline(cmd_buff, init_compute_pipeline);
         assert(result == .SUCCESS, tprint("Flux init compute set pipeline failed: %", result));
-        gpu_dispatch_buffers(cmd_buff, .[flux_state.a_gpu], .[(FLUX_CELL_COUNT + 63) / 64, 1, 1]);
-        gpu_dispatch_buffers(cmd_buff, .[flux_state.b_gpu], .[(FLUX_CELL_COUNT + 63) / 64, 1, 1]);
+        gpu_dispatch_buffers(cmd_buff, .[state.a_gpu], .[(FLUX_CELL_COUNT + 63) / 64, 1, 1]);
+        gpu_dispatch_buffers(cmd_buff, .[state.b_gpu], .[(FLUX_CELL_COUNT + 63) / 64, 1, 1]);
         init_state_ms := to_float64_seconds(current_time_monotonic() - init_state_start) * 1000.0;
         log("FLUX init_state_gpu_encode ms=%", init_state_ms);
-        flux_state_initialized = true;
+        state_initialized = true;
     }
 
     result = gpu_set_pipeline(cmd_buff, compute_pipeline);
     assert(result == .SUCCESS, tprint("Flux compute set pipeline failed: %", result));
-    control_gpu := sgpu_frame_ring_gpu_slot(flux_control_ring_gpu, Flux_Compute_Control);
-    gpu_dispatch_buffers(cmd_buff, .[flux_state.a_gpu, control_gpu], .[(FLUX_CELL_COUNT + 63) / 64, 1, 1]);
+    control_gpu := sgpu_frame_ring_gpu_slot(control_ring_gpu, Flux_Compute_Control);
+    gpu_dispatch_buffers(cmd_buff, .[state.a_gpu, control_gpu], .[(FLUX_CELL_COUNT + 63) / 64, 1, 1]);
 
-    ab_buffer_advance(*flux_state);
+    ab_buffer_advance(*state);
 
     if dims_ok && win_w > 0 && win_h > 0 {
         flux_write_render_payload(cast(u32) win_w, cast(u32) win_h);
@@ -505,11 +508,11 @@ tick :: () {
 
     result = gpu_set_pipeline(cmd_buff, grass_spawn_compute_pipeline);
     assert(result == .SUCCESS, tprint("Flux grass compute set pipeline failed: %", result));
-    gpu_dispatch_buffers(cmd_buff, .[flux_payload_gpu], .[(FLUX_GRASS_INSTANCE_COUNT + 63) / 64, 1, 1]);
+    gpu_dispatch_buffers(cmd_buff, .[payload_gpu], .[(FLUX_GRASS_INSTANCE_COUNT + 63) / 64, 1, 1]);
 
     gpu_begin_render_pass(cmd_buff, {
         depth_target = .{
-            view = flux_shadow_depth_view,
+            view = shadow_depth_view,
             load_op = .CLEAR,
             store_op = .STORE,
             clear_value = .{
@@ -519,7 +522,7 @@ tick :: () {
         },
         color_targets = .[
             {
-                view = flux_shadow_map_view,
+                view = shadow_map_view,
                 load_op = .CLEAR,
                 store_op = .STORE,
                 clear_color._float = .[1.0, 1.0, 1.0, 1.0],
@@ -529,13 +532,13 @@ tick :: () {
 
     gpu_set_depth_stencil_state(cmd_buff, {depth_test = .LESS, depth_mode = .READ | .WRITE,});
     gpu_set_pipeline(cmd_buff, shadow_pipeline);
-    shadow_draw_result := gpu_draw_instanced_direct(cmd_buff, flux_payload_gpu, draw_data.num_vertices, draw_data.num_instances);
+    shadow_draw_result := gpu_draw_instanced_direct(cmd_buff, payload_gpu, draw_data.num_vertices, draw_data.num_instances);
     assert(shadow_draw_result == .SUCCESS, tprint("Flux shadow draw failed: %", shadow_draw_result));
     gpu_end_render_pass(cmd_buff);
 
     gpu_begin_render_pass(cmd_buff, {
         depth_target = .{
-            view = flux_depth_view,
+            view = depth_view,
             load_op = .CLEAR,
             store_op = .STORE,
             clear_value = .{
@@ -555,25 +558,24 @@ tick :: () {
 
     gpu_set_depth_stencil_state(cmd_buff, {depth_test = .ALWAYS, depth_mode = .NONE,});
     gpu_set_pipeline(cmd_buff, sky_pipeline);
-    sky_draw_result := gpu_draw_instanced_direct(cmd_buff, flux_payload_gpu, 6, 1);
+    sky_draw_result := gpu_draw_instanced_direct(cmd_buff, payload_gpu, 6, 1);
     assert(sky_draw_result == .SUCCESS, tprint("Flux sky draw failed: %", sky_draw_result));
 
     gpu_set_depth_stencil_state(cmd_buff, {depth_test = .LESS, depth_mode = .READ | .WRITE,});
     gpu_set_pipeline(cmd_buff, graphics_pipeline);
 
-    draw_result := gpu_draw_instanced_direct(cmd_buff, flux_payload_gpu, draw_data.num_vertices, draw_data.num_instances);
+    draw_result := gpu_draw_instanced_direct(cmd_buff, payload_gpu, draw_data.num_vertices, draw_data.num_instances);
     assert(draw_result == .SUCCESS, tprint("Flux draw failed: %", draw_result));
 
     gpu_set_depth_stencil_state(cmd_buff, {depth_test = .LESS, depth_mode = .READ | .WRITE,});
     gpu_set_pipeline(cmd_buff, grass_pipeline);
-    grass_draw_count := cast(u32) flux_grass_blade_count;
-    grass_draw_result := gpu_draw_instanced_direct(cmd_buff, flux_payload_gpu, FLUX_GRASS_VERTS_PER_INSTANCE, grass_draw_count);
+    grass_draw_result := gpu_draw_instanced_direct(cmd_buff, payload_gpu, FLUX_GRASS_VERTS_PER_INSTANCE, cast(u32) grass_blade_count);
     assert(grass_draw_result == .SUCCESS, tprint("Flux grass draw failed: %", grass_draw_result));
 
-    if flux_show_shadow_debug {
+    if show_shadow_debug {
         gpu_set_depth_stencil_state(cmd_buff, {depth_test = .ALWAYS, depth_mode = .NONE,});
         gpu_set_pipeline(cmd_buff, debug_shadow_pipeline);
-        debug_draw_result := gpu_draw_instanced_direct(cmd_buff, flux_payload_gpu, 6, 1);
+        debug_draw_result := gpu_draw_instanced_direct(cmd_buff, payload_gpu, 6, 1);
         assert(debug_draw_result == .SUCCESS, tprint("Flux debug shadow draw failed: %", debug_draw_result));
     }
     gpu_end_render_pass(cmd_buff);
@@ -584,47 +586,47 @@ tick :: () {
 #scope_file
 ensure_depth_target :: (width: u32, height: u32) {
     if width == 0 || height == 0 return;
-    if flux_depth_view != 0 && flux_depth_w == width && flux_depth_h == height return;
+    if depth_view != 0 && depth_w == width && depth_h == height return;
 
-    res, flux_depth_texture= := gpu_create_texture(.{
+    res, depth_texture= := gpu_create_texture(.{
         dimensions = .[width, height, 1],
         format = .D32_SFLOAT,
         usage = .DEPTH_STENCIL_ATTACHMENT,
     });
     assert(res == .SUCCESS, tprint("Flux depth texture creation failed: %", res));
-    assert(flux_depth_texture != 0, "Flux depth texture handle invalid.");
+    assert(depth_texture != 0, "Flux depth texture handle invalid.");
 
-    flux_depth_view = gpu_texture_view(flux_depth_texture);
-    assert(flux_depth_view != 0, "Flux depth view creation failed.");
+    depth_view = gpu_texture_view(depth_texture);
+    assert(depth_view != 0, "Flux depth view creation failed.");
 
-    flux_depth_w = width;
-    flux_depth_h = height;
+    depth_w = width;
+    depth_h = height;
 }
 
 ensure_shadow_targets :: () {
-    if flux_shadow_map_view != 0 && flux_shadow_depth_view != 0 return;
+    if shadow_map_view != 0 && shadow_depth_view != 0 return;
 
-    res_map, flux_shadow_map_texture= := gpu_create_texture(.{
+    res_map, shadow_map_texture= := gpu_create_texture(.{
         dimensions = .[FLUX_SHADOW_MAP_SIZE, FLUX_SHADOW_MAP_SIZE, 1],
         format = .R32_SFLOAT,
         usage = .COLOR_ATTACHMENT | .SAMPLED,
     });
     assert(res_map == .SUCCESS, tprint("Flux shadow map texture creation failed: %", res_map));
-    assert(flux_shadow_map_texture != 0, "Flux shadow map texture handle invalid.");
+    assert(shadow_map_texture != 0, "Flux shadow map texture handle invalid.");
 
-    flux_shadow_map_view = gpu_texture_view(flux_shadow_map_texture);
-    assert(flux_shadow_map_view != 0, "Flux shadow map view creation failed.");
+    shadow_map_view = gpu_texture_view(shadow_map_texture);
+    assert(shadow_map_view != 0, "Flux shadow map view creation failed.");
 
-    res_depth, flux_shadow_depth_texture= := gpu_create_texture(.{
+    res_depth, shadow_depth_texture= := gpu_create_texture(.{
         dimensions = .[FLUX_SHADOW_MAP_SIZE, FLUX_SHADOW_MAP_SIZE, 1],
         format = .D32_SFLOAT,
         usage = .DEPTH_STENCIL_ATTACHMENT,
     });
     assert(res_depth == .SUCCESS, tprint("Flux shadow depth texture creation failed: %", res_depth));
-    assert(flux_shadow_depth_texture != 0, "Flux shadow depth texture handle invalid.");
+    assert(shadow_depth_texture != 0, "Flux shadow depth texture handle invalid.");
 
-    flux_shadow_depth_view = gpu_texture_view(flux_shadow_depth_texture);
-    assert(flux_shadow_depth_view != 0, "Flux shadow depth view creation failed.");
+    shadow_depth_view = gpu_texture_view(shadow_depth_texture);
+    assert(shadow_depth_view != 0, "Flux shadow depth view creation failed.");
 }
 
 #import "Math";
