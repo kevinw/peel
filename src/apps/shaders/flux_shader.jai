@@ -731,7 +731,7 @@ flux_grass_vertex_main :: (using in: Flux_Vertex_In, payload: *Vector4) -> Flux_
     wind_time := p10.z;
     wind_gain := max(p10.w, 0.0);
     wind_dir := flux_safe_normalize3(.{sin(wind_time * 0.19), cos(wind_time * 0.23), 0.0});
-    sway := sin(wind_time * 1.8 + r2 * 12.0 + base.x * 0.9 + base.y * 1.1) * (0.06 + wind_gain * 0.26);
+    sway := sin(wind_time * 1.8 + r2 * 12.0 + base.x * 0.9 + base.y * 1.1) * (0.06 + wind_gain * 0.26) * blade_scale;
     bend := sway * vt * vt;
 
     world_pos = base + right * (vx * w) + Vector3.{0.0, 0.0, vt * h} + wind_dir * bend;
