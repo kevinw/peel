@@ -20,6 +20,7 @@ grass_spawn_compute_pipeline: Gpu_Pipeline;
 grass_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
+FLUX_GRASS_INSTANCE_COUNT :: 130000;
 
 depth_texture: Gpu_Texture;
 depth_view: Gpu_Texture_View;
@@ -54,15 +55,14 @@ xz_scale: float = 2.6;
 fog_density: float = 0.18;
 fog_exponent: float = 1.0;
 time_of_day: float = 0.61;
-grass_blade_count: s32 = 44000;
-grass_spacing: float = 1.2;
-grass_blade_scale: float = 0.59297; @0.05..3.0
+grass_spacing: float = 0.6;
+grass_blade_scale: float = 0.54; @0.05..3.0
 grass_spawn_near: float = 1.8;
-grass_spawn_far: float = 5.2;
+grass_spawn_far: float = 2.36;
 grass_spawn_near_boost: float = 3.0;
-grass_spawn_far_density: float = 0.08;
-grass_fade_start: float = 2.4;
-grass_fade_end: float = 3.9;
+grass_spawn_far_density: float = 1.0;
+grass_fade_start: float = 8.46;
+grass_fade_end: float = 22.58;
 
 cam_target := Vector3.{0.0, 0.0, 0.0};
 cam_yaw: float = 0.78;
@@ -164,24 +164,23 @@ flux_ui :: () {
         Separator();
 
         using Persist;
-        SliderFloat("Brush Radius", *brush_radius_px, 10.0, 150.0, "%.1f px");
-        SliderFloat("Brush Strength", *brush_strength, 0.001, 0.025, "%.3f");
-        SliderFloat("Time Scale", *time_scale, 0.01, 2.0, "%.2f");
-        SliderFloat("Time of Day", *time_of_day, 0.0, 1.0, "%.2f");
-        SliderFloat("XZ Scale", *xz_scale, 1.0, 16.0, "%.2f");
-        SliderFloat("Fog", *fog_density, 0.0, 1.0, "%.3f");
-        SliderFloat("Fog Exponent", *fog_exponent, 0.25, 8.0, "%.2f");
-        SliderInt("Grass Blades", *grass_blade_count, 0, FLUX_GRASS_INSTANCE_COUNT);
-        SliderFloat("Grass Spacing", *grass_spacing, 0.6, 3.0, "%.2f");
-        SliderFloat("Grass Blade Scale", *grass_blade_scale, 0.05, 2.0, "%.2f");
-        SliderFloat("Grass Spawn Near", *grass_spawn_near, 0.2, 8.0, "%.2f");
-        SliderFloat("Grass Spawn Far", *grass_spawn_far, 0.5, 16.0, "%.2f");
-        SliderFloat("Grass Near Boost", *grass_spawn_near_boost, 0.0, 4.0, "%.2f");
-        SliderFloat("Grass Far Density", *grass_spawn_far_density, 0.0, 1.0, "%.2f");
-        SliderFloat("Grass Fade Start", *grass_fade_start, 0.5, 12.0, "%.2f");
-        SliderFloat("Grass Fade End", *grass_fade_end, 1.0, 24.0, "%.2f");
-        SliderFloat("Camera Radius", *cam_radius, FLUX_CAMERA_RADIUS_MIN, FLUX_CAMERA_RADIUS_MAX, "%.2f");
-        Checkbox("Show Shadow Debug", *show_shadow_debug);
+        Persist.SliderFloat("Brush Radius", *brush_radius_px, 10.0, 150.0, "%.1f px");
+        Persist.SliderFloat("Brush Strength", *brush_strength, 0.001, 0.025, "%.3f");
+        Persist.SliderFloat("Time Scale", *time_scale, 0.01, 2.0, "%.2f");
+        Persist.SliderFloat("Time of Day", *time_of_day, 0.0, 1.0, "%.2f");
+        Persist.SliderFloat("XZ Scale", *xz_scale, 1.0, 16.0, "%.2f");
+        Persist.SliderFloat("Fog", *fog_density, 0.0, 1.0, "%.3f");
+        Persist.SliderFloat("Fog Exponent", *fog_exponent, 0.25, 8.0, "%.2f");
+        Persist.SliderFloat("Grass Spacing", *grass_spacing, 0.6, 3.0, "%.2f");
+        Persist.SliderFloat("Grass Blade Scale", *grass_blade_scale, 0.05, 2.0, "%.2f");
+        Persist.SliderFloat("Grass Spawn Near", *grass_spawn_near, 0.2, 8.0, "%.2f");
+        Persist.SliderFloat("Grass Spawn Far", *grass_spawn_far, 0.5, 16.0, "%.2f");
+        Persist.SliderFloat("Grass Near Boost", *grass_spawn_near_boost, 0.0, 4.0, "%.2f");
+        Persist.SliderFloat("Grass Far Density", *grass_spawn_far_density, 0.0, 1.0, "%.2f");
+        Persist.SliderFloat("Grass Fade Start", *grass_fade_start, 0.5, 12.0, "%.2f");
+        Persist.SliderFloat("Grass Fade End", *grass_fade_end, 1.0, 24.0, "%.2f");
+        Persist.SliderFloat("Camera Radius", *cam_radius, FLUX_CAMERA_RADIUS_MIN, FLUX_CAMERA_RADIUS_MAX, "%.2f");
+        Persist.Checkbox("Show Shadow Debug", *show_shadow_debug);
     }
     End();
 }
@@ -193,7 +192,6 @@ flux_write_render_payload :: (win_w: u32, win_h: u32) {
     fog_density = clamp(fog_density, 0.0, 2.0);
     fog_exponent = clamp(fog_exponent, 0.25, 8.0);
     grass_spacing = clamp(grass_spacing, 0.6, 3.0);
-    grass_blade_count = clamp(grass_blade_count, 0, FLUX_GRASS_INSTANCE_COUNT);
     grass_blade_scale = clamp(grass_blade_scale, 0.05, 2.0);
     grass_spawn_near = clamp(grass_spawn_near, 0.0, 64.0);
     grass_spawn_far = clamp(grass_spawn_far, grass_spawn_near + 0.001, 128.0);
@@ -252,7 +250,7 @@ flux_write_render_payload :: (win_w: u32, win_h: u32) {
     shadow_tex_sampler_bias_texel = .{shadow_tex_idx, shadow_sampler_idx, shadow_bias, shadow_texel};
     sun_dir_xz_scale = .{light_dir.x, light_dir.y, light_dir.z, xz_scale};
     fog_time_wind_gain = .{fog_density, fog_exponent, cast(float) time, 0.20};
-    grass_count_spacing_scale = .{cast(float) grass_blade_count, grass_spacing, grass_blade_scale, 0.0};
+    grass_count_spacing_scale = .{cast(float) FLUX_GRASS_INSTANCE_COUNT, grass_spacing, grass_blade_scale, 0.0};
     grass_spawn_lod = .{grass_spawn_near, grass_spawn_far, grass_spawn_near_boost, grass_spawn_far_density};
     grass_fade_near_far = .{grass_fade_start, grass_fade_end, 0.0, 0.0};
 }
@@ -265,17 +263,6 @@ on_dll_init :: () {
     grass_spawn_compute_source := cast([]u8) get_transpiled(.METAL, flux_grass_spawn_compute);
     assert(grass_spawn_compute_source.count > 0, "Compute transpilation failed (flux_grass_spawn_compute).");
 
-    graphics_source := cast([]u8) get_transpiled(.METAL, flux_vertex_main, flux_fragment_main);
-    assert(graphics_source.count > 0, "Graphics transpilation failed (flux shaders).");
-    grass_source := cast([]u8) get_transpiled(.METAL, flux_grass_vertex_main, flux_grass_fragment_main);
-    assert(grass_source.count > 0, "Graphics transpilation failed (flux grass shaders).");
-    sky_source := cast([]u8) get_transpiled(.METAL, flux_sky_vertex_main, flux_sky_fragment_main);
-    assert(sky_source.count > 0, "Graphics transpilation failed (flux sky shaders).");
-    debug_shadow_source := cast([]u8) get_transpiled(.METAL, flux_debug_shadow_vertex_main, flux_debug_shadow_fragment_main);
-    assert(debug_shadow_source.count > 0, "Graphics transpilation failed (flux debug shadow shaders).");
-
-    shadow_source := cast([]u8) get_transpiled(.METAL, flux_shadow_vertex_main, flux_shadow_fragment_main);
-    assert(shadow_source.count > 0, "Graphics transpilation failed (flux shadow shaders).");
 
     main_raster: Gpu_Raster_Desc = {
         cull = .NONE,
@@ -292,24 +279,23 @@ on_dll_init :: () {
         ],
     };
 
-    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, main_raster, .METAL, flux_vertex_main, flux_fragment_main);
-    assert(graphics_ok, "Flux graphics pipeline creation failed.");
-    sky_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *sky_pipeline, sky_source, main_raster, .METAL, flux_sky_vertex_main, flux_sky_fragment_main);
-    assert(sky_ok, "Flux sky pipeline creation failed.");
-    debug_shadow_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *debug_shadow_pipeline, debug_shadow_source, main_raster, .METAL, flux_debug_shadow_vertex_main, flux_debug_shadow_fragment_main);
-    assert(debug_shadow_ok, "Flux debug shadow pipeline creation failed.");
+    target :: Transpiled_Target.METAL;
 
-    shadow_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *shadow_pipeline, shadow_source, shadow_raster, .METAL, flux_shadow_vertex_main, flux_shadow_fragment_main);
-    assert(shadow_ok, "Flux shadow pipeline creation failed.");
+    graphics_source := cast([]u8) get_transpiled(target, flux_vertex_main, flux_fragment_main);
+    grass_source := cast([]u8) get_transpiled(target, flux_grass_vertex_main, flux_grass_fragment_main);
+    sky_source := cast([]u8) get_transpiled(target, flux_sky_vertex_main, flux_sky_fragment_main);
+    debug_shadow_source := cast([]u8) get_transpiled(target, flux_debug_shadow_vertex_main, flux_debug_shadow_fragment_main);
+    shadow_source := cast([]u8) get_transpiled(target, flux_shadow_vertex_main, flux_shadow_fragment_main);
 
-    init_compute_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *init_compute_pipeline, init_compute_source, .METAL, flux_init_compute);
-    assert(init_compute_ok, "Flux init compute pipeline creation failed.");
-    compute_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_pipeline, compute_source, .METAL, flux_step_compute);
-    assert(compute_ok, "Flux compute pipeline creation failed.");
-    grass_spawn_compute_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *grass_spawn_compute_pipeline, grass_spawn_compute_source, .METAL, flux_grass_spawn_compute);
-    assert(grass_spawn_compute_ok, "Flux grass spawn compute pipeline creation failed.");
-    grass_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *grass_pipeline, grass_source, main_raster, .METAL, flux_grass_vertex_main, flux_grass_fragment_main);
-    assert(grass_ok, "Flux grass pipeline creation failed.");
+    SHR.gfx_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, main_raster, target, flux_vertex_main, flux_fragment_main);
+    SHR.gfx_pipeline(*shader_reload_ctx, *sky_pipeline, sky_source, main_raster, target, flux_sky_vertex_main, flux_sky_fragment_main);
+    SHR.gfx_pipeline(*shader_reload_ctx, *debug_shadow_pipeline, debug_shadow_source, main_raster, target, flux_debug_shadow_vertex_main, flux_debug_shadow_fragment_main);
+    SHR.gfx_pipeline(*shader_reload_ctx, *shadow_pipeline, shadow_source, shadow_raster, target, flux_shadow_vertex_main, flux_shadow_fragment_main);
+
+    SHR.compute_pipeline(*shader_reload_ctx, *init_compute_pipeline, init_compute_source, target, flux_init_compute);
+    SHR.compute_pipeline(*shader_reload_ctx, *compute_pipeline, compute_source, target, flux_step_compute);
+    SHR.compute_pipeline(*shader_reload_ctx, *grass_spawn_compute_pipeline, grass_spawn_compute_source, target, flux_grass_spawn_compute);
+    SHR.gfx_pipeline    (*shader_reload_ctx, *grass_pipeline, grass_source, main_raster, target, flux_grass_vertex_main, flux_grass_fragment_main);
 
     gpu_arena = gpu_make_arena(1024 * 1024 * 196, label = "flux arena");
 
@@ -569,7 +555,7 @@ tick :: () {
 
     gpu_set_depth_stencil_state(cmd_buff, {depth_test = .LESS, depth_mode = .READ | .WRITE,});
     gpu_set_pipeline(cmd_buff, grass_pipeline);
-    grass_draw_result := gpu_draw_instanced_direct(cmd_buff, payload_gpu, FLUX_GRASS_VERTS_PER_INSTANCE, cast(u32) grass_blade_count);
+    grass_draw_result := gpu_draw_instanced_direct(cmd_buff, payload_gpu, FLUX_GRASS_VERTS_PER_INSTANCE, cast(u32) FLUX_GRASS_INSTANCE_COUNT);
     assert(grass_draw_result == .SUCCESS, tprint("Flux grass draw failed: %", grass_draw_result));
 
     if show_shadow_debug {

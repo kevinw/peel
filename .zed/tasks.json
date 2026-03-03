@@ -68,6 +68,10 @@
     "command": "~/src/peel/modules/Jai-Shader-Transpiler/headless_ir/test_ir_compute_semantics.sh"
   },
   {
+    "label": "run all tests",
+    "command": "cd ~/src/peel && jai modules/Jai-Shader-Transpiler/build.jai - -run_tests && jai build.jai"
+  },
+  {
     "label": "regenerate peel tasks",
     "command": "cd ~/src/peel/tools && node generate_zed_tasks.mjs"
   }
