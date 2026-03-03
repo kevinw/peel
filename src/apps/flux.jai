@@ -45,7 +45,7 @@ flux_last_mouse_x: s64;
 flux_last_mouse_y: s64;
 flux_have_last_mouse_px := false;
 
-flux_brush_mode: u32 = FLUX_BRUSH_RAISE;
+flux_brush_mode := Brush_Type.RAISE;
 flux_brush_radius_px: float = 82.0;
 flux_brush_strength: float = 0.018;
 flux_time_scale: float = 0.35;
@@ -146,19 +146,14 @@ flux_ui :: () {
         Separator();
 
         Text("Brush Mode:");
-        if RadioButton("Raise", flux_brush_mode == FLUX_BRUSH_RAISE) flux_brush_mode = FLUX_BRUSH_RAISE;
-        SameLine();
-        if RadioButton("Carve", flux_brush_mode == FLUX_BRUSH_CARVE) flux_brush_mode = FLUX_BRUSH_CARVE;
-        SameLine();
-        if RadioButton("Heat", flux_brush_mode == FLUX_BRUSH_HEAT) flux_brush_mode = FLUX_BRUSH_HEAT;
-        if flux_brush_mode == FLUX_BRUSH_RAISE {
-            Text("Raise: builds terrain upward.");
-        } else if flux_brush_mode == FLUX_BRUSH_CARVE {
-            Text("Carve: cuts terrain downward.");
-        } else if flux_brush_mode == FLUX_BRUSH_HEAT {
-            Text("Heat: adds thermal energy and slight uplift.");
+        if RadioButton("Raise", flux_brush_mode == FLUX_BRUSH_RAISE) flux_brush_mode = .RAISE; SameLine();
+        if RadioButton("Carve", flux_brush_mode == FLUX_BRUSH_CARVE) flux_brush_mode = .CARVE; SameLine();
+        if RadioButton("Heat", flux_brush_mode == FLUX_BRUSH_HEAT)   flux_brush_mode = .HEAT;
+        if flux_brush_mode == {
+            case .RAISE; Text("Raise: builds terrain upward.");
+            case .CARVE; Text("Carve: cuts terrain downward.");
+            case .HEAT;  Text("Heat: adds thermal energy and slight uplift.");
         }
-
         Separator();
         SliderFloat("Brush Radius", *flux_brush_radius_px, 10.0, 150.0, "%.1f px");
         SliderFloat("Brush Strength", *flux_brush_strength, 0.001, 0.025, "%.3f");
@@ -327,7 +322,7 @@ on_dll_init :: () {
             time_scale = flux_time_scale,
             use_b_as_src = 0,
             brush_active = 0,
-            brush_mode = FLUX_BRUSH_RAISE,
+            brush_mode = .RAISE,
             frame_index = 0,
         };
     }

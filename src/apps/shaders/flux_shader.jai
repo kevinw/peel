@@ -57,10 +57,16 @@ FLUX_MAX_HEIGHT :: 6.0;
 FLUX_MAX_VEL :: 1.9;
 FLUX_MAX_TEMP :: 2.0;
 
-FLUX_BRUSH_NONE  :: 0;
-FLUX_BRUSH_RAISE :: 1;
-FLUX_BRUSH_CARVE :: 2;
-FLUX_BRUSH_HEAT  :: 3;
+Brush_Type :: enum u32 {
+    NONE :: 0;
+    RAISE :: 1;
+    CARVE :: 2;
+    HEAT :: 3;
+}
+FLUX_BRUSH_NONE  :: Brush_Type.NONE;
+FLUX_BRUSH_RAISE :: Brush_Type.RAISE;
+FLUX_BRUSH_CARVE :: Brush_Type.CARVE;
+FLUX_BRUSH_HEAT  :: Brush_Type.HEAT;
 
 Flux_Compute_In :: struct {
     thread_id: UVector3; @thread_position_in_grid
@@ -74,7 +80,7 @@ Flux_Compute_Control :: struct {
     time_scale: float;
     use_b_as_src: u32;
     brush_active: u32;
-    brush_mode: u32;
+    brush_mode: Brush_Type;
     frame_index: u32;
 }
 

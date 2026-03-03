@@ -22,7 +22,7 @@ inspect_globals :: () {
             TableSetupColumn("", .WidthStretch, 3.0);
 
             globals: [..]Global_Entry;
-            get_all_globals(*globals);
+            #if GLOBALS_RELOAD_PLUGIN_INCLUDED get_all_globals(*globals);
 
             for globals {
                 // filter
