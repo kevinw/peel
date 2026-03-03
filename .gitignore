@@ -57,3 +57,4 @@ dist/flux.dylib
 dist/textured_triangle.dylib
 dist/reaction_diffusion.dylib
 dist/fluid2d.dylib
+dist/pbr.dylib

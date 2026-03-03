@@ -77,7 +77,7 @@ tick :: () {
     draw_result := gpu_draw_instanced(cmd_buff, 0, raymarch_params_gpu, 3, 1);
     assert(draw_result == .SUCCESS, tprint("Raymarch draw failed: %", draw_result));
 
-    gpu_submit_and_present(cmd_buff);
+    submit_and_present_with_ui(cmd_buff);
 } @on_tick
 
 #scope_file

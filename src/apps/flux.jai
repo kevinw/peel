@@ -14,6 +14,7 @@ graphics_pipeline: Gpu_Pipeline;
 sky_pipeline: Gpu_Pipeline;
 debug_shadow_pipeline: Gpu_Pipeline;
 shadow_pipeline: Gpu_Pipeline;
+grass_shadow_pipeline: Gpu_Pipeline;
 compute_pipeline: Gpu_Pipeline;
 init_compute_pipeline: Gpu_Pipeline;
 grass_spawn_compute_pipeline: Gpu_Pipeline;
@@ -33,7 +34,7 @@ shadow_depth_texture: Gpu_Texture;
 shadow_depth_view: Gpu_Texture_View;
 shadow_sampler: Gpu_Sampler;
 
-payload_cpu: *[FLUX_PAYLOAD_TOTAL_V4_COUNT] Vector4;
+payload_cpu: *Flux_Payload;
 payload_gpu: Gpu_Ptr;
 state: AB_Buffer([FLUX_CELL_COUNT] Vector4);
 state_initialized := false;
@@ -188,7 +189,7 @@ flux_ui :: () {
 }
 
 flux_write_render_payload :: (win_w: u32, win_h: u32) {
-    params := cast(*Flux_Render_Params) payload_cpu;
+    using payload_cpu;
     cam_radius = clamp(cam_radius, FLUX_CAMERA_RADIUS_MIN, FLUX_CAMERA_RADIUS_MAX);
     xz_scale = clamp(xz_scale, 1.0, 16.0);
     fog_density = clamp(fog_density, 0.0, 2.0);
@@ -238,7 +239,6 @@ flux_write_render_payload :: (win_w: u32, win_h: u32) {
     shadow_texel := 1.0 / cast(float) FLUX_SHADOW_MAP_SIZE;
 
 
-    using params;
     camera_pos_proj_x = .{cam_pos.x, cam_pos.y, cam_pos.z, proj_x};
     camera_right_proj_y = .{cam_right.x, cam_right.y, cam_right.z, proj_y};
     camera_up_near = .{cam_up.x, cam_up.y, cam_up.z, cam_near};
@@ -288,11 +288,13 @@ on_dll_init :: () {
     sky_source := cast([]u8) get_transpiled(target, flux_sky_vertex_main, flux_sky_fragment_main);
     debug_shadow_source := cast([]u8) get_transpiled(target, flux_debug_shadow_vertex_main, flux_debug_shadow_fragment_main);
     shadow_source := cast([]u8) get_transpiled(target, flux_shadow_vertex_main, flux_shadow_fragment_main);
+    grass_shadow_source := cast([]u8) get_transpiled(target, flux_grass_shadow_vertex_main, flux_shadow_fragment_main);
 
     SHR.gfx_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, main_raster, target, flux_vertex_main, flux_fragment_main);
     SHR.gfx_pipeline(*shader_reload_ctx, *sky_pipeline, sky_source, main_raster, target, flux_sky_vertex_main, flux_sky_fragment_main);
     SHR.gfx_pipeline(*shader_reload_ctx, *debug_shadow_pipeline, debug_shadow_source, main_raster, target, flux_debug_shadow_vertex_main, flux_debug_shadow_fragment_main);
     SHR.gfx_pipeline(*shader_reload_ctx, *shadow_pipeline, shadow_source, shadow_raster, target, flux_shadow_vertex_main, flux_shadow_fragment_main);
+    SHR.gfx_pipeline(*shader_reload_ctx, *grass_shadow_pipeline, grass_shadow_source, shadow_raster, target, flux_grass_shadow_vertex_main, flux_shadow_fragment_main);
 
     SHR.compute_pipeline(*shader_reload_ctx, *init_compute_pipeline, init_compute_source, target, flux_init_compute);
     SHR.compute_pipeline(*shader_reload_ctx, *compute_pipeline, compute_source, target, flux_step_compute);
@@ -301,8 +303,8 @@ on_dll_init :: () {
 
     gpu_arena = gpu_make_arena(1024 * 1024 * 196, label = "flux arena");
 
-    payload_storage, payload_storage_gpu := gpu_arena_alloc(*gpu_arena, [FLUX_PAYLOAD_TOTAL_V4_COUNT] Vector4);
-    payload_cpu = payload_storage;
+    payload_storage, payload_storage_gpu := gpu_arena_alloc(*gpu_arena, [1] Flux_Payload);
+    payload_cpu = cast(*Flux_Payload) payload_storage;
     payload_gpu = payload_storage_gpu;
 
     sim_a_cpu := cast(*[FLUX_CELL_COUNT] Vector4) (cast(*Vector4) payload_cpu + FLUX_STATE_OFFSET);
@@ -319,8 +321,8 @@ on_dll_init :: () {
     };
     state_initialized = false;
 
-    for i: FLUX_GRASS_DATA_OFFSET..FLUX_PAYLOAD_TOTAL_V4_COUNT-1 {
-        payload_cpu.*[i] = .{0.0, 0.0, 0.0, 0.0};
+    for i: 0..FLUX_GRASS_INSTANCE_COUNT-1 {
+        payload_cpu.grass_data[i] = .{0.0, 0.0, 0.0, 0.0};
     }
 
     control_ring_cpu, control_ring_gpu = sgpu_arena_alloc_frame_ring(*gpu_arena, Flux_Compute_Control);
@@ -522,6 +524,9 @@ tick :: () {
     gpu_set_pipeline(cmd_buff, shadow_pipeline);
     shadow_draw_result := gpu_draw_instanced_direct(cmd_buff, payload_gpu, draw_data.num_vertices, draw_data.num_instances);
     assert(shadow_draw_result == .SUCCESS, tprint("Flux shadow draw failed: %", shadow_draw_result));
+    gpu_set_pipeline(cmd_buff, grass_shadow_pipeline);
+    grass_shadow_draw_result := gpu_draw_instanced_direct(cmd_buff, payload_gpu, FLUX_GRASS_VERTS_PER_INSTANCE, cast(u32) FLUX_GRASS_INSTANCE_COUNT);
+    assert(grass_shadow_draw_result == .SUCCESS, tprint("Flux grass shadow draw failed: %", grass_shadow_draw_result));
     gpu_end_render_pass(cmd_buff);
 
     gpu_begin_render_pass(cmd_buff, {
