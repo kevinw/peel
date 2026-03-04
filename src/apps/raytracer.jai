@@ -162,7 +162,9 @@ tick :: () {
 
     if raytracer_edit_objects && dims_ok && win_w > 0 && win_h > 0 {
         viewport := Vector2.{cast(float) win_w, cast(float) win_h};
-        fov_y := PI / 2.0;
+        // Must match shader ray setup: rd = forward + right * p.x * 0.85 + up * p.y * 0.85
+        // => tan(fov_y / 2) == 0.85
+        fov_y := 2.0 * atan(0.85);
         view := editor_camera_make_view(*raytracer_camera);
         proj := make_projection_matrix(fov_y, viewport.x / max(viewport.y, 1.0), 0.05, 100.0);
         Gizmo_Render.gizmo_render_set_view_projection(*raytracer_gizmo_render_ctx, proj * view);
