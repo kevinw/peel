@@ -9,7 +9,7 @@ BRICKMAP_BRICK_TEXELS :: BRICKMAP_BRICK_TEX_RES * BRICKMAP_BRICK_TEX_RES * BRICK
 BRICKMAP_GRID_RES :: 24;
 BRICKMAP_GRID_CELLS :: BRICKMAP_GRID_RES * BRICKMAP_GRID_RES * BRICKMAP_GRID_RES;
 BRICKMAP_LOD_COUNT :: 2;
-BRICKMAP_MAX_EDITS :: 64;
+BRICKMAP_MAX_EDITS :: 160;
 BRICKMAP_ATLAS_BRICKS_X :: 16;
 BRICKMAP_ATLAS_BRICKS_Y :: 16;
 BRICKMAP_ATLAS_BRICKS_Z :: 16;
@@ -251,7 +251,6 @@ brickmap_sample_brick_filtered :: (params: *Brickmap_Params, atlas_index: s32, u
 }
 
 brickmap_sample_cached_sdf :: (params: *Brickmap_Params, p: Vector3) -> float {
-    d_out := brickmap_eval_edits_sdf(params, p);
     max_lod := BRICKMAP_LOD_COUNT;
     if params.cache_force_lod0 != 0 {
         max_lod = 1;
@@ -283,15 +282,13 @@ brickmap_sample_cached_sdf :: (params: *Brickmap_Params, p: Vector3) -> float {
         local_x := gx - cast(float) (bx * BRICKMAP_BRICK_RES) - 0.5;
         local_y := gy - cast(float) (by * BRICKMAP_BRICK_RES) - 0.5;
         local_z := gz - cast(float) (bz * BRICKMAP_BRICK_RES) - 0.5;
-        d_out = brickmap_sample_brick_filtered(params, atlas_index, .{local_x, local_y, local_z});
-        break;
+        return brickmap_sample_brick_filtered(params, atlas_index, .{local_x, local_y, local_z});
     }
 
-    return d_out;
+    return brickmap_eval_edits_sdf(params, p);
 }
 
 brickmap_sample_cached_lod :: (params: *Brickmap_Params, p: Vector3) -> s32 {
-    lod_out: s32 = -1;
     max_lod := BRICKMAP_LOD_COUNT;
     if params.cache_force_lod0 != 0 {
         max_lod = 1;
@@ -319,11 +316,10 @@ brickmap_sample_cached_lod :: (params: *Brickmap_Params, p: Vector3) -> s32 {
         atlas_index := params.pointer_grid[ptr_idx];
         if atlas_index < 0 continue;
 
-        lod_out = cast(s32) lod;
-        break;
+        return cast(s32) lod;
     }
 
-    return lod_out;
+    return -1;
 }
 
 brickmap_brick_has_surface :: (params: *Brickmap_Params, lod: s32, bx: s32, by: s32, bz: s32) -> bool {
@@ -442,12 +438,20 @@ brickmap_fragment_main :: (using in: Brickmap_Fragment_In, params: *Brickmap_Par
     use_cache := params.use_cache_raymarch != 0;
     hit_lod: s32 = -1;
     hit_cached_d := 0.0;
-    for 0..170 {
+    prev_d := cast(float) 100000.0;
+    for 0..219 {
         pos := ro + rd * t;
+        sample_lod: s32 = -1;
         d: float;
         if use_cache {
             d_cached := brickmap_sample_cached_sdf(params, pos);
-            sample_lod := brickmap_sample_cached_lod(params, pos);
+            sample_lod = brickmap_sample_cached_lod(params, pos);
+            if sample_lod >= 0 {
+                lod_voxel := max(params.lod_voxel_size[sample_lod], 0.0001);
+                // Bias sampled distance slightly inward to counter
+                // non-conservative interpolation on coarse voxels.
+                d_cached -= lod_voxel * 0.35;
+            }
             d_ground := pos.y + 1.2;
             d = min(d_cached, d_ground);
             hit_lod = sample_lod;
@@ -456,13 +460,42 @@ brickmap_fragment_main :: (using in: Brickmap_Fragment_In, params: *Brickmap_Par
             d = brickmap_eval_scene_sdf(params, pos);
         }
 
-        if d < min_hit_eps {
+        hit_eps := min_hit_eps;
+        if use_cache && sample_lod >= 0 {
+            lod_voxel := max(params.lod_voxel_size[sample_lod], 0.0001);
+            // Cached SDF is sampled from voxel data; treat near-surface values
+            // relative to voxel size to avoid missing thin silhouettes.
+            hit_eps = max(hit_eps, lod_voxel * 0.24);
+        }
+
+        if d < hit_eps {
             hit = true;
             break;
         }
+        if use_cache && sample_lod >= 0 {
+            lod_voxel := max(params.lod_voxel_size[sample_lod], 0.0001);
+            // Trilinear sampled distance can stay slightly positive at the
+            // surface; if we are already within a sub-voxel band and distance
+            // turns upward, accept the local minimum as a hit.
+            if d < lod_voxel * 0.45 && d > prev_d {
+                hit = true;
+                break;
+            }
+        }
 
         step_scale := ifx use_cache then 0.3 else 0.85;
-        t += max(d * step_scale, 0.0035);
+        step_len := max(d * step_scale, 0.0035);
+        if use_cache && sample_lod >= 0 {
+            lod_voxel := max(params.lod_voxel_size[sample_lod], 0.0001);
+            // Cap step size in cached mode so non-conservative trilinear samples
+            // do not skip through thin features.
+            step_len = min(step_len, lod_voxel * 0.60);
+            if d < lod_voxel * 0.80 {
+                step_len = min(step_len, lod_voxel * 0.25);
+            }
+        }
+        t += step_len;
+        prev_d = d;
         if t > 80.0 break;
     }
 

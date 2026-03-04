@@ -56,7 +56,7 @@ brickmap_force_full_rebuild := true;
 
 brickmap_ui_open := true;
 brickmap_draw_debug_grid := false;
-brickmap_auto_edit_after: s32 = 90;
+brickmap_auto_edit_after: s32 = -1;
 brickmap_auto_edit_done := false;
 brickmap_log_updates := false;
 brickmap_use_cache_raymarch := true;
@@ -75,6 +75,8 @@ brickmap_cache_debug_show_distance := false;
 brickmap_cache_force_lod0 := false;
 brickmap_atlas_debug_slice: float = 0.5;
 brickmap_debug_autolog_once := false;
+BRICKMAP_RANDOM_STARTUP_EDITS :: 20;
+BRICKMAP_RANDOM_STARTUP_SEED  :: cast(u64) 0xB17C_A11A_5EED;
 
 brickmap_gizmo_ctx: Gizmo.Gizmo_Context;
 brickmap_gizmo_render_ctx: Gizmo_Render.Gizmo_Render_Context;
@@ -497,6 +499,7 @@ ImGui :: #import "ImGui";
 Gizmo :: #import "Gizmo";
 Gizmo_Render :: #import "Gizmo_Render";
 #import "Math";
+#import "Random";
 
 seed_initial_scene :: () {
     count: s32 = 0;
@@ -507,6 +510,36 @@ seed_initial_scene :: () {
     brickmap_add_box(*count, .{-3.8, -0.2, -8.2}, .{0.9, 1.5, 0.9}, .{0.0, 0.42, 0.0});
     brickmap_add_sphere(*count, .{-0.1, 0.6, -6.7}, 0.85, op = SDF_OP_SUBTRACT);
     brickmap_add_box(*count, .{2.8, 0.7, -8.8}, .{1.7, 0.25, 0.7}, .{0.2, -0.3, 0.45});
+
+    random_seed(BRICKMAP_RANDOM_STARTUP_SEED);
+    for 0..BRICKMAP_RANDOM_STARTUP_EDITS-1 {
+        shape: u32 = cast(u32) (ifx random_get_zero_to_one() < 0.5 then SDF_SHAPE_SPHERE else SDF_SHAPE_BOX);
+        op: u32 = cast(u32) (ifx random_get_zero_to_one() < 0.82 then SDF_OP_UNION else SDF_OP_SUBTRACT);
+        pos := Vector3.{
+            random_get_within_range(-10.0, 10.0),
+            random_get_within_range(-1.2, 3.0),
+            random_get_within_range(-16.0, -2.0),
+        };
+
+        if shape == SDF_SHAPE_BOX {
+            half_extents := Vector3.{
+                random_get_within_range(0.35, 1.8),
+                random_get_within_range(0.35, 1.8),
+                random_get_within_range(0.35, 1.8),
+            };
+            euler := Vector3.{
+                random_get_within_range(-PI, PI),
+                random_get_within_range(-PI, PI),
+                random_get_within_range(-PI, PI),
+            };
+            brickmap_add_box(*count, pos, half_extents, euler, op = op);
+        } else {
+            radius := random_get_within_range(0.35, 1.65);
+            brickmap_add_sphere(*count, pos, radius, op = op);
+        }
+
+        if count >= BRICKMAP_MAX_EDITS break;
+    }
 
     brickmap_params_cpu.edit_count = cast(u32) count;
 }
