@@ -761,8 +761,8 @@ flux_debug_shadow_vertex_main :: (using in: Flux_Vertex_In, params: *Flux_Payloa
 
     x0 := 0.56;
     x1 := 0.98;
-    y0 := 0.56;
-    y1 := 0.98;
+    y0 := -0.98;
+    y1 := -0.56;
 
     if vertex_id == 0 { gl_Position = .{x0, y0, 0.0, 1.0}; uv = .{0.0, 0.0}; }
     else if vertex_id == 1 { gl_Position = .{x1, y0, 0.0, 1.0}; uv = .{1.0, 0.0}; }

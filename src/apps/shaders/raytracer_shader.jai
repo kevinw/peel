@@ -120,6 +120,71 @@ raytracer_fragment_main :: (using in: Raytracer_Vertex_Out, params: *Raytracer_P
             hit_refl = sphere_refl[i];
         }
 
+        // Two cubes (axis-aligned boxes).
+        cube_centers := Vector3.[
+            .{-2.85, -0.35, -6.2},
+            .{2.95, -0.15, -6.7},
+        ];
+        cube_half_extents := Vector3.[
+            .{0.55, 0.55, 0.55},
+            .{0.70, 0.45, 0.70},
+        ];
+        cube_colors := Vector3.[
+            .{0.25, 0.92, 0.45},
+            .{0.95, 0.48, 0.14},
+        ];
+        cube_refl := float.[0.24, 0.32];
+
+        for center, i: cube_centers {
+            he := cube_half_extents[i];
+            bmin := center - he;
+            bmax := center + he;
+
+            inv_rd := Vector3.{1.0 / rd.x, 1.0 / rd.y, 1.0 / rd.z};
+            t0 := (bmin - ro) * inv_rd;
+            t1 := (bmax - ro) * inv_rd;
+
+            tmin_x := ifx t0.x < t1.x then t0.x else t1.x;
+            tmin_y := ifx t0.y < t1.y then t0.y else t1.y;
+            tmin_z := ifx t0.z < t1.z then t0.z else t1.z;
+            tmax_x := ifx t0.x > t1.x then t0.x else t1.x;
+            tmax_y := ifx t0.y > t1.y then t0.y else t1.y;
+            tmax_z := ifx t0.z > t1.z then t0.z else t1.z;
+
+            t_enter_xy := ifx tmin_x > tmin_y then tmin_x else tmin_y;
+            t_enter := ifx t_enter_xy > tmin_z then t_enter_xy else tmin_z;
+            t_exit_xy := ifx tmax_x < tmax_y then tmax_x else tmax_y;
+            t_exit := ifx t_exit_xy < tmax_z then t_exit_xy else tmax_z;
+            if t_exit < 0.0 || t_enter > t_exit continue;
+
+            t_box := t_enter;
+            if t_box < 0.001 t_box = t_exit;
+            if t_box < 0.001 || t_box >= best_t continue;
+
+            p_box := ro + rd * t_box;
+            local := p_box - center;
+
+            nrm := Vector3.{0.0, 0.0, 0.0};
+            bias := 0.0015;
+            sx := ifx local.x >= 0.0 then 1.0 else -1.0;
+            sy := ifx local.y >= 0.0 then 1.0 else -1.0;
+            sz := ifx local.z >= 0.0 then 1.0 else -1.0;
+            if abs(abs(local.x) - he.x) < bias {
+                nrm = .{sx, 0.0, 0.0};
+            } else if abs(abs(local.y) - he.y) < bias {
+                nrm = .{0.0, sy, 0.0};
+            } else {
+                nrm = .{0.0, 0.0, sz};
+            }
+
+            best_t = t_box;
+            hit_found = true;
+            hit_pos = p_box;
+            hit_nrm = nrm;
+            hit_albedo = cube_colors[i];
+            hit_refl = cube_refl[i];
+        }
+
         oc_avatar := ro - avatar_center;
         b_avatar := dot(oc_avatar, rd);
         c_avatar := dot(oc_avatar, oc_avatar) - avatar_radius * avatar_radius;

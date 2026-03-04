@@ -12,7 +12,7 @@ raytracer_params_cpu: *Raytracer_Params;
 raytracer_params_gpu: Gpu_Ptr;
 
 camera_pos := Vector3.{0.0, 0.75, 1.95};
-camera_speed: float = 3.0;
+camera_speed: float = 5.0;
 raytracer_prev_mouse_x: s64 = 0;
 raytracer_prev_mouse_y: s64 = 0;
 raytracer_have_prev_mouse := false;
@@ -42,6 +42,20 @@ on_dll_init :: () {
     gpu_commit_residency();
 } @on_dll_init
 
+app_ui_open := true;
+
+app_ui :: () {
+    using,except(Viewport) _ :: #import "ImGui";
+    Persist :: #import,file "../ui/persist_controls.jai";
+    inspect_globals();
+
+    window_flags: WindowFlags = .AlwaysAutoResize | .NoFocusOnAppearing;
+    if Begin("Raytracing", *app_ui_open, window_flags) {
+        Text("Controls - LMB: mouse look");
+    }
+    End();
+}
+
 tick :: () {
     result, swapchain_image := app_swapchain_acquire();
     assert(result == .SUCCESS);
@@ -61,8 +75,9 @@ tick :: () {
             dx := mx - raytracer_prev_mouse_x;
             dy := my - raytracer_prev_mouse_y;
             uv := raytracer_params_cpu.mouse_uv;
-            uv.x += cast(float) dx / cast(float) win_w;
-            uv.y += cast(float) dy / cast(float) win_h;
+            mouse_look_speed := 2.0;
+            uv.x += cast(float) dx / cast(float) win_w * mouse_look_speed;
+            uv.y += cast(float) dy / cast(float) win_h * mouse_look_speed;
             if uv.x < 0.0 uv.x = 0.0;
             if uv.x > 1.0 uv.x = 1.0;
             if uv.y < 0.0 uv.y = 0.0;
@@ -75,6 +90,9 @@ tick :: () {
     } else {
         raytracer_have_prev_mouse = false;
     }
+
+    app_ui();
+
     yaw := (raytracer_params_cpu.mouse_uv.x - 0.5) * 0.9;
     move_forward := Vector3.{sin(yaw), 0.0, -cos(yaw)};
     move_right := Vector3.{-move_forward.z, 0.0, move_forward.x};

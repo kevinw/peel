@@ -52,6 +52,7 @@ brush_radius_px: float = 82.0;
 brush_strength: float = 0.018;
 time_scale: float = 0.35;
 show_shadow_debug := true;
+render_grass := true;
 xz_scale: float = 2.6;
 fog_density: float = 0.18;
 fog_exponent: float = 1.0;
@@ -149,15 +150,16 @@ flux_mouse_ray_to_terrain_uv :: (mouse_x: s64, mouse_y: s64, win_w: u32, win_h: 
     return true;
 }
 
+flux_ui_open: bool = true;
+
 flux_ui :: () {
     using,except(Viewport) ImGui;
     Persist :: #import,file "../ui/persist_controls.jai";
 
     inspect_globals();
 
-    window_flags: WindowFlags = .AlwaysAutoResize | .NoSavedSettings | .NoFocusOnAppearing;
-    open: bool = true;
-    if Begin("Flux", *open, window_flags) {
+    window_flags: WindowFlags = .AlwaysAutoResize | .NoFocusOnAppearing;
+    if Begin("Flux", *flux_ui_open, window_flags) {
         Text("Controls - LMB: paint");
         SameLine();
         Text("RMB: orbit camera");
@@ -196,6 +198,7 @@ flux_ui :: () {
         Persist.SliderFloat("Camera Radius", *cam_radius, FLUX_CAMERA_RADIUS_MIN, FLUX_CAMERA_RADIUS_MAX, "%.2f");
         Persist.SliderFloat("Wind", *wind, 0, 0.5, "%.2f");
         Persist.Checkbox("Show Shadow Debug", *show_shadow_debug);
+        _ = toggle("Render Grass", *render_grass, .{56.0, 0.0}, true, 0.09);
 
         Separator();
         Text("Dummy Knobs");
@@ -425,7 +428,8 @@ tick :: () {
 
     flux_ui();
     using,only(GetIO) _ :: #import "ImGui";
-    imgui_wants_mouse := GetIO().WantCaptureMouse;
+    gizmo_result := view_gizmo(*cam_yaw, *cam_pitch, 1.0);
+    imgui_wants_mouse := GetIO().WantCaptureMouse || gizmo_result.hovered || gizmo_result.in_use;
 
     control := sgpu_frame_ring_cpu_slot(control_ring_cpu);
     control.use_b_as_src = ifx state.src_is_a then cast(u32) 0 else cast(u32) 1;
@@ -531,9 +535,11 @@ tick :: () {
         flux_write_render_payload(cast(u32) win_w, cast(u32) win_h);
     }
 
-    result = gpu_set_pipeline(cmd_buff, grass_spawn_compute_pipeline);
-    assert(result == .SUCCESS, tprint("Flux grass compute set pipeline failed: %", result));
-    gpu_dispatch_buffers(cmd_buff, .[payload_gpu], .[(FLUX_GRASS_INSTANCE_COUNT + 63) / 64, 1, 1]);
+    if render_grass {
+        result = gpu_set_pipeline(cmd_buff, grass_spawn_compute_pipeline);
+        assert(result == .SUCCESS, tprint("Flux grass compute set pipeline failed: %", result));
+        gpu_dispatch_buffers(cmd_buff, .[payload_gpu], .[(FLUX_GRASS_INSTANCE_COUNT + 63) / 64, 1, 1]);
+    }
 
     gpu_begin_render_pass(cmd_buff, {
         depth_target = .{
@@ -559,9 +565,11 @@ tick :: () {
     gpu_set_pipeline(cmd_buff, shadow_pipeline);
     shadow_draw_result := gpu_draw_instanced_direct(cmd_buff, payload_gpu, draw_data.num_vertices, draw_data.num_instances);
     assert(shadow_draw_result == .SUCCESS, tprint("Flux shadow draw failed: %", shadow_draw_result));
-    gpu_set_pipeline(cmd_buff, grass_shadow_pipeline);
-    grass_shadow_draw_result := gpu_draw_instanced_direct(cmd_buff, payload_gpu, FLUX_GRASS_VERTS_PER_INSTANCE, cast(u32) FLUX_GRASS_INSTANCE_COUNT);
-    assert(grass_shadow_draw_result == .SUCCESS, tprint("Flux grass shadow draw failed: %", grass_shadow_draw_result));
+    if render_grass {
+        gpu_set_pipeline(cmd_buff, grass_shadow_pipeline);
+        grass_shadow_draw_result := gpu_draw_instanced_direct(cmd_buff, payload_gpu, FLUX_GRASS_VERTS_PER_INSTANCE, cast(u32) FLUX_GRASS_INSTANCE_COUNT);
+        assert(grass_shadow_draw_result == .SUCCESS, tprint("Flux grass shadow draw failed: %", grass_shadow_draw_result));
+    }
     gpu_end_render_pass(cmd_buff);
 
     gpu_begin_render_pass(cmd_buff, {
@@ -595,10 +603,12 @@ tick :: () {
     draw_result := gpu_draw_instanced_direct(cmd_buff, payload_gpu, draw_data.num_vertices, draw_data.num_instances);
     assert(draw_result == .SUCCESS, tprint("Flux draw failed: %", draw_result));
 
-    gpu_set_depth_stencil_state(cmd_buff, {depth_test = .LESS, depth_mode = .READ | .WRITE,});
-    gpu_set_pipeline(cmd_buff, grass_pipeline);
-    grass_draw_result := gpu_draw_instanced_direct(cmd_buff, payload_gpu, FLUX_GRASS_VERTS_PER_INSTANCE, cast(u32) FLUX_GRASS_INSTANCE_COUNT);
-    assert(grass_draw_result == .SUCCESS, tprint("Flux grass draw failed: %", grass_draw_result));
+    if render_grass {
+        gpu_set_depth_stencil_state(cmd_buff, {depth_test = .LESS, depth_mode = .READ | .WRITE,});
+        gpu_set_pipeline(cmd_buff, grass_pipeline);
+        grass_draw_result := gpu_draw_instanced_direct(cmd_buff, payload_gpu, FLUX_GRASS_VERTS_PER_INSTANCE, cast(u32) FLUX_GRASS_INSTANCE_COUNT);
+        assert(grass_draw_result == .SUCCESS, tprint("Flux grass draw failed: %", grass_draw_result));
+    }
 
     if show_shadow_debug {
         gpu_set_depth_stencil_state(cmd_buff, {depth_test = .ALWAYS, depth_mode = .NONE,});
@@ -661,6 +671,8 @@ ensure_shadow_targets :: () {
 #load "../SGPU_App_Common.jai";
 #load "../ui/curve_editor.jai";
 #load "../ui/knob.jai";
+#load "../ui/toggle_widget.jai";
+#load "../ui/view_gizmo.jai";
 #import "Jai-Shader-Transpiler";
 SHR :: #import,file "../shader_hot_reload.jai";
 #load "shaders/flux_shader.jai";
