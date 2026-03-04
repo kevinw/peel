@@ -14,6 +14,7 @@ APP_FILES :: string.[
     "sand_toy.jai",
     "gizmos_test.jai",
     "terrain_test.jai",
+    "texture3d.jai",
 ];
 
 active_app_filename :: () -> string {

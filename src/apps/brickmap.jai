@@ -24,13 +24,16 @@ gpu_arena: Gpu_Arena;
 brickmap_params_cpu: *Brickmap_Params;
 brickmap_params_gpu: Gpu_Ptr;
 
-brickmap_atlas_cpu: []u32;
 brickmap_pointer_grid_cpu: []s32;
 brickmap_lod_info_cpu: [BRICKMAP_LOD_COUNT] Brickmap_Lod_Info;
 brickmap_edits_storage: [BRICKMAP_MAX_EDITS] SDF_Edit;
 brickmap_edits_cpu: []SDF_Edit;
 brickmap_dirty_storage: [BRICKMAP_MAX_DIRTY_BRICKS] Brick_Request;
 brickmap_dirty_cpu: []Brick_Request;
+brickmap_atlas_texture: Gpu_Texture;
+brickmap_atlas_view: Gpu_Texture_View;
+brickmap_atlas_linear_sampler: Gpu_Sampler;
+brickmap_atlas_point_sampler: Gpu_Sampler;
 
 brickmap_camera: Editor_Camera = .{
     position = .{4.0, 2.0, 7.0},
@@ -57,10 +60,18 @@ brickmap_auto_edit_after: s32 = 90;
 brickmap_auto_edit_done := false;
 brickmap_log_updates := false;
 brickmap_use_cache_raymarch := false;
+brickmap_use_hw_interp := true;
 brickmap_draw_brick_debug := false;
 brickmap_debug_brick_limit: s32 = 420;
 brickmap_show_lod0 := true;
 brickmap_show_lod1 := false;
+brickmap_show_atlas_overlay := false;
+brickmap_show_atlas_fullscreen := false;
+brickmap_show_pointer_grid_debug := false;
+brickmap_bake_gradient_debug := false;
+brickmap_skip_classify_debug := false;
+brickmap_atlas_debug_slice: float = 0.5;
+brickmap_debug_autolog_once := false;
 
 brickmap_gizmo_ctx: Gizmo.Gizmo_Context;
 brickmap_gizmo_render_ctx: Gizmo_Render.Gizmo_Render_Context;
@@ -102,19 +113,55 @@ on_dll_init :: () {
     assert(brickmap_params_cpu != null, "Brickmap params alloc failed.");
 
     brickmap_params_cpu.* = .{};
-    brickmap_atlas_cpu = brickmap_params_cpu.atlas_values;
     brickmap_pointer_grid_cpu = brickmap_params_cpu.pointer_grid;
     brickmap_edits_cpu = brickmap_edits_storage;
     brickmap_dirty_cpu = brickmap_dirty_storage;
-    brickmap_params_cpu.distance_range = 3.0;
     brickmap_params_cpu.camera_fov_y = PI / 3.0;
     brickmap_params_cpu.camera_tan_half_fov = tan(brickmap_params_cpu.camera_fov_y * 0.5);
+
+    texture_result, brickmap_atlas_texture= := gpu_create_texture(.{
+        type = ._3D,
+        dimensions = .[BRICKMAP_ATLAS_DIM_X, BRICKMAP_ATLAS_DIM_Y, BRICKMAP_ATLAS_DIM_Z],
+        format = .R32_SFLOAT,
+        usage = .SAMPLED | .STORAGE,
+    });
+    assert(texture_result == .SUCCESS, tprint("Brickmap atlas texture creation failed: %", texture_result));
+    assert(brickmap_atlas_texture != 0, "Brickmap atlas texture handle invalid.");
+    brickmap_atlas_view = gpu_texture_view(brickmap_atlas_texture);
+    assert(brickmap_atlas_view != 0, "Brickmap atlas texture view creation failed.");
+    brickmap_atlas_linear_sampler = gpu_create_sampler(.{
+        min_filter = .LINEAR,
+        mag_filter = .LINEAR,
+        mip_filter = .NEAREST,
+        address_mode_u = .CLAMP_TO_EDGE,
+        address_mode_v = .CLAMP_TO_EDGE,
+        address_mode_w = .CLAMP_TO_EDGE,
+    });
+    assert(brickmap_atlas_linear_sampler != 0, "Brickmap atlas linear sampler creation failed.");
+    brickmap_atlas_point_sampler = gpu_create_sampler(.{
+        min_filter = .NEAREST,
+        mag_filter = .NEAREST,
+        mip_filter = .NEAREST,
+        address_mode_u = .CLAMP_TO_EDGE,
+        address_mode_v = .CLAMP_TO_EDGE,
+        address_mode_w = .CLAMP_TO_EDGE,
+    });
+    assert(brickmap_atlas_point_sampler != 0, "Brickmap atlas point sampler creation failed.");
+    brickmap_params_cpu.atlas_texture_index = cast(u32) brickmap_atlas_view - 1;
+    brickmap_params_cpu.atlas_sampler_linear_index = cast(u32) brickmap_atlas_linear_sampler - 1;
+    brickmap_params_cpu.atlas_sampler_point_index = cast(u32) brickmap_atlas_point_sampler - 1;
+    log("BRICKMAP bindless indices tex=% linear_sampler=% point_sampler=%",
+        brickmap_params_cpu.atlas_texture_index,
+        brickmap_params_cpu.atlas_sampler_linear_index,
+        brickmap_params_cpu.atlas_sampler_point_index);
 
     env_edit_after, env_edit_set := Env_Vars.try_parse_env_int("BRICKMAP_EDIT_AFTER");
     if env_edit_set && env_edit_after >= 0 brickmap_auto_edit_after = cast(s32) env_edit_after;
 
     env_log_updates, env_log_set := Env_Vars.try_parse_env_int("BRICKMAP_LOG");
     if env_log_set brickmap_log_updates = env_log_updates > 0;
+    env_skip_classify, env_skip_set := Env_Vars.try_parse_env_int("BRICKMAP_SKIP_CLASSIFY");
+    if env_skip_set brickmap_skip_classify_debug = env_skip_classify > 0;
 
     seed_initial_scene();
     rebuild_bvh();
@@ -138,6 +185,10 @@ on_dll_init :: () {
 } @on_dll_init
 
 on_unload :: () {
+    gpu_free(brickmap_atlas_point_sampler);
+    gpu_free(brickmap_atlas_linear_sampler);
+    gpu_free_texture_view(brickmap_atlas_view);
+    gpu_free(brickmap_atlas_texture);
     Gizmo_Render.deinit(*brickmap_gizmo_render_ctx);
     Gizmo.deinit(*brickmap_gizmo_ctx);
 } @on_unload
@@ -151,6 +202,13 @@ brickmap_ui :: () {
         Text("RMB look, WASDQE fly, Shift boost");
         Checkbox("Draw Debug Grid", *brickmap_draw_debug_grid);
         _ = toggle("Use Cache Raymarch", *brickmap_use_cache_raymarch, .{56.0, 0.0}, true, 0.09);
+        _ = toggle("Use HW 3D Interp", *brickmap_use_hw_interp, .{56.0, 0.0}, true, 0.09);
+        Checkbox("Atlas Overlay", *brickmap_show_atlas_overlay);
+        Checkbox("Atlas Fullscreen Debug", *brickmap_show_atlas_fullscreen);
+        Checkbox("Pointer Grid Debug", *brickmap_show_pointer_grid_debug);
+        Checkbox("Bake Gradient Debug", *brickmap_bake_gradient_debug);
+        Checkbox("Skip Classify (Debug)", *brickmap_skip_classify_debug);
+        SliderFloat("Atlas Slice", *brickmap_atlas_debug_slice, 0.0, 1.0);
         Checkbox("Draw Brick Debug", *brickmap_draw_brick_debug);
         Checkbox("Debug LOD0", *brickmap_show_lod0);
         Checkbox("Debug LOD1", *brickmap_show_lod1);
@@ -159,6 +217,30 @@ brickmap_ui :: () {
         Text("Dirty bricks after classify: %", brickmap_params_cpu.dirty_count);
         Text("Atlas bricks used: % / %", brickmap_next_atlas_index, BRICKMAP_MAX_BRICKS);
         Text("Pointer cells allocated: %", brickmap_count_allocated_cells());
+        Separator();
+        Text("GPU classify candidates: %", brickmap_params_cpu.debug_classify_candidates);
+        Text("GPU classify surface: %", brickmap_params_cpu.debug_classify_surface);
+        Text("GPU classify existing/new: % / %", brickmap_params_cpu.debug_classify_existing, brickmap_params_cpu.debug_classify_new_alloc);
+        Text("GPU classify rejected(cap): %", brickmap_params_cpu.debug_classify_rejected_capacity);
+        Text("GPU classify out_count: %", brickmap_params_cpu.debug_classify_out_count);
+        Text("GPU bake bricks/voxels: % / %", brickmap_params_cpu.debug_bake_bricks_touched, brickmap_params_cpu.debug_bake_total_voxels);
+        Text("GPU bake atlas min..max: % .. %", brickmap_params_cpu.debug_bake_min_atlas, brickmap_params_cpu.debug_bake_max_atlas);
+        seen_count := cast(s32) min(brickmap_params_cpu.debug_classify_out_count, cast(u32) BRICKMAP_MAX_DIRTY_BRICKS);
+        seen_min: s32 = 1 << 30;
+        seen_max: s32 = -1;
+        seen_nonzero: s32 = 0;
+        for i: 0..seen_count-1 {
+            v := cast(s32) brickmap_params_cpu.debug_bake_seen_atlas[i];
+            if v < seen_min seen_min = v;
+            if v > seen_max seen_max = v;
+            if v > 0 seen_nonzero += 1;
+        }
+        if seen_count <= 0 {
+            seen_min = 0;
+            seen_max = 0;
+        }
+        Text("GPU bake seen atlas min..max: % .. %", seen_min, seen_max);
+        Text("GPU bake seen atlas nonzero: % / %", seen_nonzero, seen_count);
         Text("Auto edit after frame: %", brickmap_auto_edit_after);
         Text("Auto edit done: %", ifx brickmap_auto_edit_done then "yes" else "no");
         Separator();
@@ -212,6 +294,41 @@ tick :: () {
         allow_move = !io.WantTextInput,
         allow_look = right_down && !io.WantCaptureMouse);
 
+    if !brickmap_debug_autolog_once && frame_count >= 2 {
+        seen_count := cast(s32) min(brickmap_params_cpu.debug_classify_out_count, cast(u32) BRICKMAP_MAX_DIRTY_BRICKS);
+        seen_min: s32 = 1 << 30;
+        seen_max: s32 = -1;
+        seen_nonzero: s32 = 0;
+        for i: 0..seen_count-1 {
+            v := cast(s32) brickmap_params_cpu.debug_bake_seen_atlas[i];
+            if v < seen_min seen_min = v;
+            if v > seen_max seen_max = v;
+            if v > 0 seen_nonzero += 1;
+        }
+        if seen_count <= 0 {
+            seen_min = 0;
+            seen_max = 0;
+        }
+
+        log("BRICKMAP_GPU_DEBUG edits=% dirty_pending=% dirty_after=% atlas_used=%/% ptr_cells=% classify(cand=% surf=% exist=% new=% reject=% out=%) bake(bricks=% voxels=% atlas=%..% seen=%..% nonzero=%/%)",
+            brickmap_params_cpu.edit_count,
+            brickmap_pending_dirty_count,
+            brickmap_params_cpu.dirty_count,
+            brickmap_next_atlas_index, BRICKMAP_MAX_BRICKS,
+            brickmap_count_allocated_cells(),
+            brickmap_params_cpu.debug_classify_candidates,
+            brickmap_params_cpu.debug_classify_surface,
+            brickmap_params_cpu.debug_classify_existing,
+            brickmap_params_cpu.debug_classify_new_alloc,
+            brickmap_params_cpu.debug_classify_rejected_capacity,
+            brickmap_params_cpu.debug_classify_out_count,
+            brickmap_params_cpu.debug_bake_bricks_touched,
+            brickmap_params_cpu.debug_bake_total_voxels,
+            brickmap_params_cpu.debug_bake_min_atlas, brickmap_params_cpu.debug_bake_max_atlas,
+            seen_min, seen_max, seen_nonzero, seen_count);
+        brickmap_debug_autolog_once = true;
+    }
+
     if frame_count == brickmap_auto_edit_after && !brickmap_auto_edit_done {
         brickmap_apply_runtime_edit();
         brickmap_auto_edit_done = true;
@@ -235,6 +352,12 @@ tick :: () {
     }
     brickmap_params_cpu.time = cast(float) time;
     brickmap_params_cpu.use_cache_raymarch = ifx brickmap_use_cache_raymarch then cast(u32) 1 else cast(u32) 0;
+    brickmap_params_cpu.use_hw_interp = ifx brickmap_use_hw_interp then cast(u32) 1 else cast(u32) 0;
+    brickmap_params_cpu.atlas_debug_overlay = ifx brickmap_show_atlas_overlay then cast(u32) 1 else cast(u32) 0;
+    brickmap_params_cpu.atlas_debug_fullscreen = ifx brickmap_show_atlas_fullscreen then cast(u32) 1 else cast(u32) 0;
+    brickmap_params_cpu.pointer_grid_debug = ifx brickmap_show_pointer_grid_debug then cast(u32) 1 else cast(u32) 0;
+    brickmap_params_cpu.bake_debug_gradient = ifx brickmap_bake_gradient_debug then cast(u32) 1 else cast(u32) 0;
+    brickmap_params_cpu.atlas_debug_slice = clamp(brickmap_atlas_debug_slice, 0.0, 1.0);
     brickmap_params_cpu.camera_pos = brickmap_camera.position;
     brickmap_params_cpu.camera_fov_y = PI / 3.0;
     brickmap_params_cpu.camera_tan_half_fov = tan(brickmap_params_cpu.camera_fov_y * 0.5);
@@ -269,24 +392,53 @@ tick :: () {
         brickmap_build_debug_gizmos();
     }
 
-    main_queue := gpu_get_queue(.MAIN, 0);
-    result=, cmd_buff := gpu_start_command_recording(main_queue);
-    assert(result == .SUCCESS);
-
     brickmap_params_cpu.dirty_count = 0;
+    bake_threads: s32 = 0;
+    main_queue := gpu_get_queue(.MAIN, 0);
     if brickmap_pending_dirty_count > 0 {
         brickmap_params_cpu.dirty_count = cast(u32) brickmap_pending_dirty_count;
         brickmap_params_cpu.atlas_alloc_next = cast(u32) brickmap_next_atlas_index;
-        bake_threads := brickmap_pending_dirty_count * BRICKMAP_BRICK_VOXELS;
 
-        result = gpu_set_pipeline(cmd_buff, compute_classify_pipeline);
-        assert(result == .SUCCESS, tprint("Brickmap classify set pipeline failed: %", result));
-        gpu_dispatch_buffers(cmd_buff, .[brickmap_params_gpu], .[1, 1, 1]);
+        if brickmap_skip_classify_debug {
+            for i: 0..brickmap_pending_dirty_count-1 {
+                brickmap_params_cpu.dirty_atlas_index[i] = cast(u32) i;
+            }
+            brickmap_params_cpu.debug_classify_out_count = cast(u32) brickmap_pending_dirty_count;
+            brickmap_params_cpu.debug_bake_min_atlas = 0;
+            brickmap_params_cpu.debug_bake_max_atlas = cast(u32) max(0, brickmap_pending_dirty_count - 1);
+            if brickmap_next_atlas_index < brickmap_pending_dirty_count {
+                brickmap_next_atlas_index = brickmap_pending_dirty_count;
+                brickmap_params_cpu.atlas_alloc_next = cast(u32) brickmap_next_atlas_index;
+            }
+            bake_threads = brickmap_pending_dirty_count * BRICKMAP_BRICK_TEXELS;
+        } else {
+            result=, classify_cmd := gpu_start_command_recording(main_queue);
+            assert(result == .SUCCESS);
+            result = gpu_set_pipeline(classify_cmd, compute_classify_pipeline);
+            assert(result == .SUCCESS, tprint("Brickmap classify set pipeline failed: %", result));
+            gpu_dispatch_buffers(classify_cmd, .[brickmap_params_gpu], .[1, 1, 1]);
+            gpu_submit(classify_cmd);
+            gpu_queue_wait_idle(main_queue);
 
+            gpu_next_atlas_after := cast(s32) brickmap_params_cpu.atlas_alloc_next;
+            if gpu_next_atlas_after > brickmap_next_atlas_index {
+                brickmap_next_atlas_index = gpu_next_atlas_after;
+            }
+            bake_threads = cast(s32) brickmap_params_cpu.dirty_count * BRICKMAP_BRICK_TEXELS;
+        }
+    }
+
+    result=, cmd_buff := gpu_start_command_recording(main_queue);
+    assert(result == .SUCCESS);
+
+    if brickmap_pending_dirty_count > 0 {
         result = gpu_set_pipeline(cmd_buff, compute_bake_pipeline);
         assert(result == .SUCCESS, tprint("Brickmap bake set pipeline failed: %", result));
         dispatch_x := cast(u32) ((bake_threads + 63) / 64);
-        gpu_dispatch_buffers(cmd_buff, .[brickmap_params_gpu], .[dispatch_x, 1, 1]);
+        if dispatch_x > 0 {
+            gpu_dispatch_buffers(cmd_buff, .[brickmap_params_gpu], .[dispatch_x, 1, 1]);
+            gpu_barrier(cmd_buff, .COMPUTE_SHADER, .PIXEL_SHADER);
+        }
 
         if brickmap_log_updates {
             log("BRICKMAP baked frame=% dirty_bricks=% threads=%", frame_count, brickmap_pending_dirty_count, bake_threads);
@@ -433,9 +585,6 @@ brickmap_update_lod_origins :: (camera_moved: bool) {
 brickmap_clear_cache :: () {
     for i: 0..brickmap_pointer_grid_cpu.count-1 {
         brickmap_pointer_grid_cpu[i] = -1;
-    }
-    for i: 0..brickmap_atlas_cpu.count-1 {
-        brickmap_atlas_cpu[i] = cast(u32) 128;
     }
     for i: 0..brickmap_dirty_flags.count-1 {
         brickmap_dirty_flags[i] = false;

@@ -68,6 +68,10 @@
     "command": "jai ~/src/peel/build.jai - src/apps/tetris_core_tests.jai -run -dll"
   },
   {
+    "label": "texture3d",
+    "command": "jai ~/src/peel/build.jai - src/apps/texture3d.jai -run -dll"
+  },
+  {
     "label": "textured_triangle",
     "command": "jai ~/src/peel/build.jai - src/apps/textured_triangle.jai -run"
   },
