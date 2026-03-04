@@ -21,6 +21,10 @@ foo: My_Struct;
 foo.value = 42;
 foo.other_value = "hello";
 
+For typed array literals of structs, omit redundant inner type names when possible for readability.
+Prefer `pieces : [4] Tetris_Offset = .[.{-1, 0}, .{0, 0}, .{1, 0}, .{2, 0}];` over repeating `Tetris_Offset.{...}` for each element.
+
 Consider using enum_flags when we have 3+ bool toggles in a struct.
 Lots of useful gamedev code is in ~/jai/modules and their examples folders.
 Lots of useful Jai knowledge is in ~/jai/how_to  -- listing the files there is a good way to see topics available.
+For visual/UI tasks, do opportunistic visual verification using framebuffer/readback snapshot tooling (for example, after first implementation and after coordinate/layout fixes), rather than relying only on code inspection.

@@ -52,6 +52,18 @@
     "command": "jai ~/src/peel/build.jai - src/apps/terrain_test.jai -run"
   },
   {
+    "label": "tetris",
+    "command": "jai ~/src/peel/build.jai - src/apps/tetris.jai -run -dll"
+  },
+  {
+    "label": "tetris_core",
+    "command": "jai ~/src/peel/build.jai - src/apps/tetris_core.jai -run -dll"
+  },
+  {
+    "label": "tetris_core_tests",
+    "command": "jai ~/src/peel/build.jai - src/apps/tetris_core_tests.jai -run -dll"
+  },
+  {
     "label": "textured_triangle",
     "command": "jai ~/src/peel/build.jai - src/apps/textured_triangle.jai -run"
   },
@@ -68,7 +80,7 @@
     "command": "~/src/peel/modules/Jai-Shader-Transpiler/headless_ir/test_ir_compute_semantics.sh"
   },
   {
-    "label": "run all tests",
+    "label": "Run all transpiler tests and build peel apps",
     "command": "cd ~/src/peel && jai modules/Jai-Shader-Transpiler/build.jai - -run_tests && jai build.jai"
   },
   {

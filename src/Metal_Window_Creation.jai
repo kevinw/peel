@@ -1,6 +1,42 @@
 #if OS == .MACOS {
+    ObjC :: #import "Objective_C";
     sgpu_macos_application_initialized := false;
     sgpu_macos_activation_pumped := false;
+    peel_input_view_class: ObjC.Class;
+
+    peel_input_view_accepts_first_responder :: (self: *NSView, _cmd: Selector) -> BOOL #c_call {
+        _ = self; _ = _cmd;
+        return YES;
+    }
+
+    peel_input_view_key_noop :: (self: *NSView, _cmd: Selector, event: *NSEvent) #c_call {
+        _ = self; _ = _cmd; _ = event;
+    }
+
+    ensure_peel_input_view_class :: () -> ObjC.Class {
+        if peel_input_view_class return peel_input_view_class;
+
+        existing := ObjC.objc_getClass("PeelInputView");
+        if existing {
+            peel_input_view_class = existing;
+            return existing;
+        }
+
+        super := ObjC.objc_getClass("NSView");
+        assert(super != null, "NSView class not found.");
+
+        cls := ObjC.objc_allocateClassPair(super, "PeelInputView", 0);
+        assert(cls != null, "Failed to allocate PeelInputView class.");
+
+        ObjC.objc_add_instance_method(cls, peel_input_view_accepts_first_responder, "acceptsFirstResponder");
+        ObjC.objc_add_instance_method(cls, peel_input_view_key_noop, "keyDown:");
+        ObjC.objc_add_instance_method(cls, peel_input_view_key_noop, "keyUp:");
+        ObjC.objc_add_instance_method(cls, peel_input_view_key_noop, "flagsChanged:");
+        ObjC.objc_finalize_class(cls);
+
+        peel_input_view_class = cls;
+        return cls;
+    }
 
     set_nsview_layer :: (view: *NSView, layer: *CALayer) {
         set_layer: (*void, Selector, *CALayer) -> void #c_call;
@@ -119,7 +155,8 @@
         NSWindow.setCollectionBehavior(window, NSWindowCollectionBehaviorFullScreenPrimary | NSWindowCollectionBehaviorManaged);
         set_nswindow_background_black(window);
 
-        view := objc_init(objc_alloc(NSView));
+        input_view_class := ensure_peel_input_view_class();
+        view := cast(*NSView) objc_init(objc_alloc(input_view_class));
         NSView.setWantsLayer(view, YES);
         autorelease(view);
 
