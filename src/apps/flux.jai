@@ -76,6 +76,12 @@ cam_radius: float = 2.9;
 FLUX_CAMERA_RADIUS_MIN :: 2.4;
 FLUX_CAMERA_RADIUS_MAX :: 6.0;
 
+flux_dummy_curve_points: [16] ImGui.ImVec2;
+flux_dummy_curve_selection: s32 = -1;
+flux_dummy_curve_initialized := false;
+dummy_knob_gain: float = 0.35;
+dummy_knob_steps: s32 = 7;
+
 flux_safe_normalize3_cpu :: (v: Vector3) -> Vector3 {
     len2 := dot(v, v);
     if len2 < 0.000001 return .{0.0, 0.0, 1.0};
@@ -144,7 +150,7 @@ flux_mouse_ray_to_terrain_uv :: (mouse_x: s64, mouse_y: s64, win_w: u32, win_h: 
 }
 
 flux_ui :: () {
-    using,except(Viewport) _ :: #import "ImGui";
+    using,except(Viewport) ImGui;
     Persist :: #import,file "../ui/persist_controls.jai";
 
     inspect_globals();
@@ -190,6 +196,26 @@ flux_ui :: () {
         Persist.SliderFloat("Camera Radius", *cam_radius, FLUX_CAMERA_RADIUS_MIN, FLUX_CAMERA_RADIUS_MAX, "%.2f");
         Persist.SliderFloat("Wind", *wind, 0, 0.5, "%.2f");
         Persist.Checkbox("Show Shadow Debug", *show_shadow_debug);
+
+        Separator();
+        Text("Dummy Knobs");
+        _ = knob("Gain##dummy", *dummy_knob_gain, 0.0, 1.0, 0.005, "%.3f", .WIPER_DOT, 64.0, .ValueTooltip | .AlwaysClamp);
+        SameLine();
+        _ = knob_int("Steps##dummy", *dummy_knob_steps, 1, 24, 0.15, "%d", .STEPPED, 64.0, .ValueTooltip | .AlwaysClamp, 12);
+        SameLine();
+        _ = knob("Macro##dummy", *grass_wind_macro, 0.0, 2.0, 0.01, "%.2f", .SPACE, 64.0, .ValueTooltip | .AlwaysClamp);
+
+        Separator();
+        Text("Dummy Curve");
+        if !flux_dummy_curve_initialized {
+            flux_dummy_curve_points[0] = .{0.0, 0.0};
+            flux_dummy_curve_points[1] = .{1.0, 1.0};
+            flux_dummy_curve_points[2].x = CURVE_TERMINATOR;
+            flux_dummy_curve_initialized = true;
+        }
+        _ = curve("Flux Dummy Curve", .{420.0, 160.0}, flux_dummy_curve_points.count, flux_dummy_curve_points.data, *flux_dummy_curve_selection);
+        curve_sample := curve_value(time_of_day, flux_dummy_curve_points.count, flux_dummy_curve_points.data);
+        Text("Curve sample @ Time of Day: %.3f", curve_sample);
     }
     End();
 }
@@ -633,7 +659,10 @@ ensure_shadow_targets :: () {
 
 #import "Math";
 #load "../SGPU_App_Common.jai";
+#load "../ui/curve_editor.jai";
+#load "../ui/knob.jai";
 #import "Jai-Shader-Transpiler";
 SHR :: #import,file "../shader_hot_reload.jai";
 #load "shaders/flux_shader.jai";
 Input :: #import "Input";
+ImGui :: #import "ImGui";
