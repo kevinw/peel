@@ -59,7 +59,7 @@ brickmap_draw_debug_grid := false;
 brickmap_auto_edit_after: s32 = 90;
 brickmap_auto_edit_done := false;
 brickmap_log_updates := false;
-brickmap_use_cache_raymarch := false;
+brickmap_use_cache_raymarch := true;
 brickmap_use_hw_interp := true;
 brickmap_draw_brick_debug := false;
 brickmap_debug_brick_limit: s32 = 420;
@@ -70,6 +70,9 @@ brickmap_show_atlas_fullscreen := false;
 brickmap_show_pointer_grid_debug := false;
 brickmap_bake_gradient_debug := false;
 brickmap_skip_classify_debug := false;
+brickmap_cache_debug_show_selected_lod := false;
+brickmap_cache_debug_show_distance := false;
+brickmap_cache_force_lod0 := false;
 brickmap_atlas_debug_slice: float = 0.5;
 brickmap_debug_autolog_once := false;
 
@@ -208,6 +211,9 @@ brickmap_ui :: () {
         Checkbox("Pointer Grid Debug", *brickmap_show_pointer_grid_debug);
         Checkbox("Bake Gradient Debug", *brickmap_bake_gradient_debug);
         Checkbox("Skip Classify (Debug)", *brickmap_skip_classify_debug);
+        Checkbox("Cache Debug: Selected LOD", *brickmap_cache_debug_show_selected_lod);
+        Checkbox("Cache Debug: Distance", *brickmap_cache_debug_show_distance);
+        Checkbox("Cache Debug: Force LOD0", *brickmap_cache_force_lod0);
         SliderFloat("Atlas Slice", *brickmap_atlas_debug_slice, 0.0, 1.0);
         Checkbox("Draw Brick Debug", *brickmap_draw_brick_debug);
         Checkbox("Debug LOD0", *brickmap_show_lod0);
@@ -357,6 +363,9 @@ tick :: () {
     brickmap_params_cpu.atlas_debug_fullscreen = ifx brickmap_show_atlas_fullscreen then cast(u32) 1 else cast(u32) 0;
     brickmap_params_cpu.pointer_grid_debug = ifx brickmap_show_pointer_grid_debug then cast(u32) 1 else cast(u32) 0;
     brickmap_params_cpu.bake_debug_gradient = ifx brickmap_bake_gradient_debug then cast(u32) 1 else cast(u32) 0;
+    brickmap_params_cpu.cache_debug_show_selected_lod = ifx brickmap_cache_debug_show_selected_lod then cast(u32) 1 else cast(u32) 0;
+    brickmap_params_cpu.cache_debug_show_distance = ifx brickmap_cache_debug_show_distance then cast(u32) 1 else cast(u32) 0;
+    brickmap_params_cpu.cache_force_lod0 = ifx brickmap_cache_force_lod0 then cast(u32) 1 else cast(u32) 0;
     brickmap_params_cpu.atlas_debug_slice = clamp(brickmap_atlas_debug_slice, 0.0, 1.0);
     brickmap_params_cpu.camera_pos = brickmap_camera.position;
     brickmap_params_cpu.camera_fov_y = PI / 3.0;

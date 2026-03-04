@@ -1,5 +1,9 @@
 # Brickmap Raymarcher Plan -  Based on http://www.youtube.com/watch?v=il-TXbn5iMA - Analysis and plan from the video below:
 
+## Implementation TODOs
+
+- Remove the current Metal classify->bake queue-idle workaround by fixing cross-dispatch visibility/hazard handling so classify and bake can run safely in a single command buffer.
+
 Based on the techniques detailed by Mike Turitzin in the video, building a dynamic, high-performance SDF (Signed Distance Field) engine requires shifting away from traditional brute-force raymarching. Instead, the core concept revolves around caching distance values in a sparse data structure and dynamically updating only the regions that change.
 
 Here is a step-by-step implementation plan for prototyping your own brick map SDF raymarcher:

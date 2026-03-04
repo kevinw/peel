@@ -89,6 +89,9 @@ Brickmap_Params :: struct {
     atlas_debug_fullscreen: u32;
     pointer_grid_debug: u32;
     bake_debug_gradient: u32;
+    cache_debug_show_selected_lod: u32;
+    cache_debug_show_distance: u32;
+    cache_force_lod0: u32;
     atlas_debug_slice: float;
     debug_classify_candidates: u32;
     debug_classify_surface: u32;
@@ -178,7 +181,7 @@ brickmap_sdf_box :: (p: Vector3, b: Vector3) -> float {
     return outside_len + inside;
 }
 
-brickmap_eval_scene_sdf :: (params: *Brickmap_Params, p: Vector3) -> float {
+brickmap_eval_edits_sdf :: (params: *Brickmap_Params, p: Vector3) -> float {
     d := cast(float) 100000.0;
     count := cast(s32) params.edit_count;
     for i: 0..count-1 {
@@ -205,9 +208,13 @@ brickmap_eval_scene_sdf :: (params: *Brickmap_Params, p: Vector3) -> float {
         }
     }
 
-    ground := p.y + 1.2;
-    d = min(d, ground);
     return d;
+}
+
+brickmap_eval_scene_sdf :: (params: *Brickmap_Params, p: Vector3) -> float {
+    d := brickmap_eval_edits_sdf(params, p);
+    ground := p.y + 1.2;
+    return min(d, ground);
 }
 
 brickmap_atlas_brick_coord :: (atlas_index: s32) -> Vector3 {
@@ -220,9 +227,11 @@ brickmap_atlas_brick_coord :: (atlas_index: s32) -> Vector3 {
 brickmap_sample_brick_filtered :: (params: *Brickmap_Params, atlas_index: s32, uvw: Vector3) -> float {
     brick := brickmap_atlas_brick_coord(atlas_index);
     local := Vector3.{
-        clamp(uvw.x, 0.0, cast(float) (BRICKMAP_BRICK_RES - 1)),
-        clamp(uvw.y, 0.0, cast(float) (BRICKMAP_BRICK_RES - 1)),
-        clamp(uvw.z, 0.0, cast(float) (BRICKMAP_BRICK_RES - 1)),
+        // uvw is in voxel-center space (0 = first center, 7 = last center).
+        // Allow half-voxel overreach so the duplicated 1-voxel border participates in filtering.
+        clamp(uvw.x, -0.5, cast(float) (BRICKMAP_BRICK_RES - 1) + 0.5),
+        clamp(uvw.y, -0.5, cast(float) (BRICKMAP_BRICK_RES - 1) + 0.5),
+        clamp(uvw.z, -0.5, cast(float) (BRICKMAP_BRICK_RES - 1) + 0.5),
     };
 
     base_texel := brick * cast(float) BRICKMAP_BRICK_TEX_RES;
@@ -242,7 +251,12 @@ brickmap_sample_brick_filtered :: (params: *Brickmap_Params, atlas_index: s32, u
 }
 
 brickmap_sample_cached_sdf :: (params: *Brickmap_Params, p: Vector3) -> float {
-    for lod: 0..BRICKMAP_LOD_COUNT-1 {
+    d_out := brickmap_eval_edits_sdf(params, p);
+    max_lod := BRICKMAP_LOD_COUNT;
+    if params.cache_force_lod0 != 0 {
+        max_lod = 1;
+    }
+    for lod: 0..max_lod-1 {
         voxel_size := max(params.lod_voxel_size[lod], 0.0001);
 
         gx := p.x / voxel_size;
@@ -265,13 +279,51 @@ brickmap_sample_cached_sdf :: (params: *Brickmap_Params, p: Vector3) -> float {
         atlas_index := params.pointer_grid[ptr_idx];
         if atlas_index < 0 continue;
 
-        local_x := gx - cast(float) (bx * BRICKMAP_BRICK_RES);
-        local_y := gy - cast(float) (by * BRICKMAP_BRICK_RES);
-        local_z := gz - cast(float) (bz * BRICKMAP_BRICK_RES);
-        return brickmap_sample_brick_filtered(params, atlas_index, .{local_x, local_y, local_z});
+        // Convert to voxel-center space (matching bake positions at +0.5 voxel).
+        local_x := gx - cast(float) (bx * BRICKMAP_BRICK_RES) - 0.5;
+        local_y := gy - cast(float) (by * BRICKMAP_BRICK_RES) - 0.5;
+        local_z := gz - cast(float) (bz * BRICKMAP_BRICK_RES) - 0.5;
+        d_out = brickmap_sample_brick_filtered(params, atlas_index, .{local_x, local_y, local_z});
+        break;
     }
 
-    return brickmap_eval_scene_sdf(params, p);
+    return d_out;
+}
+
+brickmap_sample_cached_lod :: (params: *Brickmap_Params, p: Vector3) -> s32 {
+    lod_out: s32 = -1;
+    max_lod := BRICKMAP_LOD_COUNT;
+    if params.cache_force_lod0 != 0 {
+        max_lod = 1;
+    }
+    for lod: 0..max_lod-1 {
+        voxel_size := max(params.lod_voxel_size[lod], 0.0001);
+
+        gx := p.x / voxel_size;
+        gy := p.y / voxel_size;
+        gz := p.z / voxel_size;
+
+        bx := cast(s32) floor(gx / cast(float) BRICKMAP_BRICK_RES);
+        by := cast(s32) floor(gy / cast(float) BRICKMAP_BRICK_RES);
+        bz := cast(s32) floor(gz / cast(float) BRICKMAP_BRICK_RES);
+
+        lx := bx - params.lod_origin_brick_x[lod];
+        ly := by - params.lod_origin_brick_y[lod];
+        lz := bz - params.lod_origin_brick_z[lod];
+
+        if lx < 0 || ly < 0 || lz < 0 continue;
+        if lx >= BRICKMAP_GRID_RES || ly >= BRICKMAP_GRID_RES || lz >= BRICKMAP_GRID_RES continue;
+
+        ptr_base := lod * BRICKMAP_GRID_CELLS;
+        ptr_idx := ptr_base + lx + ly * BRICKMAP_GRID_RES + lz * BRICKMAP_GRID_RES * BRICKMAP_GRID_RES;
+        atlas_index := params.pointer_grid[ptr_idx];
+        if atlas_index < 0 continue;
+
+        lod_out = cast(s32) lod;
+        break;
+    }
+
+    return lod_out;
 }
 
 brickmap_brick_has_surface :: (params: *Brickmap_Params, lod: s32, bx: s32, by: s32, bz: s32) -> bool {
@@ -291,15 +343,15 @@ brickmap_brick_has_surface :: (params: *Brickmap_Params, lod: s32, bx: s32, by: 
     max_d := cast(float) -100000.0;
     min_abs_d := cast(float) 100000.0;
 
-    d0 := brickmap_eval_scene_sdf(params, .{min_p.x, min_p.y, min_p.z});
-    d1 := brickmap_eval_scene_sdf(params, .{max_p.x, min_p.y, min_p.z});
-    d2 := brickmap_eval_scene_sdf(params, .{min_p.x, max_p.y, min_p.z});
-    d3 := brickmap_eval_scene_sdf(params, .{max_p.x, max_p.y, min_p.z});
-    d4 := brickmap_eval_scene_sdf(params, .{min_p.x, min_p.y, max_p.z});
-    d5 := brickmap_eval_scene_sdf(params, .{max_p.x, min_p.y, max_p.z});
-    d6 := brickmap_eval_scene_sdf(params, .{min_p.x, max_p.y, max_p.z});
-    d7 := brickmap_eval_scene_sdf(params, .{max_p.x, max_p.y, max_p.z});
-    d8 := brickmap_eval_scene_sdf(params, center_p);
+    d0 := brickmap_eval_edits_sdf(params, .{min_p.x, min_p.y, min_p.z});
+    d1 := brickmap_eval_edits_sdf(params, .{max_p.x, min_p.y, min_p.z});
+    d2 := brickmap_eval_edits_sdf(params, .{min_p.x, max_p.y, min_p.z});
+    d3 := brickmap_eval_edits_sdf(params, .{max_p.x, max_p.y, min_p.z});
+    d4 := brickmap_eval_edits_sdf(params, .{min_p.x, min_p.y, max_p.z});
+    d5 := brickmap_eval_edits_sdf(params, .{max_p.x, min_p.y, max_p.z});
+    d6 := brickmap_eval_edits_sdf(params, .{min_p.x, max_p.y, max_p.z});
+    d7 := brickmap_eval_edits_sdf(params, .{max_p.x, max_p.y, max_p.z});
+    d8 := brickmap_eval_edits_sdf(params, center_p);
 
     if d0 < min_d min_d = d0; if d0 > max_d max_d = d0; if abs(d0) < min_abs_d min_abs_d = abs(d0);
     if d1 < min_d min_d = d1; if d1 > max_d max_d = d1; if abs(d1) < min_abs_d min_abs_d = abs(d1);
@@ -388,11 +440,18 @@ brickmap_fragment_main :: (using in: Brickmap_Fragment_In, params: *Brickmap_Par
     hit := false;
     min_hit_eps := 0.003;
     use_cache := params.use_cache_raymarch != 0;
+    hit_lod: s32 = -1;
+    hit_cached_d := 0.0;
     for 0..170 {
         pos := ro + rd * t;
         d: float;
         if use_cache {
-            d = brickmap_sample_cached_sdf(params, pos);
+            d_cached := brickmap_sample_cached_sdf(params, pos);
+            sample_lod := brickmap_sample_cached_lod(params, pos);
+            d_ground := pos.y + 1.2;
+            d = min(d_cached, d_ground);
+            hit_lod = sample_lod;
+            hit_cached_d = d_cached;
         } else {
             d = brickmap_eval_scene_sdf(params, pos);
         }
@@ -413,6 +472,15 @@ brickmap_fragment_main :: (using in: Brickmap_Fragment_In, params: *Brickmap_Par
     color := mix(sky_a, sky_b, sky_t);
 
     if hit {
+        if use_cache && params.cache_debug_show_selected_lod != 0 {
+            if hit_lod == 0 return .{out_color = .{0.15, 0.85, 1.0, 1.0}};
+            if hit_lod == 1 return .{out_color = .{1.0, 0.65, 0.2, 1.0}};
+            return .{out_color = .{1.0, 0.0, 1.0, 1.0}};
+        }
+        if use_cache && params.cache_debug_show_distance != 0 {
+            g := clamp(0.5 + hit_cached_d * 0.35, 0.0, 1.0);
+            return .{out_color = .{g, g, g, 1.0}};
+        }
         for 0..3 {
             pos := ro + rd * t;
             t -= brickmap_eval_scene_sdf(params, pos) * 0.7;
@@ -537,20 +605,22 @@ brickmap_bake_compute :: (using in: Brickmap_Compute_In, params: *Brickmap_Param
     vy := (voxel_i / BRICKMAP_BRICK_TEX_RES) % BRICKMAP_BRICK_TEX_RES;
     vz := voxel_i / (BRICKMAP_BRICK_TEX_RES * BRICKMAP_BRICK_TEX_RES);
 
-    src_vx := clamp(vx - 1, 0, BRICKMAP_BRICK_RES - 1);
-    src_vy := clamp(vy - 1, 0, BRICKMAP_BRICK_RES - 1);
-    src_vz := clamp(vz - 1, 0, BRICKMAP_BRICK_RES - 1);
+    // Include a true 1-voxel halo around each brick so filtering remains continuous
+    // across neighboring bricks (instead of duplicating edge voxels).
+    sample_vx := vx - 1;
+    sample_vy := vy - 1;
+    sample_vz := vz - 1;
 
-    world_vox_x := cast(float) (brick_x * BRICKMAP_BRICK_RES + src_vx) + 0.5;
-    world_vox_y := cast(float) (brick_y * BRICKMAP_BRICK_RES + src_vy) + 0.5;
-    world_vox_z := cast(float) (brick_z * BRICKMAP_BRICK_RES + src_vz) + 0.5;
+    world_vox_x := cast(float) (brick_x * BRICKMAP_BRICK_RES + sample_vx) + 0.5;
+    world_vox_y := cast(float) (brick_y * BRICKMAP_BRICK_RES + sample_vy) + 0.5;
+    world_vox_z := cast(float) (brick_z * BRICKMAP_BRICK_RES + sample_vz) + 0.5;
 
     p := Vector3.{world_vox_x * voxel_size, world_vox_y * voxel_size, world_vox_z * voxel_size};
-    d := brickmap_eval_scene_sdf(params, p);
+    d := brickmap_eval_edits_sdf(params, p);
     if params.bake_debug_gradient != 0 {
-        fx := cast(float) src_vx / 7.0;
-        fy := cast(float) src_vy / 7.0;
-        fz := cast(float) src_vz / 7.0;
+        fx := cast(float) vx / cast(float) (BRICKMAP_BRICK_TEX_RES - 1);
+        fy := cast(float) vy / cast(float) (BRICKMAP_BRICK_TEX_RES - 1);
+        fz := cast(float) vz / cast(float) (BRICKMAP_BRICK_TEX_RES - 1);
         d = (fx + fy + fz) / 3.0 * 2.0 - 1.0;
     }
 
