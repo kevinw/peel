@@ -11,36 +11,22 @@ terrain_depth_w: u32;
 terrain_depth_h: u32;
 
 terrain_orbit_center := Vector3.{0.0, -0.8, 0.0};
-terrain_camera_pos := Vector3.{0.0, 2.7, 5.6};
-terrain_camera_yaw: float = 0.0;
-terrain_camera_pitch: float = 0.0;
+terrain_camera: Editor_Camera = .{
+    position = .{0.0, 2.7, 5.6},
+    yaw = 0.0,
+    pitch = 0.0,
+    move_speed = 8.0,
+    boost_multiplier = 2.0,
+    mouse_sensitivity = 0.0032,
+    move_planar = true,
+};
 terrain_last_manual_time: float64 = -1000000.0;
-terrain_prev_mouse_pos: Vector2;
-terrain_have_prev_mouse := false;
-
-terrain_fly_speed: float = 8.0;
-terrain_mouse_sensitivity: float = 0.0032;
 terrain_auto_orbit_delay_sec: float64 = 7.6;
 terrain_orbit_blend_speed: float = 3.5;
 terrain_dig_radius: float = 0.94;
 terrain_dig_strength: float = 2.4;
 terrain_ray_max_dist: float = 80.0;
 terrain_ray_step: float = 0.21;
-
-terrain_forward_from_angles :: (yaw: float, pitch: float) -> Vector3 {
-    cp := cos(pitch);
-    return .{
-        sin(yaw) * cp,
-        sin(pitch),
-        -cos(yaw) * cp,
-    };
-}
-
-terrain_angles_from_forward :: (forward: Vector3) -> (yaw: float, pitch: float) {
-    n := forward;
-    normalize(*n, fallback = .{0.0, 0.0, -1.0});
-    return atan2(n.x, -n.z), asin(clamp(n.y, -1.0, 1.0));
-}
 
 terrain_sample_index :: inline (x: s64, y: s64, z: s64) -> s64 {
     return x + y * Terrain_Voxel.Sample_Res + z * Terrain_Voxel.Sample_Res * Terrain_Voxel.Sample_Res;
@@ -94,18 +80,14 @@ terrain_density_at_world :: (ctx: *Terrain_Voxel.Terrain_Voxel_Context, p: Vecto
     return false;
 }
 
-terrain_mouse_world_ray :: (mouse_x: float, mouse_y: float, viewport: Vector2, camera_pos: Vector3, yaw: float, pitch: float) -> (origin: Vector3, dir: Vector3, ok: bool) {
-    if viewport.x <= 1.0 || viewport.y <= 1.0 return camera_pos, .{0.0, 0.0, -1.0}, false;
+terrain_mouse_world_ray :: (mouse_x: float, mouse_y: float, viewport: Vector2, camera: *Editor_Camera) -> (origin: Vector3, dir: Vector3, ok: bool) {
+    if viewport.x <= 1.0 || viewport.y <= 1.0 return camera.position, .{0.0, 0.0, -1.0}, false;
 
     nx := (mouse_x / viewport.x) * 2.0 - 1.0;
     ny := (mouse_y / viewport.y) * 2.0 - 1.0;
 
-    forward := terrain_forward_from_angles(yaw, pitch);
-    up_axis := Vector3.{0.0, 1.0, 0.0};
-    right := cross(forward, up_axis);
-    normalize(*right, fallback = .{1.0, 0.0, 0.0});
-    cam_up := cross(right, forward);
-    normalize(*cam_up, fallback = .{0.0, 1.0, 0.0});
+    forward, right, cam_up: Vector3;
+    editor_camera_basis(camera, *forward, *right, *cam_up);
 
     fov_y := PI / 3.2;
     tan_half_fov := tan(fov_y * 0.5);
@@ -113,7 +95,7 @@ terrain_mouse_world_ray :: (mouse_x: float, mouse_y: float, viewport: Vector2, c
 
     dir := forward + right * (nx * aspect * tan_half_fov) + cam_up * (ny * tan_half_fov);
     normalize(*dir, fallback = forward);
-    return camera_pos, dir, true;
+    return camera.position, dir, true;
 }
 
 terrain_raycast_surface :: (ctx: *Terrain_Voxel.Terrain_Voxel_Context, origin: Vector3, dir: Vector3, max_dist: float, step: float) -> (hit: bool, p: Vector3) {
@@ -193,8 +175,8 @@ on_dll_init :: () {
     assert(ok, "Terrain_Render initialization failed.");
     Terrain_Render.set_material(*terrain_render_ctx, tex_scale = 0.22, tri_sharpness = 3.0);
 
-    terrain_camera_pos = .{0.0, 2.7, 5.6};
-    terrain_camera_yaw, terrain_camera_pitch = terrain_angles_from_forward(terrain_orbit_center - terrain_camera_pos);
+    terrain_camera.position = .{0.0, 2.7, 5.6};
+    editor_camera_set_look_at(*terrain_camera, terrain_orbit_center);
 } @on_dll_init
 
 on_unload :: () {
@@ -221,57 +203,12 @@ tick :: () {
 
     left_mouse_down := Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_LEFT] & .DOWN;
     right_mouse_down := Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_RIGHT] & .DOWN;
-    keyboard_move := false;
-    move := Vector3.{0.0, 0.0, 0.0};
-    forward := terrain_forward_from_angles(terrain_camera_yaw, terrain_camera_pitch);
-    up_axis := Vector3.{0.0, 1.0, 0.0};
-    right := cross(forward, up_axis);
-    normalize(*right, fallback = .{1.0, 0.0, 0.0});
-    forward_xz := Vector3.{forward.x, 0.0, forward.z};
-    normalize(*forward_xz, fallback = .{0.0, 0.0, -1.0});
-
-    if Input.input_button_states[cast(Input.Key_Code) #char "W"] & .DOWN {
-        move += forward_xz;
-        keyboard_move = true;
-    }
-    if Input.input_button_states[cast(Input.Key_Code) #char "S"] & .DOWN {
-        move -= forward_xz;
-        keyboard_move = true;
-    }
-    if Input.input_button_states[cast(Input.Key_Code) #char "A"] & .DOWN {
-        move -= right;
-        keyboard_move = true;
-    }
-    if Input.input_button_states[cast(Input.Key_Code) #char "D"] & .DOWN {
-        move += right;
-        keyboard_move = true;
-    }
-    if Input.input_button_states[cast(Input.Key_Code) #char "Q"] & .DOWN {
-        move -= up_axis;
-        keyboard_move = true;
-    }
-    if Input.input_button_states[cast(Input.Key_Code) #char "E"] & .DOWN {
-        move += up_axis;
-        keyboard_move = true;
-    }
-
-    used_mouse_look := false;
-    if right_mouse_down && mouse_ok && has_dims {
-        mouse_pos := Vector2.{cast(float) mx, cast(float) my};
-        if terrain_have_prev_mouse {
-            delta := mouse_pos - terrain_prev_mouse_pos;
-            if delta.x != 0.0 || delta.y != 0.0 {
-                terrain_camera_yaw += delta.x * terrain_mouse_sensitivity;
-                terrain_camera_pitch += delta.y * terrain_mouse_sensitivity;
-                terrain_camera_pitch = clamp(terrain_camera_pitch, -1.5, 1.5);
-                used_mouse_look = true;
-            }
-        }
-        terrain_prev_mouse_pos = mouse_pos;
-        terrain_have_prev_mouse = true;
-    } else {
-        terrain_have_prev_mouse = false;
-    }
+    io := ImGui.GetIO();
+    camera_update := editor_camera_update(*terrain_camera, dt, mx, my, mouse_ok,
+        allow_move = !io.WantCaptureKeyboard,
+        allow_look = right_mouse_down && has_dims && !io.WantCaptureMouse);
+    keyboard_move := camera_update.moved;
+    used_mouse_look := camera_update.looked;
 
     {
         // example imgui overlay
@@ -285,12 +222,6 @@ tick :: () {
         End();
     }
 
-    move_len_sq := dot(move, move);
-    if move_len_sq > 0.000001 {
-        move /= sqrt(move_len_sq);
-        terrain_camera_pos += move * (terrain_fly_speed * dt);
-    }
-
     if keyboard_move || used_mouse_look || right_mouse_down || left_mouse_down {
         terrain_last_manual_time = time;
     }
@@ -300,14 +231,14 @@ tick :: () {
     if auto_orbit_active {
         orbit_target := Vector3.{sin(t * 0.25) * 5.6, 2.7, cos(t * 0.25) * 5.6};
         blend_t := clamp(dt * terrain_orbit_blend_speed, 0.0, 1.0);
-        terrain_camera_pos += (orbit_target - terrain_camera_pos) * blend_t;
-        terrain_camera_yaw, terrain_camera_pitch = terrain_angles_from_forward(terrain_orbit_center - terrain_camera_pos);
+        terrain_camera.position += (orbit_target - terrain_camera.position) * blend_t;
+        editor_camera_set_look_at(*terrain_camera, terrain_orbit_center);
     }
 
-    Terrain_Voxel.update_streaming(*terrain_voxel_ctx, terrain_camera_pos);
+    Terrain_Voxel.update_streaming(*terrain_voxel_ctx, terrain_camera.position);
 
     if left_mouse_down && mouse_ok && has_dims {
-        ray_origin, ray_dir, ray_ok := terrain_mouse_world_ray(cast(float) mx, cast(float) my, viewport, terrain_camera_pos, terrain_camera_yaw, terrain_camera_pitch);
+        ray_origin, ray_dir, ray_ok := terrain_mouse_world_ray(cast(float) mx, cast(float) my, viewport, *terrain_camera);
         if ray_ok {
             hit, hit_p := terrain_raycast_surface(*terrain_voxel_ctx, ray_origin, ray_dir, terrain_ray_max_dist, terrain_ray_step);
             if hit {
@@ -320,13 +251,7 @@ tick :: () {
     rebuilt_chunks := Terrain_Mesh_Compute.rebuild_dirty_meshes(*terrain_mesh_compute_ctx, *terrain_voxel_ctx);
 
     aspect := viewport.x / max(viewport.y, 1.0);
-    view_forward := terrain_forward_from_angles(terrain_camera_yaw, terrain_camera_pitch);
-    view_target := terrain_camera_pos + view_forward;
-    view := make_look_at_matrix(
-        viewpoint = terrain_camera_pos,
-        look_at = view_target,
-        reference_up_vector = .{0.0, 1.0, 0.0},
-        x_is_forward = false);
+    view := editor_camera_make_view(*terrain_camera);
     proj := make_projection_matrix(PI / 3.2, aspect, 0.05, 120.0);
     Terrain_Render.set_view_projection(*terrain_render_ctx, proj * view);
 
@@ -362,9 +287,11 @@ tick :: () {
 
 #scope_file
 
+#load "../editor_camera.jai";
 Terrain_Voxel :: #import "Terrain_Voxel";
 Terrain_Render :: #import "Terrain_Render";
 Terrain_Mesh_Compute :: #import "Terrain_Mesh_Compute";
+ImGui :: #import "ImGui";
 #import "Math";
 Input :: #import "Input";
 
