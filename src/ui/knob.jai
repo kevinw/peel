@@ -170,7 +170,8 @@ knob_begin_int :: (label: string, p_value: *s32, v_min: s32, v_max: s32, speed: 
         delta := knob_pick_drag_delta(io, flags);
         if abs(delta) > 0.0 {
             next := cast(float) p_value.* + delta * eff_speed;
-            p_value.* = cast(s32) round(next);
+            if next >= 0.0 p_value.* = cast(s32) (next + 0.5);
+            else p_value.* = cast(s32) (next - 0.5);
             value_changed = true;
         }
     }

@@ -60,3 +60,4 @@ dist/fluid2d.dylib
 dist/pbr.dylib
 dist/tetris
 dist/tetris.dylib
+dist/ui_gallery.dylib

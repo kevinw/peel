@@ -217,12 +217,15 @@ app_update :: (update_ctx: *App_Update_Ctx) {
         }
     }
 
+    ui_has_keyboard := ui_wants_keyboard();
     for Input.events_this_frame {
         using it;
         if type == {
             case .QUIT;
                 app_quit_requested = true;
             case .KEYBOARD;
+                if ui_has_keyboard continue;
+
                 if key_code == #char "R" && key_pressed {
                     update_ctx.app_return_flags |= .Reload;
                 }
@@ -284,6 +287,15 @@ app_update :: (update_ctx: *App_Update_Ctx) {
         update_ctx.app_return_flags |= .Quit;
         return;
     }
+}
+
+ui_wants_keyboard :: () -> bool {
+    using,only(GetCurrentContext, GetIO) _ :: #import "ImGui";
+    if GetCurrentContext() != null {
+        io := GetIO();
+        return io.WantCaptureKeyboard || io.WantTextInput;
+    }
+    return false;
 }
 
 create_window_and_init_sgpu :: () {

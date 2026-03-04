@@ -7,6 +7,11 @@ ui_gallery_text_active := false;
 ui_gallery_text_focused := false;
 ui_gallery_text_hovered := false;
 ui_gallery_text_edited := false;
+ui_gallery_toggle_enabled := true;
+ui_gallery_knob_value: float = 0.42;
+ui_gallery_curve_points: [16] ImGui.ImVec2;
+ui_gallery_curve_selection: s32 = -1;
+ui_gallery_curve_initialized := false;
 
 on_dll_init :: () {
     // Initial demo text. ImGui expects a zero-terminated editable buffer.
@@ -29,6 +34,22 @@ draw_ui :: () {
         ui_gallery_text_focused = IsItemFocused();
         ui_gallery_text_hovered = IsItemHovered();
         ui_gallery_text_edited = IsItemEdited();
+
+        Separator();
+        Text("Widget test");
+        _ = toggle("Enabled", *ui_gallery_toggle_enabled, .{56.0, 0.0}, true, 0.09);
+        SameLine();
+        _ = knob("Value##gallery", *ui_gallery_knob_value, 0.0, 1.0, 0.005, "%.3f", .WIPER_DOT, 58.0, .ValueTooltip | .AlwaysClamp);
+        SameLine();
+        Text("Knob: %.3f", ui_gallery_knob_value);
+
+        if !ui_gallery_curve_initialized {
+            ui_gallery_curve_points[0] = .{0.0, 0.0};
+            ui_gallery_curve_points[1] = .{1.0, 1.0};
+            ui_gallery_curve_points[2].x = CURVE_TERMINATOR;
+            ui_gallery_curve_initialized = true;
+        }
+        _ = curve("Curve##gallery", .{360.0, 140.0}, ui_gallery_curve_points.count, ui_gallery_curve_points.data, *ui_gallery_curve_selection);
     }
     End();
 
@@ -74,5 +95,8 @@ tick :: () {
 } @on_tick
 
 #scope_file
+#load "../ui/curve_editor.jai";
+#load "../ui/knob.jai";
+#load "../ui/toggle_widget.jai";
 #import "Math";
 ImGui :: #import "ImGui";

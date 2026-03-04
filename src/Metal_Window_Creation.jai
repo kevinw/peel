@@ -9,14 +9,30 @@
         return YES;
     }
 
-    peel_input_view_key_noop :: (self: *NSView, _cmd: Selector, event: *NSEvent) #c_call {
-        _ = self; _ = _cmd; _ = event;
+    peel_input_view_key_down :: (self: *NSView, _cmd: Selector, event: *NSEvent) #c_call {
+        _ = self; _ = _cmd;
+        if !event return;
+
+        push_context {
+            if ImGui.GetCurrentContext() != null {
+                io := ImGui.GetIO();
+                if io.WantTextInput {
+                    chars := NSEvent.characters(event);
+                    if chars != null && NSString.length(chars) > 0 {
+                        utf8 := NSString.UTF8String(chars);
+                        if utf8 != null {
+                            io.AddInputCharactersUTF8(io, utf8);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     ensure_peel_input_view_class :: () -> ObjC.Class {
         if peel_input_view_class return peel_input_view_class;
 
-        existing := ObjC.objc_getClass("PeelInputView");
+        existing := ObjC.objc_getClass("PeelInputViewV2");
         if existing {
             peel_input_view_class = existing;
             return existing;
@@ -25,13 +41,11 @@
         super := ObjC.objc_getClass("NSView");
         assert(super != null, "NSView class not found.");
 
-        cls := ObjC.objc_allocateClassPair(super, "PeelInputView", 0);
+        cls := ObjC.objc_allocateClassPair(super, "PeelInputViewV2", 0);
         assert(cls != null, "Failed to allocate PeelInputView class.");
 
         ObjC.objc_add_instance_method(cls, peel_input_view_accepts_first_responder, "acceptsFirstResponder");
-        ObjC.objc_add_instance_method(cls, peel_input_view_key_noop, "keyDown:");
-        ObjC.objc_add_instance_method(cls, peel_input_view_key_noop, "keyUp:");
-        ObjC.objc_add_instance_method(cls, peel_input_view_key_noop, "flagsChanged:");
+        ObjC.objc_add_instance_method(cls, peel_input_view_key_down, "keyDown:");
         ObjC.objc_finalize_class(cls);
 
         peel_input_view_class = cls;
@@ -220,3 +234,5 @@
         return cast(s32) fb.origin.x, cast(s32) y, cast(s32) fb.size.width, cast(s32) fb.size.height;
     }
 }
+
+ImGui :: #import "ImGui";
