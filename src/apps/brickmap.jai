@@ -17,13 +17,14 @@ Brickmap_BVH :: struct {
 }
 
 graphics_pipeline: Gpu_Pipeline;
+compute_classify_pipeline: Gpu_Pipeline;
 compute_bake_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 
 brickmap_params_cpu: *Brickmap_Params;
 brickmap_params_gpu: Gpu_Ptr;
 
-brickmap_atlas_cpu: []u8;
+brickmap_atlas_cpu: []u32;
 brickmap_pointer_grid_cpu: []s32;
 brickmap_lod_info_cpu: [BRICKMAP_LOD_COUNT] Brickmap_Lod_Info;
 brickmap_edits_storage: [BRICKMAP_MAX_EDITS] SDF_Edit;
@@ -55,10 +56,20 @@ brickmap_draw_debug_grid := false;
 brickmap_auto_edit_after: s32 = 90;
 brickmap_auto_edit_done := false;
 brickmap_log_updates := false;
+brickmap_use_cache_raymarch := false;
+brickmap_draw_brick_debug := false;
+brickmap_debug_brick_limit: s32 = 420;
+brickmap_show_lod0 := true;
+brickmap_show_lod1 := false;
+
+brickmap_gizmo_ctx: Gizmo.Gizmo_Context;
+brickmap_gizmo_render_ctx: Gizmo_Render.Gizmo_Render_Context;
 
 on_dll_init :: () {
     graphics_source := cast([]u8) get_transpiled(.METAL, brickmap_vertex_main, brickmap_fragment_main);
     assert(graphics_source.count > 0, "Transpilation failed for brickmap graphics shaders.");
+    classify_source := cast([]u8) get_transpiled(.METAL, brickmap_classify_dirty_compute);
+    assert(classify_source.count > 0, "Transpilation failed for brickmap classify compute shader.");
     compute_source := cast([]u8) get_transpiled(.METAL, brickmap_bake_compute);
     assert(compute_source.count > 0, "Transpilation failed for brickmap compute shaders.");
 
@@ -71,6 +82,11 @@ on_dll_init :: () {
 
     graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, brickmap_vertex_main, brickmap_fragment_main);
     assert(graphics_ok, "Brickmap graphics pipeline creation failed.");
+
+    compute_classify_pipeline = gpu_create_compute_pipeline(classify_source);
+    assert(compute_classify_pipeline != 0, "Brickmap classify compute pipeline creation failed.");
+    classify_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_classify_pipeline, classify_source, .METAL, brickmap_classify_dirty_compute);
+    assert(classify_ok, "Brickmap classify compute pipeline hot-reload registration failed.");
 
     compute_bake_pipeline = gpu_create_compute_pipeline(compute_source);
     assert(compute_bake_pipeline != 0, "Brickmap bake compute pipeline creation failed.");
@@ -90,7 +106,7 @@ on_dll_init :: () {
     brickmap_pointer_grid_cpu = brickmap_params_cpu.pointer_grid;
     brickmap_edits_cpu = brickmap_edits_storage;
     brickmap_dirty_cpu = brickmap_dirty_storage;
-    brickmap_params_cpu.distance_range = 4.0;
+    brickmap_params_cpu.distance_range = 3.0;
     brickmap_params_cpu.camera_fov_y = PI / 3.0;
     brickmap_params_cpu.camera_tan_half_fov = tan(brickmap_params_cpu.camera_fov_y * 0.5);
 
@@ -100,8 +116,9 @@ on_dll_init :: () {
     env_log_updates, env_log_set := Env_Vars.try_parse_env_int("BRICKMAP_LOG");
     if env_log_set brickmap_log_updates = env_log_updates > 0;
 
-    brickmap_seed_initial_scene();
-    brickmap_rebuild_bvh();
+    seed_initial_scene();
+    rebuild_bvh();
+    brickmap_params_cpu.atlas_alloc_next = 0;
     brickmap_update_lod_origins(true);
     brickmap_clear_cache();
     brickmap_mark_all_edits_dirty("init");
@@ -112,25 +129,64 @@ on_dll_init :: () {
 
     brickmap_last_camera_pos = brickmap_camera.position;
 
+    Gizmo.init(*brickmap_gizmo_ctx);
+    gizmo_ok := Gizmo_Render.init(*brickmap_gizmo_render_ctx, max_lines = 65536);
+    assert(gizmo_ok, "Brickmap gizmo renderer init failed.");
+    Gizmo_Render.bind_gizmo(*brickmap_gizmo_render_ctx, *brickmap_gizmo_ctx);
+
     gpu_commit_residency();
 } @on_dll_init
+
+on_unload :: () {
+    Gizmo_Render.deinit(*brickmap_gizmo_render_ctx);
+    Gizmo.deinit(*brickmap_gizmo_ctx);
+} @on_unload
 
 brickmap_ui :: () {
     using ImGui;
     SetNextWindowPos(.{24.0, 24.0}, .FirstUseEver);
-    SetNextWindowSize(.{430.0, 260.0}, .FirstUseEver);
+    SetNextWindowSize(.{560.0, 420.0}, .FirstUseEver);
     if Begin("Brickmap", *brickmap_ui_open, flags = .NoCollapse) {
         Text("Sparse brickmap SDF raymarch prototype");
         Text("RMB look, WASDQE fly, Shift boost");
         Checkbox("Draw Debug Grid", *brickmap_draw_debug_grid);
+        _ = toggle("Use Cache Raymarch", *brickmap_use_cache_raymarch, .{56.0, 0.0}, true, 0.09);
+        Checkbox("Draw Brick Debug", *brickmap_draw_brick_debug);
+        Checkbox("Debug LOD0", *brickmap_show_lod0);
+        Checkbox("Debug LOD1", *brickmap_show_lod1);
         Text("Edits: %", brickmap_params_cpu.edit_count);
         Text("Dirty bricks pending: %", brickmap_pending_dirty_count);
+        Text("Dirty bricks after classify: %", brickmap_params_cpu.dirty_count);
         Text("Atlas bricks used: % / %", brickmap_next_atlas_index, BRICKMAP_MAX_BRICKS);
+        Text("Pointer cells allocated: %", brickmap_count_allocated_cells());
         Text("Auto edit after frame: %", brickmap_auto_edit_after);
         Text("Auto edit done: %", ifx brickmap_auto_edit_done then "yes" else "no");
         Separator();
         Text("Clip LOD0 origin brick: % % %", brickmap_lod_info_cpu[0].origin_brick_x, brickmap_lod_info_cpu[0].origin_brick_y, brickmap_lod_info_cpu[0].origin_brick_z);
         Text("Clip LOD1 origin brick: % % %", brickmap_lod_info_cpu[1].origin_brick_x, brickmap_lod_info_cpu[1].origin_brick_y, brickmap_lod_info_cpu[1].origin_brick_z);
+        if Button("apply runtime edit") {
+            brickmap_apply_runtime_edit();
+        }
+        Separator();
+        Text("Edit List");
+        edit_count := cast(s32) brickmap_params_cpu.edit_count;
+        if BeginChild("brickmap_edit_list", .{0.0, 180.0}, .None) {
+            if edit_count <= 0 {
+                Text("  (no edits)");
+            } else {
+                for i: 0..edit_count-1 {
+                    edit := brickmap_edits_cpu[i];
+                    Text("#%  %  %  pos(%, %, %)  r=%  he(%, %, %)",
+                        i,
+                        brickmap_shape_label(edit.shape),
+                        brickmap_op_label(edit.op),
+                        edit.position.x, edit.position.y, edit.position.z,
+                        edit.radius,
+                        edit.half_extents.x, edit.half_extents.y, edit.half_extents.z);
+                }
+            }
+        }
+        EndChild();
     }
     End();
 }
@@ -139,6 +195,11 @@ tick :: () {
     result, swapchain_image := app_swapchain_acquire();
     assert(result == .SUCCESS);
     if !swapchain_image return;
+
+    gpu_next_atlas := cast(s32) brickmap_params_cpu.atlas_alloc_next;
+    if gpu_next_atlas > brickmap_next_atlas_index {
+        brickmap_next_atlas_index = gpu_next_atlas;
+    }
 
     _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
     mx, my, mouse_ok := get_mouse_pointer_position(true);
@@ -173,6 +234,7 @@ tick :: () {
         brickmap_params_cpu.resolution = .{cast(float) win_w, cast(float) win_h};
     }
     brickmap_params_cpu.time = cast(float) time;
+    brickmap_params_cpu.use_cache_raymarch = ifx brickmap_use_cache_raymarch then cast(u32) 1 else cast(u32) 0;
     brickmap_params_cpu.camera_pos = brickmap_camera.position;
     brickmap_params_cpu.camera_fov_y = PI / 3.0;
     brickmap_params_cpu.camera_tan_half_fov = tan(brickmap_params_cpu.camera_fov_y * 0.5);
@@ -196,16 +258,30 @@ tick :: () {
     for i: 0..brickmap_pending_dirty_count-1 {
         req := brickmap_dirty_cpu[i];
         brickmap_params_cpu.dirty_lod_brick_xyz[i] = .{cast(float) req.lod, cast(float) req.brick_x, cast(float) req.brick_y, cast(float) req.brick_z};
-        brickmap_params_cpu.dirty_atlas_index[i] = req.atlas_index;
+        brickmap_params_cpu.dirty_atlas_index[i] = 0;
+    }
+
+    if brickmap_draw_brick_debug && dims_ok && win_w > 0 && win_h > 0 {
+        viewport := Vector2.{cast(float) win_w, cast(float) win_h};
+        view := editor_camera_make_view(*brickmap_camera);
+        proj := make_projection_matrix(brickmap_params_cpu.camera_fov_y, viewport.x / max(viewport.y, 1.0), 0.05, 160.0);
+        Gizmo_Render.gizmo_render_set_view_projection(*brickmap_gizmo_render_ctx, proj * view);
+        brickmap_build_debug_gizmos();
     }
 
     main_queue := gpu_get_queue(.MAIN, 0);
     result=, cmd_buff := gpu_start_command_recording(main_queue);
     assert(result == .SUCCESS);
 
+    brickmap_params_cpu.dirty_count = 0;
     if brickmap_pending_dirty_count > 0 {
         brickmap_params_cpu.dirty_count = cast(u32) brickmap_pending_dirty_count;
+        brickmap_params_cpu.atlas_alloc_next = cast(u32) brickmap_next_atlas_index;
         bake_threads := brickmap_pending_dirty_count * BRICKMAP_BRICK_VOXELS;
+
+        result = gpu_set_pipeline(cmd_buff, compute_classify_pipeline);
+        assert(result == .SUCCESS, tprint("Brickmap classify set pipeline failed: %", result));
+        gpu_dispatch_buffers(cmd_buff, .[brickmap_params_gpu], .[1, 1, 1]);
 
         result = gpu_set_pipeline(cmd_buff, compute_bake_pipeline);
         assert(result == .SUCCESS, tprint("Brickmap bake set pipeline failed: %", result));
@@ -241,18 +317,27 @@ tick :: () {
         // Optional visual debug in future pass.
     }
 
+    if brickmap_draw_brick_debug && dims_ok && win_w > 0 && win_h > 0 {
+        viewport := Vector2.{cast(float) win_w, cast(float) win_h};
+        gizmo_draw_result := Gizmo_Render.gizmo_render_draw(*brickmap_gizmo_render_ctx, cmd_buff, *brickmap_gizmo_ctx, viewport, depth_mode = .NONE);
+        assert(gizmo_draw_result == .SUCCESS, tprint("Brickmap gizmo draw failed: %", gizmo_draw_result));
+    }
+
     submit_and_present_with_ui(cmd_buff);
 } @on_tick
 
 #scope_file
 #load "../editor_camera.jai";
+#load "../ui/toggle_widget.jai";
 
 Env_Vars :: #import "Env_Vars";
 Input :: #import "Input";
 ImGui :: #import "ImGui";
+Gizmo :: #import "Gizmo";
+Gizmo_Render :: #import "Gizmo_Render";
 #import "Math";
 
-brickmap_seed_initial_scene :: () {
+seed_initial_scene :: () {
     count: s32 = 0;
 
     brickmap_add_sphere(*count, .{-2.1, 0.3, -3.8}, 1.1);
@@ -276,7 +361,7 @@ brickmap_apply_runtime_edit :: () {
 
     new_bounds := brickmap_edit_bounds(0);
 
-    brickmap_rebuild_bvh();
+    rebuild_bvh();
     brickmap_mark_dirty_aabb(old_bounds, "auto_edit_old");
     brickmap_mark_dirty_aabb(new_bounds, "auto_edit_new");
 
@@ -285,7 +370,7 @@ brickmap_apply_runtime_edit :: () {
     }
 }
 
-brickmap_rebuild_bvh :: () {
+rebuild_bvh :: () {
     count := cast(s32) brickmap_params_cpu.edit_count;
     brickmap_bvh.edit_count = count;
     for i: 0..count-1 {
@@ -350,12 +435,13 @@ brickmap_clear_cache :: () {
         brickmap_pointer_grid_cpu[i] = -1;
     }
     for i: 0..brickmap_atlas_cpu.count-1 {
-        brickmap_atlas_cpu[i] = cast(u8) 128;
+        brickmap_atlas_cpu[i] = cast(u32) 128;
     }
     for i: 0..brickmap_dirty_flags.count-1 {
         brickmap_dirty_flags[i] = false;
     }
     brickmap_next_atlas_index = 0;
+    brickmap_params_cpu.atlas_alloc_next = 0;
     brickmap_pending_dirty_count = 0;
 }
 
@@ -404,31 +490,21 @@ brickmap_mark_dirty_aabb :: (bounds: AABB, reason: string) {
                     cell := lod * BRICKMAP_GRID_CELLS + cell_local;
                     if brickmap_dirty_flags[cell] continue;
 
-                    atlas_index := brickmap_pointer_grid_cpu[cell];
-                    if atlas_index < 0 {
-                        if brickmap_next_atlas_index >= BRICKMAP_MAX_BRICKS {
-                            if brickmap_log_updates log_error("BRICKMAP atlas exhausted while allocating brick.");
-                            continue;
-                        }
-                        atlas_index = brickmap_next_atlas_index;
-                        brickmap_next_atlas_index += 1;
-                        brickmap_pointer_grid_cpu[cell] = atlas_index;
-                    }
+                    bx := lx + info.origin_brick_x;
+                    by := ly + info.origin_brick_y;
+                    bz := lz + info.origin_brick_z;
 
                     if brickmap_pending_dirty_count >= BRICKMAP_MAX_DIRTY_BRICKS {
                         if brickmap_log_updates log_error("BRICKMAP dirty queue full; dropping brick updates.");
                         continue;
                     }
 
-                    bx := lx + info.origin_brick_x;
-                    by := ly + info.origin_brick_y;
-                    bz := lz + info.origin_brick_z;
                     req := Brick_Request.{
                         lod = cast(u32) lod,
                         brick_x = bx,
                         brick_y = by,
                         brick_z = bz,
-                        atlas_index = cast(u32) atlas_index,
+                        atlas_index = 0,
                     };
                     brickmap_dirty_cpu[brickmap_pending_dirty_count] = req;
                     brickmap_pending_dirty_count += 1;
@@ -507,4 +583,67 @@ brickmap_add_box :: (count: *s32, pos: Vector3, half_extents: Vector3, euler: Ve
         rotation = .{q.x, q.y, q.z, q.w},
     };
     count.* += 1;
+}
+
+brickmap_count_allocated_cells :: () -> s32 {
+    count: s32 = 0;
+    for i: 0..brickmap_pointer_grid_cpu.count-1 {
+        if brickmap_pointer_grid_cpu[i] >= 0 count += 1;
+    }
+    return count;
+}
+
+brickmap_build_debug_gizmos :: () {
+    Gizmo.begin_frame(*brickmap_gizmo_ctx);
+    if !brickmap_draw_brick_debug return;
+
+    drawn: s32 = 0;
+    for lod: 0..BRICKMAP_LOD_COUNT-1 {
+        if lod == 0 && !brickmap_show_lod0 continue;
+        if lod == 1 && !brickmap_show_lod1 continue;
+
+        info := brickmap_lod_info_cpu[lod];
+        voxel_size := max(info.voxel_size, 0.0001);
+        brick_world_size := voxel_size * cast(float) BRICKMAP_BRICK_RES;
+        half := Vector3.{brick_world_size * 0.5, brick_world_size * 0.5, brick_world_size * 0.5};
+        color := ifx lod == 0 then Vector4.{0.20, 0.88, 1.0, 0.60} else Vector4.{1.0, 0.58, 0.15, 0.60};
+
+        for lz_i: 0..BRICKMAP_GRID_RES-1 {
+            lz := cast(s32) lz_i;
+            for ly_i: 0..BRICKMAP_GRID_RES-1 {
+                ly := cast(s32) ly_i;
+                for lx_i: 0..BRICKMAP_GRID_RES-1 {
+                    lx := cast(s32) lx_i;
+                    if drawn >= brickmap_debug_brick_limit return;
+                    cell_local := brickmap_flatten_3d(lx, ly, lz, BRICKMAP_GRID_RES);
+                    cell := lod * BRICKMAP_GRID_CELLS + cell_local;
+                    if brickmap_pointer_grid_cpu[cell] < 0 continue;
+
+                    bx := lx + info.origin_brick_x;
+                    by := ly + info.origin_brick_y;
+                    bz := lz + info.origin_brick_z;
+                    center := Vector3.{
+                        (cast(float) bx + 0.5) * brick_world_size,
+                        (cast(float) by + 0.5) * brick_world_size,
+                        (cast(float) bz + 0.5) * brick_world_size,
+                    };
+                    Gizmo.draw_box(*brickmap_gizmo_ctx, center, half, color, 1.2);
+                    drawn += 1;
+                }
+            }
+        }
+    }
+}
+
+brickmap_shape_label :: (shape: u32) -> string {
+    if shape == SDF_SHAPE_BOX return "box";
+    if shape == SDF_SHAPE_SPHERE return "sphere";
+    return "unknown-shape";
+}
+
+brickmap_op_label :: (op: u32) -> string {
+    if op == SDF_OP_UNION return "union";
+    if op == SDF_OP_SUBTRACT return "subtract";
+    if op == SDF_OP_INTERSECT return "intersect";
+    return "unknown-op";
 }

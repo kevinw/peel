@@ -4,6 +4,10 @@
     "command": "jai ~/src/peel/build.jai - src/apps/boids.jai -run -dll"
   },
   {
+    "label": "brickmap",
+    "command": "jai ~/src/peel/build.jai - src/apps/brickmap.jai -run -dll"
+  },
+  {
     "label": "fluid2d",
     "command": "jai ~/src/peel/build.jai - src/apps/fluid2d.jai -run -dll"
   },
