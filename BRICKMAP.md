@@ -1,6 +1,4 @@
-# Brickmap Raymarcher Plan
-
-Based on http://www.youtube.com/watch?v=il-TXbn5iMA
+# Brickmap Raymarcher Plan -  Based on http://www.youtube.com/watch?v=il-TXbn5iMA - Analysis and plan from the video below:
 
 Based on the techniques detailed by Mike Turitzin in the video, building a dynamic, high-performance SDF (Signed Distance Field) engine requires shifting away from traditional brute-force raymarching. Instead, the core concept revolves around caching distance values in a sparse data structure and dynamically updating only the regions that change.
 
@@ -62,3 +60,35 @@ If you want gameplay, raymarching alone won't give you collision detection.
 Marching Cubes on CPU: Run the Marching Cubes algorithm across multiple CPU threads using your cached distance grid to generate a low-resolution collision mesh [14:58].
 
 Physics Engine Integration: Feed this generated mesh in chunks to an off-the-shelf physics engine (like Jolt Physics) to handle realistic collisions with your dynamic world [15:27].
+
+## Implementation Notes (Current Peel Prototype)
+
+Status: phases 1-5 are implemented in `src/apps/brickmap.jai` + `src/apps/shaders/brickmap_shader.jai`. Phase 6 (physics) intentionally not implemented yet.
+
+- Phase 1:
+  - Scene represented as ordered SDF edits (`SDF_Edit`) with shape/op/position/radius/box extents/rotation.
+  - CPU-side scene authoring uses local edit storage and BVH-like AABB tracking.
+
+- Phase 2:
+  - Sparse brick atlas (`u8` distance field) + pointer grid are baked into a single GPU payload buffer.
+  - Brick allocation is sparse and on-demand during dirty-region marking.
+
+- Phase 3:
+  - Fragment shader raymarches using cached brick distances via trilinear reconstruction.
+  - Falls back to analytic SDF eval where cache is missing.
+
+- Phase 4:
+  - Two LOD clipmap levels centered around camera.
+  - LOD recenter currently forces cache rebuild + dirty re-mark (simple/robust baseline).
+
+- Phase 5:
+  - CPU AABB overlap query identifies edits intersecting changed regions.
+  - Dirty brick queue drives compute rebake of only affected bricks.
+  - Runtime test path: `BRICKMAP_EDIT_AFTER` env var applies a scripted edit after N frames.
+
+- Debug/iteration env vars:
+  - `BRICKMAP_LOG=1` enables dirty/update logs.
+  - `BRICKMAP_EDIT_AFTER=<N>` triggers runtime edit to validate edit->BVH->rebake flow.
+
+- Known compromise due current shader backend limits:
+  - GPU payload is flattened into primitive/vector arrays instead of nested struct arrays for edit/dirty/lod blocks.
