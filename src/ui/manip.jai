@@ -11,8 +11,14 @@ Manip_Space :: enum {
     LOCAL;
 }
 
+Manip_Object_Shape :: enum {
+    BOX;
+    SPHERE;
+}
+
 Manip_Object :: struct {
     name: string;
+    shape: Manip_Object_Shape = .BOX;
     position: Vector3;
     rotation: Quaternion = .{w = 1.0};
     scale: Vector3 = .{1.0, 1.0, 1.0};
@@ -127,8 +133,8 @@ manip_update :: (ctx: *Manip_Context, gizmo_ctx: *Gizmo.Gizmo_Context, objects: 
         return result;
     }
 
-    for *objects {
-        draw_obb(gizmo_ctx, it.position, hadamard(it.half_extents, it.scale), it.rotation, it.color, 2.0);
+    for objects {
+        draw_object_wire(gizmo_ctx, it, 1.0, it.color, 2.0);
     }
 
     if frame.viewport.x <= 1.0 || frame.viewport.y <= 1.0 {
@@ -198,8 +204,7 @@ draw_handles :: (ctx: *Manip_Context, gizmo_ctx: *Gizmo.Gizmo_Context, objects: 
     if ctx.selected_index < 0 || cast(s64) ctx.selected_index >= objects.count return;
 
     obj := objects[cast(s64) ctx.selected_index];
-    half := hadamard(obj.half_extents, obj.scale);
-    draw_obb(gizmo_ctx, obj.position, half * 1.08, obj.rotation, .{1.0, 0.95, 0.55, 1.0}, 3.0);
+    draw_object_wire(gizmo_ctx, obj, 1.08, .{1.0, 0.95, 0.55, 1.0}, 3.0);
 
     axis_len := manip_axis_length(obj.position, frame.camera_pos);
     center := obj.position;
@@ -670,6 +675,18 @@ draw_obb :: (ctx: *Gizmo.Gizmo_Context, center: Vector3, half_extents: Vector3, 
     edge(0, 1); edge(1, 2); edge(2, 3); edge(3, 0);
     edge(4, 5); edge(5, 6); edge(6, 7); edge(7, 4);
     edge(0, 4); edge(1, 5); edge(2, 6); edge(3, 7);
+}
+
+draw_object_wire :: (ctx: *Gizmo.Gizmo_Context, obj: Manip_Object, scale_factor: float, color: Vector4, thickness: float) {
+    if #complete obj.shape == {
+    case .SPHERE;
+        effective_half := hadamard(obj.half_extents, obj.scale);
+        radius := max(max(effective_half.x, effective_half.y), effective_half.z) * scale_factor;
+        Gizmo.draw_sphere(ctx, obj.position, radius, color, thickness, segments = 24, rotation = obj.rotation);
+    case .BOX;
+        half := hadamard(obj.half_extents, obj.scale) * scale_factor;
+        draw_obb(ctx, obj.position, half, obj.rotation, color, thickness);
+    }
 }
 
 distance_point_segment :: (p: Vector2, a: Vector2, b: Vector2) -> float {

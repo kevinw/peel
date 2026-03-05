@@ -150,7 +150,24 @@ manip_ctx: Manip_Context;
 manip_objects: [..]Manip_Object;
 edit_manip_enabled := true;
 selected_edit: s32 = -1;
+hovered_edit: s32 = -1;
 left_was_down := false;
+last_pick_edit: s32 = -1;
+last_pick_time: float64 = -1000.0;
+orbit_drag_active := false;
+orbit_target: Vector3;
+orbit_distance: float = 6.0;
+orbit_prev_mouse: Vector2;
+orbit_have_prev_mouse := false;
+focus_active := false;
+focus_from_pos: Vector3;
+focus_to_pos: Vector3;
+focus_from_yaw: float;
+focus_to_yaw: float;
+focus_from_pitch: float;
+focus_to_pitch: float;
+focus_t: float;
+focus_duration: float = 0.25;
 validation_frame: Brickmap_Validation_Counters;
 validation_total: Brickmap_Validation_Counters;
 
@@ -327,7 +344,7 @@ ui :: () {
     SetNextWindowSize(.{560.0, 420.0}, .FirstUseEver);
     if Begin("Brickmap", *ui_open) {
         Text("Sparse brickmap SDF raymarch prototype");
-        Text("RMB look, WASDQE fly, Shift boost");
+        Text("RMB look, Alt+LMB orbit, WASDQE fly, Shift boost");
         _ = toggle("Use Cache Raymarch", *use_cache_raymarch, .{56.0, 0.0}, true, 0.09);
         _ = toggle("Use HW 3D Interp", *use_hw_interp, .{56.0, 0.0}, true, 0.09);
         SliderFloat("Render Scale", *render_scale, 0.25, 1.0);
@@ -352,6 +369,7 @@ ui :: () {
         Checkbox("Draw Brick Debug", *draw_brick_debug);
         Checkbox("Edit Manip", *edit_manip_enabled);
         Text("Selected edit: %", selected_edit);
+        Text("Hovered edit: %", hovered_edit);
         if edit_manip_enabled {
             Text("Manip mode/space: % / %", manip_ctx.mode, manip_ctx.space);
         }
@@ -514,6 +532,7 @@ tick :: () {
     io := ImGui.GetIO();
     left_down := (Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_LEFT] & .DOWN) != 0;
     right_down := (Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_RIGHT] & .DOWN) != 0;
+    alt_down := (Input.input_button_states[Input.Key_Code.ALT] & .DOWN) != 0;
     left_pressed := left_down && !left_was_down;
     left_released := !left_down && left_was_down;
     left_was_down = left_down;
@@ -532,9 +551,53 @@ tick :: () {
         }
     }
 
-    _ = editor_camera_update(*camera, dt, mx, my, mouse_ok,
-        allow_move = !io.WantTextInput,
-        allow_look = right_down && !io.WantCaptureMouse);
+    orbit_start := alt_down && left_pressed && !io.WantCaptureMouse && !right_down && mouse_ok && dims_ok && win_w > 0 && win_h > 0;
+    if orbit_start {
+        cam_forward, cam_right, cam_up: Vector3;
+        editor_camera_basis(*camera, *cam_forward, *cam_right, *cam_up);
+        ray_origin, ray_dir, ray_ok := mouse_world_ray(
+            .{cast(float) win_w, cast(float) win_h}, tan((PI / 3.0) * 0.5),
+            camera.position, cam_forward, cam_right, cam_up,
+            .{cast(float) mx, cast(float) my}, mouse_ok);
+        pick_i: s32 = -1;
+        if ray_ok {
+            pick_i = pick_edit_from_bvh(ray_origin, ray_dir);
+        }
+        if pick_i >= 0 {
+            focus_center, _ := edit_focus_center_radius(pick_i);
+            orbit_target = focus_center;
+        } else if selected_edit >= 0 && cast(s64) selected_edit < edits_cpu.count {
+            focus_center, _ := edit_focus_center_radius(selected_edit);
+            orbit_target = focus_center;
+        } else {
+            orbit_target = camera.position + cam_forward * 8.0;
+        }
+        orbit_distance = max(distance(camera.position, orbit_target), 0.6);
+        orbit_prev_mouse = .{cast(float) mx, cast(float) my};
+        orbit_have_prev_mouse = true;
+        orbit_drag_active = true;
+        focus_active = false;
+    }
+
+    if orbit_drag_active {
+        if !alt_down || !left_down || io.WantCaptureMouse || !mouse_ok {
+            orbit_drag_active = false;
+            orbit_have_prev_mouse = false;
+        } else {
+            orbit_update_camera(.{cast(float) mx, cast(float) my});
+        }
+    }
+
+    camera_input := editor_camera_update(*camera, dt, mx, my, mouse_ok,
+        allow_move = !io.WantTextInput && !orbit_drag_active,
+        allow_look = right_down && !io.WantCaptureMouse && !orbit_drag_active);
+    if focus_active {
+        if orbit_drag_active || right_down || camera_input.moved || camera_input.looked {
+            focus_active = false;
+        } else {
+            focus_update_camera(dt);
+        }
+    }
     if auto_fly_forward {
         cam_forward, cam_right, cam_up: Vector3;
         editor_camera_basis(*camera, *cam_forward, *cam_right, *cam_up);
@@ -642,6 +705,7 @@ tick :: () {
         params_cpu.lod_origin_brick_z[lod] = info.origin_brick.z;
         params_cpu.lod_voxel_size[lod] = info.voxel_size;
     }
+    hovered_edit = -1;
     draw_any_gizmo := (draw_brick_debug || edit_manip_enabled) && dims_ok && win_w > 0 && win_h > 0;
     if draw_any_gizmo {
         viewport := Vector2.{cast(float) win_w, cast(float) win_h};
@@ -659,6 +723,10 @@ tick :: () {
                 .{cast(float) win_w, cast(float) win_h}, params_cpu.camera_tan_half_fov,
                 camera.position, params_cpu.camera_forward, params_cpu.camera_right, params_cpu.camera_up,
                 .{cast(float) mx, cast(float) my}, mouse_ok);
+            hovered_edit = -1;
+            if ray_ok && !io.WantCaptureMouse && !right_down {
+                hovered_edit = pick_edit_from_bvh(ray_origin, ray_dir);
+            }
 
             frame := Manip_Frame_Input.{
                 viewport = viewport,
@@ -706,17 +774,30 @@ tick :: () {
             // Scene picking should only be blocked by actual gizmo-handle interaction.
             // `manip_result.captured_mouse` is broader (includes selected-object hover), which prevents re-selection.
             handle_hovered := manip_ctx.hovered_axis >= 0 || manip_ctx.hovered_plane >= 0 || manip_ctx.hovered_orbit;
-            can_pick_scene := left_pressed && !io.WantCaptureMouse && !right_down && !manip_ctx.active && !handle_hovered;
+            can_pick_scene := left_pressed && !alt_down && !io.WantCaptureMouse && !right_down && !manip_ctx.active && !handle_hovered;
             if can_pick_scene {
                 if ray_ok {
-                    selected_edit = pick_edit_from_bvh(ray_origin, ray_dir);
+                    picked_edit := pick_edit_from_bvh(ray_origin, ray_dir);
+                    selected_edit = picked_edit;
+                    if picked_edit >= 0 {
+                        double_click := (picked_edit == last_pick_edit) && ((time - last_pick_time) <= 0.30);
+                        last_pick_edit = picked_edit;
+                        last_pick_time = time;
+                        if double_click {
+                            start_focus_on_edit(picked_edit);
+                        }
+                    } else {
+                        last_pick_edit = -1;
+                        last_pick_time = -1000.0;
+                    }
                 } else {
                     selected_edit = -1;
                 }
             }
+        } else {
+            hovered_edit = -1;
         }
     }
-
     // Build a bounded dirty batch from persistent dirty flags.
     pending_dirty_count = build_dirty_batch_from_flags(BRICKMAP_MAX_DIRTY_BRICKS);
 
@@ -2012,6 +2093,7 @@ edit_to_manip_object :: (edit_index: s32) -> Manip_Object {
     }
     return .{
         name = tprint("edit_%", edit_index),
+        shape = ifx e.shape == .Sphere then Manip_Object_Shape.SPHERE else Manip_Object_Shape.BOX,
         position = e.position,
         rotation = .{x = e.rotation.x, y = e.rotation.y, z = e.rotation.z, w = e.rotation.w},
         scale = .{1.0, 1.0, 1.0},
@@ -2043,4 +2125,85 @@ apply_manip_to_edit :: (edit_index: s32, obj: Manip_Object) {
         e.radius = length(effective_half);
     }
     edits_cpu[edit_index] = e;
+}
+
+edit_focus_center_radius :: (edit_index: s32) -> (center: Vector3, radius: float) {
+    if edit_index < 0 || cast(s64) edit_index >= edits_cpu.count return .{}, 1.0;
+    e := edits_cpu[edit_index];
+    if #complete e.shape == {
+    case .Sphere;
+        return e.position, max(e.radius, 0.08);
+    case .Box;
+        return e.position, max(length(e.half_extents), 0.08);
+    }
+    return e.position, max(e.radius, 0.08);
+}
+
+start_focus_on_edit :: (edit_index: s32) {
+    center, radius := edit_focus_center_radius(edit_index);
+    fov_y := PI / 3.0;
+    framed_distance := max(radius / max(tan(fov_y * 0.5), 0.0001) * 1.30, radius * 2.0);
+
+    cam_forward, cam_right, cam_up: Vector3;
+    editor_camera_basis(*camera, *cam_forward, *cam_right, *cam_up);
+    desired_pos := center - cam_forward * framed_distance;
+    look_dir := center - desired_pos;
+    look_len := length(look_dir);
+    look_n := ifx look_len > 0.000001 then look_dir / look_len else cam_forward;
+    desired_yaw, desired_pitch := brickmap_camera_angles_from_forward(look_n);
+
+    focus_from_pos = camera.position;
+    focus_to_pos = desired_pos;
+    focus_from_yaw = camera.yaw;
+    focus_to_yaw = desired_yaw;
+    focus_from_pitch = camera.pitch;
+    focus_to_pitch = desired_pitch;
+    focus_t = 0.0;
+    focus_active = true;
+}
+
+focus_update_camera :: (dt: float) {
+    if !focus_active return;
+    step := dt / max(focus_duration, 0.01);
+    focus_t = clamp(focus_t + step, 0.0, 1.0);
+    t := focus_t * focus_t * (3.0 - 2.0 * focus_t);
+    camera.position = focus_from_pos + (focus_to_pos - focus_from_pos) * t;
+    camera.yaw = lerp_angle_shortest(focus_from_yaw, focus_to_yaw, t);
+    camera.pitch = clamp(focus_from_pitch + (focus_to_pitch - focus_from_pitch) * t, camera.pitch_min, camera.pitch_max);
+    if focus_t >= 1.0 {
+        focus_active = false;
+    }
+}
+
+orbit_update_camera :: (mouse_pos: Vector2) {
+    if !orbit_have_prev_mouse {
+        orbit_prev_mouse = mouse_pos;
+        orbit_have_prev_mouse = true;
+        return;
+    }
+
+    delta := mouse_pos - orbit_prev_mouse;
+    orbit_prev_mouse = mouse_pos;
+    if abs(delta.x) < 0.0001 && abs(delta.y) < 0.0001 return;
+
+    camera.yaw += delta.x * camera.mouse_sensitivity;
+    camera.pitch += delta.y * camera.mouse_sensitivity;
+    camera.pitch = clamp(camera.pitch, camera.pitch_min, camera.pitch_max);
+
+    cam_forward, cam_right, cam_up: Vector3;
+    editor_camera_basis(*camera, *cam_forward, *cam_right, *cam_up);
+    camera.position = orbit_target - cam_forward * orbit_distance;
+}
+
+lerp_angle_shortest :: (a: float, b: float, t: float) -> float {
+    delta := b - a;
+    while delta > PI delta -= PI * 2.0;
+    while delta < -PI delta += PI * 2.0;
+    return a + delta * t;
+}
+
+brickmap_camera_angles_from_forward :: (forward: Vector3) -> (yaw: float, pitch: float) {
+    n := forward;
+    normalize(*n, fallback = .{0.0, 0.0, -1.0});
+    return atan2(n.x, -n.z), asin(clamp(n.y, -1.0, 1.0));
 }
