@@ -53,11 +53,16 @@ compute_classify_pipeline: Gpu_Pipeline;
 compute_bake_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 
+params_ring_cpu: *[SGPU_FRAMES_IN_FLIGHT] Brickmap_Params;
+params_ring_gpu: Gpu_Ptr;
 params_cpu: *Brickmap_Params;
 params_gpu: Gpu_Ptr;
+blit_params_ring_cpu: *[SGPU_FRAMES_IN_FLIGHT] Brickmap_Blit_Params;
+blit_params_ring_gpu: Gpu_Ptr;
 blit_params_cpu: *Brickmap_Blit_Params;
 blit_params_gpu: Gpu_Ptr;
-params_guard_cpu: *[4096]u8;
+params_guard_before_cpu: *[4096]u8;
+params_guard_after_cpu: *[4096]u8;
 
 pointer_grid_cpu: []s32;
 lod_info_cpu: [BRICKMAP_LOD_COUNT] Brickmap_Lod_Info;
@@ -117,9 +122,18 @@ cache_force_lod0 := false;
 auto_fly_forward := false;
 auto_fly_speed: float = 8.0;
 log_validation_every_frame := false;
+debug_wait_idle_every_frame := false;
+force_disable_shader_debug_flags := true;
+metal_capture_frame: s32 = -1;
+metal_capture_open_trace := false;
+metal_capture_started := false;
+metal_capture_done := false;
 atlas_debug_slice: float = 0.5;
 render_scale: float = 0.75;
 debug_autolog_once := false;
+guard_corruption_count: s32;
+guard_corruption_reported := false;
+params_ring_last_slot: s64 = -1;
 BRICKMAP_RANDOM_STARTUP_EDITS :: 900;
 BRICKMAP_RANDOM_STARTUP_SEED  :: cast(u64) 0xB17C_A11A_5EED;
 
@@ -165,17 +179,28 @@ on_dll_init :: () {
     gpu_arena = gpu_make_arena(arena_bytes, label = "brickmap arena");
     assert(gpu_arena.cpu != null, "Brickmap arena allocation failed.");
 
-    // Keep blit params isolated from compute-written Brickmap_Params memory.
-    // If backend layout/offset bugs write past params, they should not corrupt blit bindings.
-    blit_params_cpu, blit_params_gpu = gpu_arena_alloc(*gpu_arena, Brickmap_Blit_Params);
-    params_cpu, params_gpu = gpu_arena_alloc(*gpu_arena, Brickmap_Params);
-    params_guard_cpu, _ = gpu_arena_alloc(*gpu_arena, [4096]u8);
+    // Keep params in per-frame rings so CPU writes don't race with in-flight GPU reads.
+    blit_params_ring_cpu, blit_params_ring_gpu = sgpu_arena_alloc_frame_ring(*gpu_arena, Brickmap_Blit_Params);
+    params_guard_before_cpu, _ = gpu_arena_alloc(*gpu_arena, [4096]u8);
+    params_ring_cpu, params_ring_gpu = sgpu_arena_alloc_frame_ring(*gpu_arena, Brickmap_Params);
+    params_guard_after_cpu, _ = gpu_arena_alloc(*gpu_arena, [4096]u8);
 
-    assert(params_cpu != null, "Brickmap params alloc failed.");
-    assert(blit_params_cpu != null, "Brickmap blit params alloc failed.");
-    assert(params_guard_cpu != null, "Brickmap params guard alloc failed.");
+    assert(params_ring_cpu != null, "Brickmap params ring alloc failed.");
+    assert(blit_params_ring_cpu != null, "Brickmap blit params ring alloc failed.");
+    assert(params_guard_before_cpu != null, "Brickmap params before-guard alloc failed.");
+    assert(params_guard_after_cpu != null, "Brickmap params after-guard alloc failed.");
 
+    params_cpu = sgpu_frame_ring_cpu_slot(params_ring_cpu, 0);
+    params_gpu = sgpu_frame_ring_gpu_slot(params_ring_gpu, Brickmap_Params, 0);
+    blit_params_cpu = sgpu_frame_ring_cpu_slot(blit_params_ring_cpu, 0);
+    blit_params_gpu = sgpu_frame_ring_gpu_slot(blit_params_ring_gpu, Brickmap_Blit_Params, 0);
+
+    for i: 0..SGPU_FRAMES_IN_FLIGHT-1 {
+        params_ring_cpu.*[i] = .{};
+        blit_params_ring_cpu.*[i] = .{};
+    }
     params_cpu.* = .{};
+    init_params_guards();
     pointer_grid_cpu = params_cpu.pointer_grid;
     edits_cpu = edits_storage;
     dirty_cpu = dirty_storage;
@@ -217,6 +242,10 @@ on_dll_init :: () {
     try_parse_env_int("BRICKMAP_AUTO_FLY_FORWARD", *auto_fly_forward);
     try_parse_env_int("BRICKMAP_AUTO_FLY_SPEED", *auto_fly_speed);
     try_parse_env_int("BRICKMAP_LOG_VALIDATION", *log_validation_every_frame);
+    try_parse_env_int("BRICKMAP_DEBUG_WAIT_IDLE", *debug_wait_idle_every_frame);
+    try_parse_env_int("BRICKMAP_FORCE_DISABLE_SHADER_DEBUG_FLAGS", *force_disable_shader_debug_flags);
+    try_parse_env_int("BRICKMAP_METAL_CAPTURE_FRAME", *metal_capture_frame);
+    try_parse_env_int("BRICKMAP_METAL_CAPTURE_OPEN", *metal_capture_open_trace);
 
     seed_initial_scene();
     rebuild_bvh();
@@ -227,6 +256,12 @@ on_dll_init :: () {
     force_full_rebuild = false;
     if log_updates {
         log("BRICKMAP init_dirty_complete pending=% atlas_used=%", pending_dirty_count, next_atlas_index);
+    }
+
+    // Seed all frame-ring slots with initialized state so first use of any slot is valid.
+    for i: 0..SGPU_FRAMES_IN_FLIGHT-1 {
+        params_ring_cpu.*[i] = params_cpu.*;
+        blit_params_ring_cpu.*[i] = blit_params_cpu.*;
     }
 
     last_camera_pos = camera.position;
@@ -272,6 +307,8 @@ ui :: () {
         Checkbox("Pointer Grid Debug", *show_pointer_grid_debug);
         Checkbox("Bake Gradient Debug", *bake_gradient_debug);
         Checkbox("Skip Classify (Debug)", *skip_classify_debug);
+        Checkbox("Debug Wait Idle Every Frame", *debug_wait_idle_every_frame);
+        Checkbox("Force Disable Shader Debug Flags", *force_disable_shader_debug_flags);
         Checkbox("Cache Debug: Selected LOD", *cache_debug_show_selected_lod);
         Checkbox("Cache Debug: Distance", *cache_debug_show_distance);
         Checkbox("Cache Debug: Force LOD0", *cache_force_lod0);
@@ -292,6 +329,7 @@ ui :: () {
             Text("Dirty bricks after classify: %", params_cpu.dirty_count);
             Text("Atlas bricks used: % / %", next_atlas_index, BRICKMAP_MAX_BRICKS);
             Text("Pointer cells allocated: %", count_allocated_cells());
+            Text("Params guard corruption count: %", guard_corruption_count);
             Separator();
             {
                 using params_cpu;
@@ -365,6 +403,35 @@ tick :: () {
     result, swapchain_image := app_swapchain_acquire();
     assert(result == .SUCCESS);
     if !swapchain_image return;
+
+    frame_number := cast(s64) gpu_submission_frame_index();
+    slot := sgpu_frame_ring_index(frame_number);
+    params_cpu = sgpu_frame_ring_cpu_slot(params_ring_cpu, frame_number);
+    params_gpu = sgpu_frame_ring_gpu_slot(params_ring_gpu, Brickmap_Params, frame_number);
+    blit_params_cpu = sgpu_frame_ring_cpu_slot(blit_params_ring_cpu, frame_number);
+    blit_params_gpu = sgpu_frame_ring_gpu_slot(blit_params_ring_gpu, Brickmap_Blit_Params, frame_number);
+    if params_ring_last_slot >= 0 && slot != params_ring_last_slot {
+        params_cpu.* = params_ring_cpu.*[params_ring_last_slot];
+        blit_params_cpu.* = blit_params_ring_cpu.*[params_ring_last_slot];
+    }
+    params_ring_last_slot = slot;
+    pointer_grid_cpu = params_cpu.pointer_grid;
+
+    check_params_guards("frame_start");
+    if !metal_capture_done && !metal_capture_started && metal_capture_frame >= 0 && frame_count == metal_capture_frame {
+        capture_result := gpu_capture_start();
+        if capture_result == .SUCCESS {
+            metal_capture_started = true;
+            log("BRICKMAP Metal capture started at frame=%", frame_count);
+        } else {
+            log_error("BRICKMAP Metal capture start failed frame=% result=%", frame_count, capture_result);
+            metal_capture_done = true;
+        }
+    }
+    main_queue := gpu_get_queue(.MAIN, 0);
+    if debug_wait_idle_every_frame {
+        gpu_queue_wait_idle(main_queue);
+    }
 
     gpu_next_atlas := cast(s32) params_cpu.atlas_alloc_next;
     if gpu_next_atlas > BRICKMAP_MAX_BRICKS {
@@ -492,6 +559,15 @@ tick :: () {
     params_cpu.cache_debug_show_selected_lod = to_u32(cache_debug_show_selected_lod);
     params_cpu.cache_debug_show_distance = to_u32(cache_debug_show_distance);
     params_cpu.cache_force_lod0 = to_u32(cache_force_lod0);
+    if force_disable_shader_debug_flags {
+        params_cpu.atlas_debug_overlay = 0;
+        params_cpu.atlas_debug_fullscreen = 0;
+        params_cpu.pointer_grid_debug = 0;
+        params_cpu.bake_debug_gradient = 0;
+        params_cpu.cache_debug_show_selected_lod = 0;
+        params_cpu.cache_debug_show_distance = 0;
+        params_cpu.cache_force_lod0 = 0;
+    }
     params_cpu.atlas_debug_slice = clamp(atlas_debug_slice, 0.0, 1.0);
     params_cpu.camera_pos = camera.position;
     params_cpu.camera_fov_y = PI / 3.0;
@@ -607,7 +683,6 @@ tick :: () {
 
     params_cpu.dirty_count = 0;
     bake_threads: s32 = 0;
-    main_queue := gpu_get_queue(.MAIN, 0);
     if pending_dirty_count > 0 {
         params_cpu.atlas_alloc_next = cast(u32) next_atlas_index;
 
@@ -654,6 +729,7 @@ tick :: () {
             }
             gpu_submit(classify_cmd);
             gpu_queue_wait_idle(main_queue);
+            check_params_guards("post_classify");
 
             gpu_next_atlas_after := cast(s32) params_cpu.atlas_alloc_next;
             if gpu_next_atlas_after > BRICKMAP_MAX_BRICKS {
@@ -721,6 +797,8 @@ tick :: () {
         draw_result := gpu_draw_instanced(cmd_buff, 0, params_gpu, 3, 1);
         assert(draw_result == .SUCCESS, tprint("Brickmap draw failed: %", draw_result));
     }
+    // Transition offscreen color attachment writes before sampling it in the blit pass.
+    gpu_barrier(cmd_buff, .COLOR_ATTACHMENT_OUTPUT, .PIXEL_SHADER);
 
     {
         gpu_begin_scoped_render_pass(cmd_buff, .{
@@ -753,6 +831,12 @@ tick :: () {
     }
 
     submit_and_present_with_ui(cmd_buff);
+    if metal_capture_started {
+        gpu_capture_end(open = metal_capture_open_trace);
+        metal_capture_started = false;
+        metal_capture_done = true;
+        log("BRICKMAP Metal capture ended at frame=%", frame_count);
+    }
 } @on_tick
 
 #scope_file
@@ -772,6 +856,45 @@ scaled_dim :: (dim: s32, scale: float) -> s32 {
     s := clamp(scale, 0.25, 1.0);
     rounded := cast(s32) floor(cast(float) dim * s + 0.5);
     return max(cast(s32) 1, rounded);
+}
+
+BRICKMAP_PARAMS_GUARD_BYTES :: 4096;
+BRICKMAP_PARAMS_GUARD_BEFORE :: cast(u8) 0xA5;
+BRICKMAP_PARAMS_GUARD_AFTER  :: cast(u8) 0x5A;
+
+init_params_guards :: () {
+    for i: 0..BRICKMAP_PARAMS_GUARD_BYTES-1 {
+        params_guard_before_cpu.*[i] = BRICKMAP_PARAMS_GUARD_BEFORE;
+        params_guard_after_cpu.*[i] = BRICKMAP_PARAMS_GUARD_AFTER;
+    }
+}
+
+check_params_guards :: (stage: string) {
+    first_before_bad := -1;
+    first_after_bad := -1;
+    before_bad_count: s32 = 0;
+    after_bad_count: s32 = 0;
+
+    for i: 0..BRICKMAP_PARAMS_GUARD_BYTES-1 {
+        if params_guard_before_cpu.*[i] != BRICKMAP_PARAMS_GUARD_BEFORE {
+            before_bad_count += 1;
+            if first_before_bad < 0 first_before_bad = i;
+        }
+        if params_guard_after_cpu.*[i] != BRICKMAP_PARAMS_GUARD_AFTER {
+            after_bad_count += 1;
+            if first_after_bad < 0 first_after_bad = i;
+        }
+    }
+
+    if before_bad_count <= 0 && after_bad_count <= 0 return;
+
+    guard_corruption_count += 1;
+    if !guard_corruption_reported || guard_corruption_count <= 6 {
+        log_error("BRICKMAP params guard corruption stage=% frame=% before_bad=% first_before=% after_bad=% first_after=% total=%",
+            stage, frame_count, before_bad_count, first_before_bad, after_bad_count, first_after_bad, guard_corruption_count);
+    }
+    guard_corruption_reported = true;
+    init_params_guards();
 }
 
 ensure_render_target :: (win_w: s32, win_h: s32) -> bool {
