@@ -38,9 +38,7 @@ SDF_OP_SUBTRACT :: 1;
 SDF_OP_INTERSECT :: 2;
 
 Brickmap_Lod_Info :: struct {
-    origin_brick_x: s32;
-    origin_brick_y: s32;
-    origin_brick_z: s32;
+    origin_brick: IVector3;
     _pad0: s32;
     voxel_size: float;
     _pad1: float;

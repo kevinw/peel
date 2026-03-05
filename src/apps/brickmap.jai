@@ -12,9 +12,9 @@ AABB :: struct {
 }
 
 Brickmap_BVH :: struct {
-    edit_bounds: [BRICKMAP_MAX_EDITS] AABB;
+    edit_bounds:   [BRICKMAP_MAX_EDITS] AABB;
     build_indices: [BRICKMAP_MAX_EDITS] s32;
-    nodes: [BRICKMAP_MAX_EDITS * 2] Brickmap_BVH_Node;
+    nodes:         [BRICKMAP_MAX_EDITS * 2] Brickmap_BVH_Node;
     edit_count: s32;
     node_count: s32;
     root_node: s32;
@@ -90,7 +90,6 @@ free_atlas_slots: [BRICKMAP_MAX_BRICKS] s32;
 free_atlas_count: s32;
 
 ui_open := true;
-draw_debug_grid := false;
 auto_edit_after: s32 = -1;
 auto_edit_done := false;
 log_updates := false;
@@ -126,11 +125,8 @@ validation_total: Brickmap_Validation_Counters;
 
 on_dll_init :: () {
     graphics_source := cast([]u8) get_transpiled(.METAL, brickmap_vertex_main, brickmap_fragment_main);
-    assert(graphics_source.count > 0, "Transpilation failed for brickmap graphics shaders.");
     classify_source := cast([]u8) get_transpiled(.METAL, brickmap_classify_dirty_compute);
-    assert(classify_source.count > 0, "Transpilation failed for brickmap classify compute shader.");
-    compute_source := cast([]u8) get_transpiled(.METAL, brickmap_bake_compute);
-    assert(compute_source.count > 0, "Transpilation failed for brickmap compute shaders.");
+    compute_source  := cast([]u8) get_transpiled(.METAL, brickmap_bake_compute);
 
     raster_desc: Gpu_Raster_Desc = .{
         cull = .CW,
@@ -152,7 +148,7 @@ on_dll_init :: () {
     compute_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_bake_pipeline, compute_source, .METAL, brickmap_bake_compute);
     assert(compute_ok, "Brickmap bake compute pipeline hot-reload registration failed.");
 
-    arena_bytes := 256 * 1024 * 1024;
+    arena_bytes := 256 * 1024 * 1024; // TODO: calculate this based on our
     gpu_arena = gpu_make_arena(arena_bytes, label = "brickmap arena");
     assert(gpu_arena.cpu != null, "Brickmap arena allocation failed.");
 
@@ -203,19 +199,12 @@ on_dll_init :: () {
         params_cpu.atlas_sampler_linear_index,
         params_cpu.atlas_sampler_point_index);
 
-    env_edit_after, env_edit_set := Env_Vars.try_parse_env_int("BRICKMAP_EDIT_AFTER");
-    if env_edit_set && env_edit_after >= 0 auto_edit_after = cast(s32) env_edit_after;
-
-    env_log_updates, env_log_set := Env_Vars.try_parse_env_int("BRICKMAP_LOG");
-    if env_log_set log_updates = env_log_updates > 0;
-    env_skip_classify, env_skip_set := Env_Vars.try_parse_env_int("BRICKMAP_SKIP_CLASSIFY");
-    if env_skip_set skip_classify_debug = env_skip_classify > 0;
-    env_auto_fly, env_auto_fly_set := Env_Vars.try_parse_env_int("BRICKMAP_AUTO_FLY_FORWARD");
-    if env_auto_fly_set auto_fly_forward = env_auto_fly > 0;
-    env_auto_fly_speed, env_auto_fly_speed_set := Env_Vars.try_parse_env_int("BRICKMAP_AUTO_FLY_SPEED");
-    if env_auto_fly_speed_set && env_auto_fly_speed > 0 auto_fly_speed = cast(float) env_auto_fly_speed;
-    env_log_validation, env_log_validation_set := Env_Vars.try_parse_env_int("BRICKMAP_LOG_VALIDATION");
-    if env_log_validation_set log_validation_every_frame = env_log_validation > 0;
+    try_parse_env_int("BRICKMAP_EDIT_AFTER", *auto_edit_after);
+    try_parse_env_int("BRICKMAP_LOG", *log_updates);
+    try_parse_env_int("BRICKMAP_SKIP_CLASSIFY", *skip_classify_debug);
+    try_parse_env_int("BRICKMAP_AUTO_FLY_FORWARD", *auto_fly_forward);
+    try_parse_env_int("BRICKMAP_AUTO_FLY_SPEED", *auto_fly_speed);
+    try_parse_env_int("BRICKMAP_LOG_VALIDATION", *log_validation_every_frame);
 
     seed_initial_scene();
     rebuild_bvh();
@@ -256,105 +245,101 @@ ui :: () {
     if Begin("Brickmap", *ui_open) {
         Text("Sparse brickmap SDF raymarch prototype");
         Text("RMB look, WASDQE fly, Shift boost");
-        Checkbox("Draw Debug Grid", *draw_debug_grid);
         _ = toggle("Use Cache Raymarch", *use_cache_raymarch, .{56.0, 0.0}, true, 0.09);
         _ = toggle("Use HW 3D Interp", *use_hw_interp, .{56.0, 0.0}, true, 0.09);
         Checkbox("Atlas Overlay", *show_atlas_overlay);
-        Checkbox("Atlas Fullscreen Debug", *show_atlas_fullscreen);
+        if show_atlas_overlay {
+            SliderFloat("Atlas Slice", *atlas_debug_slice, 0.0, 1.0);
+            Checkbox("Atlas Fullscreen Debug", *show_atlas_fullscreen);
+        }
         Checkbox("Pointer Grid Debug", *show_pointer_grid_debug);
         Checkbox("Bake Gradient Debug", *bake_gradient_debug);
         Checkbox("Skip Classify (Debug)", *skip_classify_debug);
         Checkbox("Cache Debug: Selected LOD", *cache_debug_show_selected_lod);
         Checkbox("Cache Debug: Distance", *cache_debug_show_distance);
         Checkbox("Cache Debug: Force LOD0", *cache_force_lod0);
-        SliderFloat("Atlas Slice", *atlas_debug_slice, 0.0, 1.0);
         Checkbox("Draw Brick Debug", *draw_brick_debug);
         Checkbox("Edit Manip", *edit_manip_enabled);
         Text("Selected edit: %", selected_edit);
         if edit_manip_enabled {
             Text("Manip mode/space: % / %", manip_ctx.mode, manip_ctx.space);
         }
-        Text("Edits: %", params_cpu.edit_count);
-        avg_leaf_depth := ifx bvh.leaf_count > 0 then cast(float) bvh.leaf_depth_sum / cast(float) bvh.leaf_count else 0.0;
-        Text("BVH nodes/leaves: % / %", bvh.node_count, bvh.leaf_count);
-        Text("BVH depth max/avg_leaf: % / %", bvh.max_depth, avg_leaf_depth);
-        Text("Dirty bricks pending: %", pending_dirty_count);
-        Text("Dirty backlog (flags): %", dirty_backlog_count);
-        Text("Dirty bricks after classify: %", params_cpu.dirty_count);
-        Text("Atlas bricks used: % / %", next_atlas_index, BRICKMAP_MAX_BRICKS);
-        Text("Pointer cells allocated: %", count_allocated_cells());
-        Separator();
-        Text("GPU classify candidates: %", params_cpu.debug_classify_candidates);
-        Text("GPU classify surface: %", params_cpu.debug_classify_surface);
-        Text("GPU classify existing/new: % / %", params_cpu.debug_classify_existing, params_cpu.debug_classify_new_alloc);
-        Text("GPU classify rejected(cap): %", params_cpu.debug_classify_rejected_capacity);
-        Text("GPU classify out_count: %", params_cpu.debug_classify_out_count);
-        Text("GPU bake bricks/voxels: % / %", params_cpu.debug_bake_bricks_touched, params_cpu.debug_bake_total_voxels);
-        Text("GPU bake atlas min..max: % .. %", params_cpu.debug_bake_min_atlas, params_cpu.debug_bake_max_atlas);
-        seen_count := cast(s32) min(params_cpu.debug_classify_out_count, cast(u32) BRICKMAP_MAX_DIRTY_BRICKS);
-        seen_min: s32 = 1 << 30;
-        seen_max: s32 = -1;
-        seen_nonzero: s32 = 0;
-        for i: 0..seen_count-1 {
-            v := cast(s32) params_cpu.debug_bake_seen_atlas[i];
-            if v < seen_min seen_min = v;
-            if v > seen_max seen_max = v;
-            if v > 0 seen_nonzero += 1;
-        }
-        if seen_count <= 0 {
-            seen_min = 0;
-            seen_max = 0;
-        }
-        Text("GPU bake seen atlas min..max: % .. %", seen_min, seen_max);
-        Text("GPU bake seen atlas nonzero: % / %", seen_nonzero, seen_count);
-        Separator();
-        Text("VAL scan nonempty/oob/dup: % / % / %",
-            validation_frame.scan_nonempty_cells,
-            validation_frame.scan_oob_atlas_refs,
-            validation_frame.scan_duplicate_atlas_refs);
-        Text("VAL scan above_next/neg_nonempty/holes: % / % / %",
-            validation_frame.scan_above_next_atlas_refs,
-            validation_frame.scan_negative_nonempty_refs,
-            validation_frame.scan_holes_below_next);
-        Text("VAL scan refs/dirty_flags: % / %",
-            validation_frame.scan_referenced_slots,
-            validation_frame.scan_dirty_flag_cells);
-        Text("VAL shift preserve/invalidate/requeue/drop: % / % / % / %",
-            validation_frame.shift_preserved_cells,
-            validation_frame.shift_invalidated_cells,
-            validation_frame.shift_requeued_cells,
-            validation_frame.shift_dropped_cells);
-        Text("VAL queue overflow frame/total: % / %",
-            validation_frame.enqueue_overflow,
-            validation_total.enqueue_overflow);
-        Text("Auto edit after frame: %", auto_edit_after);
-        Text("Auto edit done: %", ifx auto_edit_done then "yes" else "no");
-        Separator();
-        Text("Clip LOD0 origin brick: % % %", lod_info_cpu[0].origin_brick_x, lod_info_cpu[0].origin_brick_y, lod_info_cpu[0].origin_brick_z);
-        Text("Clip LOD1 origin brick: % % %", lod_info_cpu[1].origin_brick_x, lod_info_cpu[1].origin_brick_y, lod_info_cpu[1].origin_brick_z);
-        if Button("apply runtime edit") {
-            apply_runtime_edit();
-        }
-        Separator();
-        Text("Edit List");
-        edit_count := cast(s32) params_cpu.edit_count;
-        if BeginChild("brickmap_edit_list", .{0.0, 180.0}, .None) {
-            if edit_count <= 0 {
-                Text("  (no edits)");
-            } else {
-                for i: 0..edit_count-1 {
-                    edit := edits_cpu[i];
-                    Text("#%  %  %  pos(%, %, %)  r=%  he(%, %, %)",
-                        i,
-                        shape_label(edit.shape),
-                        op_label(edit.op),
-                        edit.position.x, edit.position.y, edit.position.z,
-                        edit.radius,
-                        edit.half_extents.x, edit.half_extents.y, edit.half_extents.z);
+        if TreeNode("Debug Info") {
+            defer TreePop();
+            Text("Edits: %", params_cpu.edit_count);
+            avg_leaf_depth := ifx bvh.leaf_count > 0 then cast(float) bvh.leaf_depth_sum / cast(float) bvh.leaf_count else 0.0;
+            Text("BVH nodes/leaves: % / %", bvh.node_count, bvh.leaf_count);
+            Text("BVH depth max/avg_leaf: % / %", bvh.max_depth, avg_leaf_depth);
+            Text("Dirty bricks pending: %", pending_dirty_count);
+            Text("Dirty backlog (flags): %", dirty_backlog_count);
+            Text("Dirty bricks after classify: %", params_cpu.dirty_count);
+            Text("Atlas bricks used: % / %", next_atlas_index, BRICKMAP_MAX_BRICKS);
+            Text("Pointer cells allocated: %", count_allocated_cells());
+            Separator();
+            {
+                using params_cpu;
+                Text("GPU classify candidates: %", debug_classify_candidates);
+                Text("GPU classify surface: %", debug_classify_surface);
+                Text("GPU classify existing/new: % / %", debug_classify_existing, debug_classify_new_alloc);
+                Text("GPU classify rejected(cap): %", debug_classify_rejected_capacity);
+                Text("GPU classify out_count: %", debug_classify_out_count);
+                Text("GPU bake bricks/voxels: % / %", debug_bake_bricks_touched, debug_bake_total_voxels);
+                Text("GPU bake atlas min..max: % .. %", debug_bake_min_atlas, debug_bake_max_atlas);
+                seen_count := cast(s32) min(params_cpu.debug_classify_out_count, cast(u32) BRICKMAP_MAX_DIRTY_BRICKS);
+                seen_min: s32 = 1 << 30;
+                seen_max: s32 = -1;
+                seen_nonzero: s32 = 0;
+                for i: 0..seen_count-1 {
+                    v := cast(s32) debug_bake_seen_atlas[i];
+                    if v < seen_min seen_min = v;
+                    if v > seen_max seen_max = v;
+                    if v > 0 seen_nonzero += 1;
+                }
+                if seen_count <= 0 {
+                    seen_min = 0;
+                    seen_max = 0;
+                }
+                Text("GPU bake seen atlas min..max: % .. %", seen_min, seen_max);
+                Text("GPU bake seen atlas nonzero: % / %", seen_nonzero, seen_count);
+            }
+            Separator();
+            {
+                using validation_frame;
+                Text("VAL scan nonempty/oob/dup: % / % / %", scan_nonempty_cells, scan_oob_atlas_refs, scan_duplicate_atlas_refs);
+                Text("VAL scan above_next/neg_nonempty/holes: % / % / %", scan_above_next_atlas_refs, scan_negative_nonempty_refs, scan_holes_below_next);
+                Text("VAL scan refs/dirty_flags: % / %", scan_referenced_slots, scan_dirty_flag_cells);
+                Text("VAL shift preserve/invalidate/requeue/drop: % / % / % / %", shift_preserved_cells, shift_invalidated_cells, shift_requeued_cells, shift_dropped_cells);
+                Text("VAL queue overflow frame/total: % / %", enqueue_overflow, enqueue_overflow);
+            }
+            Text("Auto edit after frame: %", auto_edit_after);
+            Text("Auto edit done: %", ifx auto_edit_done then "yes" else "no");
+            Separator();
+            Text("Clip LOD0 origin brick: %", lod_info_cpu[0].origin_brick);
+            Text("Clip LOD1 origin brick: %", lod_info_cpu[1].origin_brick);
+            if Button("apply runtime edit") {
+                apply_runtime_edit();
+            }
+            Separator();
+            Text("Edit List");
+            edit_count := cast(s32) params_cpu.edit_count;
+            if BeginChild("brickmap_edit_list", .{0.0, 180.0}, .None) {
+                if edit_count <= 0 {
+                    Text("  (no edits)");
+                } else {
+                    for i: 0..edit_count-1 {
+                        using edit := edits_cpu[i];
+                        Text("#%  %  %  pos(%)  r=%  he(%)",
+                            i,
+                            shape_label(shape),
+                            op,
+                            position,
+                            edit.radius,
+                            edit.half_extents);
+                    }
                 }
             }
+            EndChild();
         }
-        EndChild();
     }
     End();
 }
@@ -393,11 +378,14 @@ tick :: () {
         using it;
         if type != .KEYBOARD || !key_pressed continue;
         if !edit_manip_enabled continue;
-        if key_code == #char "1" manip_ctx.mode = .TRANSLATE;
-        if key_code == #char "2" manip_ctx.mode = .ROTATE;
-        if key_code == #char "3" manip_ctx.mode = .SCALE;
-        if key_code == #char "4" manip_ctx.space = .WORLD;
-        if key_code == #char "5" manip_ctx.space = .LOCAL;
+        using manip_ctx;
+        if key_code == {
+            case #char "1"; mode = .TRANSLATE;
+            case #char "2"; manip_ctx.mode = .ROTATE;
+            case #char "3"; manip_ctx.mode = .SCALE;
+            case #char "4"; manip_ctx.space = .WORLD;
+            case #char "5"; manip_ctx.space = .LOCAL;
+        }
     }
 
     _ = editor_camera_update(*camera, dt, mx, my, mouse_ok,
@@ -425,21 +413,22 @@ tick :: () {
             seen_max = 0;
         }
 
+        using params_cpu;
         log("BRICKMAP_GPU_DEBUG edits=% dirty_pending=% dirty_after=% atlas_used=%/% ptr_cells=% classify(cand=% surf=% exist=% new=% reject=% out=%) bake(bricks=% voxels=% atlas=%..% seen=%..% nonzero=%/%)",
-            params_cpu.edit_count,
+            edit_count,
             pending_dirty_count,
-            params_cpu.dirty_count,
+            dirty_count,
             next_atlas_index, BRICKMAP_MAX_BRICKS,
             count_allocated_cells(),
-            params_cpu.debug_classify_candidates,
-            params_cpu.debug_classify_surface,
-            params_cpu.debug_classify_existing,
-            params_cpu.debug_classify_new_alloc,
-            params_cpu.debug_classify_rejected_capacity,
-            params_cpu.debug_classify_out_count,
-            params_cpu.debug_bake_bricks_touched,
-            params_cpu.debug_bake_total_voxels,
-            params_cpu.debug_bake_min_atlas, params_cpu.debug_bake_max_atlas,
+            debug_classify_candidates,
+            debug_classify_surface,
+            debug_classify_existing,
+            debug_classify_new_alloc,
+            debug_classify_rejected_capacity,
+            debug_classify_out_count,
+            debug_bake_bricks_touched,
+            debug_bake_total_voxels,
+            debug_bake_min_atlas, debug_bake_max_atlas,
             seen_min, seen_max, seen_nonzero, seen_count);
         debug_autolog_once = true;
     }
@@ -486,9 +475,9 @@ tick :: () {
     editor_camera_basis(*camera, *params_cpu.camera_forward, *params_cpu.camera_right, *params_cpu.camera_up);
     for lod: 0..BRICKMAP_LOD_COUNT-1 {
         info := lod_info_cpu[lod];
-        params_cpu.lod_origin_brick_x[lod] = info.origin_brick_x;
-        params_cpu.lod_origin_brick_y[lod] = info.origin_brick_y;
-        params_cpu.lod_origin_brick_z[lod] = info.origin_brick_z;
+        params_cpu.lod_origin_brick_x[lod] = info.origin_brick.x;
+        params_cpu.lod_origin_brick_y[lod] = info.origin_brick.y;
+        params_cpu.lod_origin_brick_z[lod] = info.origin_brick.z;
         params_cpu.lod_voxel_size[lod] = info.voxel_size;
     }
     draw_any_gizmo := (draw_brick_debug || edit_manip_enabled) && dims_ok && win_w > 0 && win_h > 0;
@@ -573,11 +562,12 @@ tick :: () {
     edit_count := cast(s32) params_cpu.edit_count;
     for i: 0..edit_count-1 {
         e := edits_cpu[i];
-        params_cpu.edit_shape[i] = e.shape;
-        params_cpu.edit_op[i] = e.op;
-        params_cpu.edit_pos_radius[i] = .{e.position.x, e.position.y, e.position.z, e.radius};
-        params_cpu.edit_half_extents_blend[i] = .{e.half_extents.x, e.half_extents.y, e.half_extents.z, e.blend};
-        params_cpu.edit_rotation[i] = .{e.rotation.x, e.rotation.y, e.rotation.z, e.rotation.w};
+        using params_cpu;
+        edit_shape[i] = e.shape;
+        edit_op[i] = e.op;
+        edit_pos_radius[i] = .{e.position.x, e.position.y, e.position.z, e.radius};
+        edit_half_extents_blend[i] = .{e.half_extents.x, e.half_extents.y, e.half_extents.z, e.blend};
+        edit_rotation[i] = e.rotation;
     }
     for i: 0..pending_dirty_count-1 {
         req := dirty_cpu[i];
@@ -595,32 +585,36 @@ tick :: () {
         params_cpu.atlas_alloc_next = cast(u32) next_atlas_index;
 
         if skip_classify_debug {
-            params_cpu.debug_classify_candidates = cast(u32) pending_dirty_count;
-            params_cpu.dirty_count = cast(u32) pending_dirty_count;
+            using params_cpu;
+            debug_classify_candidates = cast(u32) pending_dirty_count;
+            dirty_count = cast(u32) pending_dirty_count;
             for i: 0..pending_dirty_count-1 {
-                params_cpu.dirty_atlas_index[i] = cast(u32) i;
-                params_cpu.dirty_classify_result[i] = 1;
+                dirty_atlas_index[i] = cast(u32) i;
+                dirty_classify_result[i] = 1;
             }
-            params_cpu.debug_classify_out_count = cast(u32) pending_dirty_count;
-            params_cpu.debug_bake_min_atlas = 0;
-            params_cpu.debug_bake_max_atlas = cast(u32) max(0, pending_dirty_count - 1);
+            debug_classify_out_count = cast(u32) pending_dirty_count;
+            debug_bake_min_atlas = 0;
+            debug_bake_max_atlas = cast(u32) max(0, pending_dirty_count - 1);
             if next_atlas_index < pending_dirty_count {
                 next_atlas_index = pending_dirty_count;
-                params_cpu.atlas_alloc_next = cast(u32) next_atlas_index;
+                atlas_alloc_next = cast(u32) next_atlas_index;
             }
             bake_threads = pending_dirty_count * BRICKMAP_BRICK_TEXELS;
         } else {
-            params_cpu.debug_classify_candidates = cast(u32) pending_dirty_count;
-            params_cpu.debug_classify_surface = 0;
-            params_cpu.debug_classify_existing = 0;
-            params_cpu.debug_classify_new_alloc = 0;
-            params_cpu.debug_classify_rejected_capacity = 0;
-            params_cpu.debug_classify_out_count = 0;
-            params_cpu.dirty_count = 0;
-            params_cpu.debug_bake_total_voxels = 0;
-            params_cpu.debug_bake_bricks_touched = 0;
-            params_cpu.debug_bake_min_atlas = cast(u32) 0xFFFFFFFF;
-            params_cpu.debug_bake_max_atlas = 0;
+            {
+                using params_cpu;
+                debug_classify_candidates = cast(u32) pending_dirty_count;
+                debug_classify_surface = 0;
+                debug_classify_existing = 0;
+                debug_classify_new_alloc = 0;
+                debug_classify_rejected_capacity = 0;
+                debug_classify_out_count = 0;
+                dirty_count = 0;
+                debug_bake_total_voxels = 0;
+                debug_bake_bricks_touched = 0;
+                debug_bake_min_atlas = cast(u32) 0xFFFFFFFF;
+                debug_bake_max_atlas = 0;
+            }
 
             result=, classify_cmd := gpu_start_command_recording(main_queue);
             assert(result == .SUCCESS);
@@ -699,10 +693,6 @@ tick :: () {
     draw_result := gpu_draw_instanced(cmd_buff, 0, params_gpu, 3, 1);
     assert(draw_result == .SUCCESS, tprint("Brickmap draw failed: %", draw_result));
 
-    if draw_debug_grid {
-        // Optional visual debug in future pass.
-    }
-
     if draw_any_gizmo {
         viewport := Vector2.{cast(float) win_w, cast(float) win_h};
         gizmo_draw_result := Gizmo_Render.gizmo_render_draw(*gizmo_render_ctx, cmd_buff, *gizmo_ctx, viewport, depth_mode = .NONE);
@@ -722,7 +712,7 @@ tick :: () {
 #load "../ui/toggle_widget.jai";
 #load "../ui/manip.jai";
 
-Env_Vars :: #import "Env_Vars";
+using,only(try_parse_env_int) _ :: #import "Env_Vars";
 Input :: #import "Input";
 ImGui :: #import "ImGui";
 Gizmo :: #import "Gizmo";
@@ -847,17 +837,17 @@ update_lod_origins :: (camera_moved: bool) {
         origin_z := cast(s32) floor(camera.position.z / brick_world_size) - BRICKMAP_GRID_RES / 2;
 
         info := lod_info_cpu[lod];
-        if info.origin_brick_x != origin_x || info.origin_brick_y != origin_y || info.origin_brick_z != origin_z {
+        if info.origin_brick.x != origin_x || info.origin_brick.y != origin_y || info.origin_brick.z != origin_z {
             changed = true;
             if !force_full_rebuild {
                 queued_total += shift_lod_cache_for_origin_delta(
                     cast(s32) lod,
-                    info.origin_brick_x, info.origin_brick_y, info.origin_brick_z,
+                    info.origin_brick.x, info.origin_brick.y, info.origin_brick.z,
                     origin_x, origin_y, origin_z);
             }
-            lod_info_cpu[lod].origin_brick_x = origin_x;
-            lod_info_cpu[lod].origin_brick_y = origin_y;
-            lod_info_cpu[lod].origin_brick_z = origin_z;
+            lod_info_cpu[lod].origin_brick.x = origin_x;
+            lod_info_cpu[lod].origin_brick.y = origin_y;
+            lod_info_cpu[lod].origin_brick.z = origin_z;
         }
         lod_info_cpu[lod].voxel_size = voxel_size;
     }
@@ -1027,12 +1017,12 @@ mark_dirty_aabb :: (bounds: AABB, reason: string) {
         bx1 := cast(s32) floor(bounds.max.x / brick_world_size);
         by1 := cast(s32) floor(bounds.max.y / brick_world_size);
         bz1 := cast(s32) floor(bounds.max.z / brick_world_size);
-        lx0 := bx0 - info.origin_brick_x;
-        ly0 := by0 - info.origin_brick_y;
-        lz0 := bz0 - info.origin_brick_z;
-        lx1 := bx1 - info.origin_brick_x;
-        ly1 := by1 - info.origin_brick_y;
-        lz1 := bz1 - info.origin_brick_z;
+        lx0 := bx0 - info.origin_brick.x;
+        ly0 := by0 - info.origin_brick.y;
+        lz0 := bz0 - info.origin_brick.z;
+        lx1 := bx1 - info.origin_brick.x;
+        ly1 := by1 - info.origin_brick.y;
+        lz1 := bz1 - info.origin_brick.z;
         if lx0 < 0 lx0 = 0;
         if ly0 < 0 ly0 = 0;
         if lz0 < 0 lz0 = 0;
@@ -1123,9 +1113,9 @@ build_dirty_batch_from_flags :: (max_batch: s32) -> s32 {
 
                     dirty_cpu[out_count] = .{
                         lod = cast(u32) lod,
-                        brick_x = info.origin_brick_x + lx,
-                        brick_y = info.origin_brick_y + ly,
-                        brick_z = info.origin_brick_z + lz,
+                        brick_x = info.origin_brick.x + lx,
+                        brick_y = info.origin_brick.y + ly,
+                        brick_z = info.origin_brick.z + lz,
                         atlas_index = 0,
                     };
                     out_count += 1;
@@ -1149,9 +1139,9 @@ clear_processed_dirty_flags_from_batch :: (processed_count: s32) {
         lod := cast(s32) req.lod;
         if lod < 0 || lod >= BRICKMAP_LOD_COUNT continue;
         info := lod_info_cpu[lod];
-        lx := req.brick_x - info.origin_brick_x;
-        ly := req.brick_y - info.origin_brick_y;
-        lz := req.brick_z - info.origin_brick_z;
+        lx := req.brick_x - info.origin_brick.x;
+        ly := req.brick_y - info.origin_brick.y;
+        lz := req.brick_z - info.origin_brick.z;
         if lx < 0 || ly < 0 || lz < 0 continue;
         if lx >= BRICKMAP_GRID_RES || ly >= BRICKMAP_GRID_RES || lz >= BRICKMAP_GRID_RES continue;
         idx_local := flatten_3d(lx, ly, lz, BRICKMAP_GRID_RES);
@@ -1171,9 +1161,9 @@ clear_processed_dirty_flags_from_gpu :: (processed_count: s32) {
         bz := cast(s32) req.w;
 
         info := lod_info_cpu[lod];
-        lx := bx - info.origin_brick_x;
-        ly := by - info.origin_brick_y;
-        lz := bz - info.origin_brick_z;
+        lx := bx - info.origin_brick.x;
+        ly := by - info.origin_brick.y;
+        lz := bz - info.origin_brick.z;
         if lx < 0 || ly < 0 || lz < 0 continue;
         if lx >= BRICKMAP_GRID_RES || ly >= BRICKMAP_GRID_RES || lz >= BRICKMAP_GRID_RES continue;
         idx_local := flatten_3d(lx, ly, lz, BRICKMAP_GRID_RES);
@@ -1190,9 +1180,9 @@ apply_classify_results_to_dirty_flags :: (candidate_count: s32) {
         if lod < 0 || lod >= BRICKMAP_LOD_COUNT continue;
 
         info := lod_info_cpu[lod];
-        lx := req.brick_x - info.origin_brick_x;
-        ly := req.brick_y - info.origin_brick_y;
-        lz := req.brick_z - info.origin_brick_z;
+        lx := req.brick_x - info.origin_brick.x;
+        ly := req.brick_y - info.origin_brick.y;
+        lz := req.brick_z - info.origin_brick.z;
         if lx < 0 || ly < 0 || lz < 0 continue;
         if lx >= BRICKMAP_GRID_RES || ly >= BRICKMAP_GRID_RES || lz >= BRICKMAP_GRID_RES continue;
 
@@ -1336,9 +1326,9 @@ build_debug_gizmos :: () {
                     cell := lod * BRICKMAP_GRID_CELLS + cell_local;
                     if pointer_grid_cpu[cell] < 0 continue;
 
-                    bx := lx + info.origin_brick_x;
-                    by := ly + info.origin_brick_y;
-                    bz := lz + info.origin_brick_z;
+                    bx := lx + info.origin_brick.x;
+                    by := ly + info.origin_brick.y;
+                    bz := lz + info.origin_brick.z;
                     center := Vector3.{
                         (cast(float) bx + 0.5) * brick_world_size,
                         (cast(float) by + 0.5) * brick_world_size,
@@ -1655,11 +1645,4 @@ shape_label :: (shape: u32) -> string {
     if shape == SDF_SHAPE_BOX return "box";
     if shape == SDF_SHAPE_SPHERE return "sphere";
     return "unknown-shape";
-}
-
-op_label :: (op: u32) -> string {
-    if op == SDF_OP_UNION return "union";
-    if op == SDF_OP_SUBTRACT return "subtract";
-    if op == SDF_OP_INTERSECT return "intersect";
-    return "unknown-op";
 }
