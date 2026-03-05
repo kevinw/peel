@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Block commits that stage lines containing the sentinel "nocommit".
+# Exclude this hook file so the matcher can be committed.
+if git diff --cached --no-color --unified=0 -- . ':(exclude).githooks/pre-commit' | grep -E '^\+[^+].*nocommit' >/dev/null; then
+  echo "pre-commit: blocked because staged changes contain 'nocommit'."
+  echo "Remove the marker before committing."
+  echo
+  git diff --cached --no-color --unified=0 -- . ':(exclude).githooks/pre-commit' | grep -n -E '^\+[^+].*nocommit' || true
+  exit 1
+fi
+
+exit 0
