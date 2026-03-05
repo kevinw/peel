@@ -22,35 +22,20 @@ Editor_Camera_Update_Result :: struct {
     looked: bool;
 }
 
-editor_camera_forward_from_angles :: (yaw: float, pitch: float) -> Vector3 {
-    cp := cos(pitch);
-    return .{
-        sin(yaw) * cp,
-        sin(pitch),
-        -cos(yaw) * cp,
-    };
-}
-
-editor_camera_angles_from_forward :: (forward: Vector3) -> (yaw: float, pitch: float) {
-    n := forward;
-    normalize(*n, fallback = .{0.0, 0.0, -1.0});
-    return atan2(n.x, -n.z), asin(clamp(n.y, -1.0, 1.0));
-}
-
-editor_camera_set_forward :: (camera: *Editor_Camera, forward: Vector3) {
-    camera.yaw, camera.pitch = editor_camera_angles_from_forward(forward);
-    camera.pitch = clamp(camera.pitch, camera.pitch_min, camera.pitch_max);
+editor_camera_set_forward :: (using camera: *Editor_Camera, forward: Vector3) {
+    yaw, pitch = editor_camera_angles_from_forward(forward);
+    pitch = clamp(pitch, pitch_min, pitch_max);
 }
 
 editor_camera_set_look_at :: (camera: *Editor_Camera, target: Vector3) {
     editor_camera_set_forward(camera, target - camera.position);
 }
 
-editor_camera_basis :: (camera: *Editor_Camera, forward: *Vector3, right: *Vector3, up: *Vector3) {
-    f := editor_camera_forward_from_angles(camera.yaw, camera.pitch);
+editor_camera_basis :: (using camera: *Editor_Camera, forward: *Vector3, right: *Vector3, up: *Vector3) {
+    f := editor_camera_forward_from_angles(yaw, pitch);
     normalize(*f, fallback = .{0.0, 0.0, -1.0});
 
-    up_axis := camera.world_up;
+    up_axis := world_up;
     if dot(up_axis, up_axis) < 0.000001 {
         up_axis = .{0.0, 1.0, 0.0};
     }
@@ -77,7 +62,7 @@ editor_camera_make_view :: (camera: *Editor_Camera) -> Matrix4 {
 }
 
 editor_camera_update :: (
-    camera: *Editor_Camera,
+    using camera: *Editor_Camera,
     dt: float,
     mouse_x: s64,
     mouse_y: s64,
@@ -89,19 +74,19 @@ editor_camera_update :: (
 
     if allow_look && mouse_valid {
         mouse := Vector2.{cast(float) mouse_x, cast(float) mouse_y};
-        if camera.have_prev_mouse {
-            delta := mouse - camera.prev_mouse;
+        if have_prev_mouse {
+            delta := mouse - prev_mouse;
             if delta.x != 0.0 || delta.y != 0.0 {
-                camera.yaw += delta.x * camera.mouse_sensitivity;
-                camera.pitch += delta.y * camera.mouse_sensitivity;
-                camera.pitch = clamp(camera.pitch, camera.pitch_min, camera.pitch_max);
+                yaw += delta.x * mouse_sensitivity;
+                pitch += delta.y * mouse_sensitivity;
+                pitch = clamp(camera.pitch, pitch_min, pitch_max);
                 result.looked = true;
             }
         }
-        camera.prev_mouse = mouse;
-        camera.have_prev_mouse = true;
+        prev_mouse = mouse;
+        have_prev_mouse = true;
     } else {
-        camera.have_prev_mouse = false;
+        have_prev_mouse = false;
     }
 
     if allow_move {
@@ -109,12 +94,12 @@ editor_camera_update :: (
         editor_camera_basis(camera, *forward, *right, *up);
 
         move := Vector3.{0.0, 0.0, 0.0};
-        if camera.move_planar {
+        if move_planar {
             forward = .{forward.x, 0.0, forward.z};
             normalize(*forward, fallback = .{0.0, 0.0, -1.0});
             right = .{right.x, 0.0, right.z};
             normalize(*right, fallback = .{1.0, 0.0, 0.0});
-            up = camera.world_up;
+            up = world_up;
         }
 
         if Input.input_button_states[cast(Input.Key_Code) #char "W"] & .DOWN move += forward;
@@ -131,7 +116,7 @@ editor_camera_update :: (
             if Input.input_button_states[Input.Key_Code.SHIFT] & .DOWN {
                 speed *= max(1.0, camera.boost_multiplier);
             }
-            camera.position += move * (speed * dt);
+            position += move * (speed * dt);
             result.moved = true;
         }
     }
@@ -140,6 +125,21 @@ editor_camera_update :: (
 }
 
 #scope_file
+
+editor_camera_forward_from_angles :: (yaw: float, pitch: float) -> Vector3 {
+    cp := cos(pitch);
+    return .{
+        sin(yaw) * cp,
+        sin(pitch),
+        -cos(yaw) * cp,
+    };
+}
+
+editor_camera_angles_from_forward :: (forward: Vector3) -> (yaw: float, pitch: float) {
+    n := forward;
+    normalize(*n, fallback = .{0.0, 0.0, -1.0});
+    return atan2(n.x, -n.z), asin(clamp(n.y, -1.0, 1.0));
+}
 
 #import "Math";
 Input :: #import "Input";
