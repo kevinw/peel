@@ -75,11 +75,14 @@ dirty_storage: [BRICKMAP_MAX_DIRTY_BRICKS] Brick_Request;
 dirty_cpu: []Brick_Request;
 atlas_texture: Gpu_Texture;
 atlas_view: Gpu_Texture_View;
+atlas_albedo_texture: Gpu_Texture;
+atlas_albedo_view: Gpu_Texture_View;
 atlas_linear_sampler: Gpu_Sampler;
 atlas_point_sampler: Gpu_Sampler;
 render_texture: Gpu_Texture;
 render_view: Gpu_Texture_View;
 render_sampler: Gpu_Sampler;
+render_point_sampler: Gpu_Sampler;
 render_width: s32;
 render_height: s32;
 
@@ -130,19 +133,15 @@ log_validation_every_frame := false;
 debug_wait_idle_every_frame := false;
 debug_strict_compute_sync := true;
 debug_render_direct_swapchain := false;
-force_disable_shader_debug_flags := true;
-metal_capture_frame: s32 = -1;
-metal_capture_open_trace := false;
-metal_capture_started := false;
-metal_capture_done := false;
 atlas_debug_slice: float = 0.5;
 render_scale: float = 0.75;
+blit_nearest := false;
 debug_autolog_once := false;
 guard_corruption_count: s32;
 guard_corruption_reported := false;
 params_ring_last_slot: s64 = -1;
 bindless_index_logged_once := false;
-BRICKMAP_RANDOM_STARTUP_EDITS :: 3000;
+BRICKMAP_RANDOM_STARTUP_EDITS :: 4000;
 BRICKMAP_RANDOM_STARTUP_SEED  :: cast(u64) 0xB17C_A11A_5EED;
 
 gizmo_ctx: Gizmo.Gizmo_Context;
@@ -232,6 +231,16 @@ on_dll_init :: () {
     assert(atlas_texture != 0, "Brickmap atlas texture handle invalid.");
     atlas_view = gpu_texture_view(atlas_texture);
     assert(atlas_view != 0, "Brickmap atlas texture view creation failed.");
+    texture_result, atlas_albedo_texture = gpu_create_texture(.{
+        type = ._3D,
+        dimensions = .[BRICKMAP_ATLAS_DIM_X, BRICKMAP_ATLAS_DIM_Y, BRICKMAP_ATLAS_DIM_Z],
+        format = .R8G8B8A8_UNORM,
+        usage = .SAMPLED | .STORAGE,
+    });
+    assert(texture_result == .SUCCESS, tprint("Brickmap atlas albedo texture creation failed: %", texture_result));
+    assert(atlas_albedo_texture != 0, "Brickmap atlas albedo texture handle invalid.");
+    atlas_albedo_view = gpu_texture_view(atlas_albedo_texture);
+    assert(atlas_albedo_view != 0, "Brickmap atlas albedo texture view creation failed.");
     atlas_linear_sampler = gpu_create_sampler(.{
         min_filter = .LINEAR, mag_filter = .LINEAR, mip_filter = .NEAREST,
         address_mode_u = .CLAMP_TO_EDGE, address_mode_v = .CLAMP_TO_EDGE, address_mode_w = .CLAMP_TO_EDGE,
@@ -243,6 +252,7 @@ on_dll_init :: () {
     });
     assert(atlas_point_sampler != 0, "Brickmap atlas point sampler creation failed.");
     params_cpu.atlas_texture_index = cast(u32) atlas_view - 1;
+    params_cpu.atlas_albedo_texture_index = cast(u32) atlas_albedo_view - 1;
     params_cpu.atlas_sampler_linear_index = cast(u32) atlas_linear_sampler - 1;
     params_cpu.atlas_sampler_point_index = cast(u32) atlas_point_sampler - 1;
     render_sampler = gpu_create_sampler(.{
@@ -250,6 +260,11 @@ on_dll_init :: () {
         address_mode_u = .CLAMP_TO_EDGE, address_mode_v = .CLAMP_TO_EDGE, address_mode_w = .CLAMP_TO_EDGE,
     });
     assert(render_sampler != 0, "Brickmap render sampler creation failed.");
+    render_point_sampler = gpu_create_sampler(.{
+        min_filter = .NEAREST, mag_filter = .NEAREST, mip_filter = .NEAREST,
+        address_mode_u = .CLAMP_TO_EDGE, address_mode_v = .CLAMP_TO_EDGE, address_mode_w = .CLAMP_TO_EDGE,
+    });
+    assert(render_point_sampler != 0, "Brickmap render point sampler creation failed.");
 
     try_parse_env_int("BRICKMAP_EDIT_AFTER", *auto_edit_after);
     try_parse_env_int("BRICKMAP_LOG", *log_updates);
@@ -260,9 +275,7 @@ on_dll_init :: () {
     try_parse_env_int("BRICKMAP_DEBUG_WAIT_IDLE", *debug_wait_idle_every_frame);
     try_parse_env_int("BRICKMAP_DEBUG_STRICT_COMPUTE_SYNC", *debug_strict_compute_sync);
     try_parse_env_int("BRICKMAP_DEBUG_DIRECT_SWAPCHAIN", *debug_render_direct_swapchain);
-    try_parse_env_int("BRICKMAP_FORCE_DISABLE_SHADER_DEBUG_FLAGS", *force_disable_shader_debug_flags);
-    try_parse_env_int("BRICKMAP_METAL_CAPTURE_FRAME", *metal_capture_frame);
-    try_parse_env_int("BRICKMAP_METAL_CAPTURE_OPEN", *metal_capture_open_trace);
+    try_parse_env_int("BRICKMAP_BLIT_NEAREST", *blit_nearest);
 
     seed_initial_scene();
     rebuild_bvh();
@@ -296,8 +309,11 @@ on_unload :: () {
     if render_view != 0 gpu_free_texture_view(render_view);
     if render_texture != 0 gpu_free(render_texture);
     gpu_free(render_sampler);
+    gpu_free(render_point_sampler);
     gpu_free(atlas_point_sampler);
     gpu_free(atlas_linear_sampler);
+    gpu_free_texture_view(atlas_albedo_view);
+    gpu_free(atlas_albedo_texture);
     gpu_free_texture_view(atlas_view);
     gpu_free(atlas_texture);
     array_free(manip_objects);
@@ -315,6 +331,7 @@ ui :: () {
         _ = toggle("Use Cache Raymarch", *use_cache_raymarch, .{56.0, 0.0}, true, 0.09);
         _ = toggle("Use HW 3D Interp", *use_hw_interp, .{56.0, 0.0}, true, 0.09);
         SliderFloat("Render Scale", *render_scale, 0.25, 1.0);
+        Checkbox("Blit Nearest (No Filter)", *blit_nearest);
         Text("Render target: % x %", render_width, render_height);
         Checkbox("Atlas Overlay", *show_atlas_overlay);
         if show_atlas_overlay {
@@ -328,7 +345,6 @@ ui :: () {
         Checkbox("Debug Strict Compute Sync", *debug_strict_compute_sync);
         Checkbox("Debug Direct Swapchain", *debug_render_direct_swapchain);
         Checkbox("Debug Force Flat Color", *debug_force_flat_color);
-        Checkbox("Force Disable Shader Debug Flags", *force_disable_shader_debug_flags);
         Checkbox("Cache Debug: Selected LOD", *cache_debug_show_selected_lod);
         Checkbox("Cache Debug: Distance", *cache_debug_show_distance);
         Checkbox("Cache Debug: Cell State", *cache_debug_show_cell_state);
@@ -338,6 +354,38 @@ ui :: () {
         Text("Selected edit: %", selected_edit);
         if edit_manip_enabled {
             Text("Manip mode/space: % / %", manip_ctx.mode, manip_ctx.space);
+        }
+        if selected_edit >= 0 && cast(s64) selected_edit < edits_cpu.count {
+            Separator();
+            Text("Inspector");
+            idx := cast(s64) selected_edit;
+            old_bounds := edit_bounds(selected_edit);
+            changed := false;
+
+            sphere_selected := edits_cpu[idx].shape == .Sphere;
+            box_selected := edits_cpu[idx].shape == .Box;
+            if RadioButton("Sphere", sphere_selected) {
+                edits_cpu[idx].shape = .Sphere;
+                changed = true;
+            }
+            SameLine();
+            if RadioButton("Box", box_selected) {
+                edits_cpu[idx].shape = .Box;
+                changed = true;
+            }
+
+            blend := edits_cpu[idx].blend;
+            if SliderFloat("Blend", *blend, 0.0, 1.0) {
+                edits_cpu[idx].blend = blend;
+                changed = true;
+            }
+
+            if changed {
+                rebuild_bvh();
+                new_bounds := edit_bounds(selected_edit);
+                mark_dirty_aabb(old_bounds, "inspector_old");
+                mark_dirty_aabb(new_bounds, "inspector_new");
+            }
         }
         if TreeNode("Debug Info") {
             defer TreePop();
@@ -440,17 +488,6 @@ tick :: () {
     pointer_grid_valid_cpu = params_cpu.pointer_grid_valid;
     pointer_grid_publish_cpu = params_cpu.pointer_grid_publish_frame;
 
-    check_params_guards("frame_start");
-    if !metal_capture_done && !metal_capture_started && metal_capture_frame >= 0 && frame_count == metal_capture_frame {
-        capture_result := gpu_capture_start();
-        if capture_result == .SUCCESS {
-            metal_capture_started = true;
-            log("BRICKMAP Metal capture started at frame=%", frame_count);
-        } else {
-            log_error("BRICKMAP Metal capture start failed frame=% result=%", frame_count, capture_result);
-            metal_capture_done = true;
-        }
-    }
     main_queue := gpu_get_queue(.MAIN, 0);
     if debug_wait_idle_every_frame {
         gpu_queue_wait_idle(main_queue);
@@ -572,7 +609,7 @@ tick :: () {
             }
             params_cpu.resolution = .{cast(float) render_width, cast(float) render_height};
             blit_params_cpu.source_texture_index = cast(u32) render_view - 1;
-            blit_params_cpu.source_sampler_index = cast(u32) render_sampler - 1;
+            blit_params_cpu.source_sampler_index = cast(u32) blit_sampler_handle() - 1;
             log_bindless_indices_once();
         }
     }
@@ -590,16 +627,6 @@ tick :: () {
     params_cpu.debug_force_flat_color = to_u32(debug_force_flat_color);
     params_cpu.cache_force_lod0 = to_u32(cache_force_lod0);
     params_cpu.frame_index = cast(u32) frame_count;
-    if force_disable_shader_debug_flags {
-        params_cpu.atlas_debug_overlay = 0;
-        params_cpu.atlas_debug_fullscreen = 0;
-        params_cpu.pointer_grid_debug = 0;
-        params_cpu.bake_debug_gradient = 0;
-        params_cpu.cache_debug_show_selected_lod = 0;
-        params_cpu.cache_debug_show_distance = 0;
-        params_cpu.cache_debug_show_cell_state = 0;
-        params_cpu.cache_force_lod0 = 0;
-    }
     params_cpu.atlas_debug_slice = clamp(atlas_debug_slice, 0.0, 1.0);
     params_cpu.camera_pos = camera.position;
     params_cpu.camera_fov_y = PI / 3.0;
@@ -703,6 +730,7 @@ tick :: () {
         edit_pos_radius[i] = .{e.position.x, e.position.y, e.position.z, e.radius};
         edit_half_extents_blend[i] = .{e.half_extents.x, e.half_extents.y, e.half_extents.z, e.blend};
         edit_rotation[i] = e.rotation;
+        edit_albedo[i] = e.albedo;
     }
     for i: 0..pending_dirty_count-1 {
         req := dirty_cpu[i];
@@ -761,7 +789,6 @@ tick :: () {
             }
             gpu_submit(classify_cmd);
             gpu_queue_wait_idle(main_queue);
-            check_params_guards("post_classify");
 
             gpu_next_atlas_after := cast(s32) params_cpu.atlas_alloc_next;
             if gpu_next_atlas_after > BRICKMAP_MAX_BRICKS {
@@ -901,12 +928,6 @@ tick :: () {
     }
 
     submit_and_present_with_ui(cmd_buff);
-    if metal_capture_started {
-        gpu_capture_end(open = metal_capture_open_trace);
-        metal_capture_started = false;
-        metal_capture_done = true;
-        log("BRICKMAP Metal capture ended at frame=%", frame_count);
-    }
 } @on_tick
 
 #scope_file
@@ -928,16 +949,23 @@ scaled_dim :: (dim: s32, scale: float) -> s32 {
     return max(cast(s32) 1, rounded);
 }
 
+blit_sampler_handle :: () -> Gpu_Sampler {
+    if blit_nearest return render_point_sampler;
+    return render_sampler;
+}
+
 log_bindless_indices_once :: () {
     if bindless_index_logged_once return;
     bindless_index_logged_once = true;
-    log("BRICKMAP_BINDLESS atlas_tex=% atlas_lin=% atlas_point=% blit_tex=% blit_sampler=%",
+    log("BRICKMAP_BINDLESS atlas_tex=% atlas_albedo=% atlas_lin=% atlas_point=% blit_tex=% blit_sampler=%",
         params_cpu.atlas_texture_index,
+        params_cpu.atlas_albedo_texture_index,
         params_cpu.atlas_sampler_linear_index,
         params_cpu.atlas_sampler_point_index,
         blit_params_cpu.source_texture_index,
         blit_params_cpu.source_sampler_index);
-    if params_cpu.atlas_texture_index > 15 || params_cpu.atlas_sampler_linear_index > 15 || params_cpu.atlas_sampler_point_index > 15 ||
+    if params_cpu.atlas_texture_index > 15 || params_cpu.atlas_albedo_texture_index > 15 ||
+       params_cpu.atlas_sampler_linear_index > 15 || params_cpu.atlas_sampler_point_index > 15 ||
        blit_params_cpu.source_texture_index > 15 || blit_params_cpu.source_sampler_index > 15 {
         log_error("BRICKMAP_BINDLESS exceeds transpiler bindless clamp (15). This can cause wrong resource sampling.");
     }
@@ -952,34 +980,6 @@ init_params_guards :: () {
         params_guard_before_cpu.*[i] = BRICKMAP_PARAMS_GUARD_BEFORE;
         params_guard_after_cpu.*[i] = BRICKMAP_PARAMS_GUARD_AFTER;
     }
-}
-
-check_params_guards :: (stage: string) {
-    first_before_bad := -1;
-    first_after_bad := -1;
-    before_bad_count: s32 = 0;
-    after_bad_count: s32 = 0;
-
-    for i: 0..BRICKMAP_PARAMS_GUARD_BYTES-1 {
-        if params_guard_before_cpu.*[i] != BRICKMAP_PARAMS_GUARD_BEFORE {
-            before_bad_count += 1;
-            if first_before_bad < 0 first_before_bad = i;
-        }
-        if params_guard_after_cpu.*[i] != BRICKMAP_PARAMS_GUARD_AFTER {
-            after_bad_count += 1;
-            if first_after_bad < 0 first_after_bad = i;
-        }
-    }
-
-    if before_bad_count <= 0 && after_bad_count <= 0 return;
-
-    guard_corruption_count += 1;
-    if !guard_corruption_reported || guard_corruption_count <= 6 {
-        log_error("BRICKMAP params guard corruption stage=% frame=% before_bad=% first_before=% after_bad=% first_after=% total=%",
-            stage, frame_count, before_bad_count, first_before_bad, after_bad_count, first_after_bad, guard_corruption_count);
-    }
-    guard_corruption_reported = true;
-    init_params_guards();
 }
 
 ensure_render_target :: (win_w: s32, win_h: s32) -> bool {
@@ -1025,7 +1025,7 @@ ensure_render_target :: (win_w: s32, win_h: s32) -> bool {
     render_width = target_w;
     render_height = target_h;
     blit_params_cpu.source_texture_index = cast(u32) render_view - 1;
-    blit_params_cpu.source_sampler_index = cast(u32) render_sampler - 1;
+    blit_params_cpu.source_sampler_index = cast(u32) blit_sampler_handle() - 1;
     // Runtime-created offscreen target must be committed into the residency set.
     gpu_commit_residency();
     return true;
@@ -1034,22 +1034,28 @@ ensure_render_target :: (win_w: s32, win_h: s32) -> bool {
 seed_initial_scene :: () {
     count: s32 = 0;
 
-    add_sphere(*count, .{-2.1, 0.3, -3.8}, 1.1);
-    add_sphere(*count, .{1.8, -0.1, -4.9}, 1.4);
-    add_box(*count, .{0.0, 0.2, -6.7}, .{1.1, 0.9, 1.1}, .{0.18, 0.35, 0.05});
-    add_box(*count, .{-3.8, -0.2, -8.2}, .{0.9, 1.5, 0.9}, .{0.0, 0.42, 0.0});
-    add_sphere(*count, .{-0.1, 0.6, -6.7}, 0.85, op = .Subtract);
-    add_box(*count, .{2.8, 0.7, -8.8}, .{1.7, 0.25, 0.7}, .{0.2, -0.3, 0.45});
+    add_sphere(*count, .{-2.1, 0.3, -3.8}, 1.1, albedo = .{0.68, 0.30, 0.28});
+    add_sphere(*count, .{1.8, -0.1, -4.9}, 1.4, albedo = .{0.30, 0.57, 0.72});
+    add_box(*count, .{0.0, 0.2, -6.7}, .{1.1, 0.9, 1.1}, .{0.18, 0.35, 0.05}, albedo = .{0.63, 0.58, 0.29});
+    add_box(*count, .{-3.8, -0.2, -8.2}, .{0.9, 1.5, 0.9}, .{0.0, 0.42, 0.0}, albedo = .{0.36, 0.68, 0.39});
+    add_sphere(*count, .{-0.1, 0.6, -6.7}, 0.85, op = .Subtract, albedo = .{0.86, 0.18, 0.76});
+    add_box(*count, .{2.8, 0.7, -8.8}, .{1.7, 0.25, 0.7}, .{0.2, -0.3, 0.45}, albedo = .{0.78, 0.44, 0.21});
 
     random_seed(BRICKMAP_RANDOM_STARTUP_SEED);
     for 0..BRICKMAP_RANDOM_STARTUP_EDITS-1 {
         shape: SDF_Shape = ifx random_get_zero_to_one() < 0.5 then SDF_Shape.Sphere else SDF_Shape.Box;
         op: SDF_Op = ifx random_get_zero_to_one() < 0.82 then SDF_Op.Union else SDF_Op.Subtract;
         pos := Vector3.{
-            random_get_within_range(-40.0, 40.0),
+            random_get_within_range(-80.0, 80.0),
             random_get_within_range(-1.2, 3.0),
-            random_get_within_range(-26.0, -2.0),
+            random_get_within_range(-86.0, 80.0),
         };
+        albedo := random_edit_albedo();
+
+        blend: float = 0;
+        if random_get_zero_to_one() < 0.4 {
+            blend = random_get_within_range(0.2, 1.0);
+        }
 
         if #complete shape == {
         case .Box;
@@ -1063,10 +1069,10 @@ seed_initial_scene :: () {
                 random_get_within_range(-PI, PI),
                 random_get_within_range(-PI, PI),
             };
-            add_box(*count, pos, half_extents, euler, op = op);
+            add_box(*count, pos, half_extents, euler, op = op, albedo = albedo, blend = blend);
         case .Sphere;
             radius := random_get_within_range(0.35, 1.65);
-            add_sphere(*count, pos, radius, op = op);
+            add_sphere(*count, pos, radius, op = op, albedo = albedo, blend = blend);
         }
 
         if count >= BRICKMAP_MAX_EDITS break;
@@ -1588,7 +1594,34 @@ quat_from_euler_xyz :: (euler: Vector3) -> Quaternion {
     return q;
 }
 
-add_sphere :: (count: *s32, pos: Vector3, radius: float, op: SDF_Op = .Union) {
+random_edit_albedo :: () -> Vector3 {
+    palette: [12]Vector3 = .[
+        .{0.87, 0.41, 0.33},
+        .{0.93, 0.66, 0.33},
+        .{0.82, 0.74, 0.38},
+        .{0.58, 0.76, 0.39},
+        .{0.32, 0.74, 0.56},
+        .{0.30, 0.65, 0.79},
+        .{0.39, 0.52, 0.86},
+        .{0.66, 0.49, 0.85},
+        .{0.83, 0.42, 0.76},
+        .{0.79, 0.46, 0.56},
+        .{0.66, 0.62, 0.55},
+        .{0.74, 0.69, 0.61},
+    ];
+
+    palette_f := cast(float) palette.count;
+    idx := clamp(cast(s32) floor(random_get_zero_to_one() * palette_f), 0, palette.count - 1);
+    base := palette[idx];
+    jitter := 0.06;
+    return .{
+        clamp(base.x + random_get_within_range(-jitter, jitter), 0.0, 1.0),
+        clamp(base.y + random_get_within_range(-jitter, jitter), 0.0, 1.0),
+        clamp(base.z + random_get_within_range(-jitter, jitter), 0.0, 1.0),
+    };
+}
+
+add_sphere :: (count: *s32, pos: Vector3, radius: float, op: SDF_Op = .Union, albedo: Vector3 = .{0.48, 0.52, 0.58}, blend: float = 0) {
     if count.* >= BRICKMAP_MAX_EDITS return;
     edits_cpu[count.*] = .{
         shape = .Sphere,
@@ -1597,11 +1630,13 @@ add_sphere :: (count: *s32, pos: Vector3, radius: float, op: SDF_Op = .Union) {
         radius = radius,
         half_extents = .{radius, radius, radius},
         rotation = .{0.0, 0.0, 0.0, 1.0},
+        albedo = .{albedo.x, albedo.y, albedo.z, 1.0},
+        blend = blend,
     };
     count.* += 1;
 }
 
-add_box :: (count: *s32, pos: Vector3, half_extents: Vector3, euler: Vector3 = .{0.0, 0.0, 0.0}, op: SDF_Op = .Union) {
+add_box :: (count: *s32, pos: Vector3, half_extents: Vector3, euler: Vector3 = .{0.0, 0.0, 0.0}, op: SDF_Op = .Union, albedo: Vector3 = .{0.48, 0.52, 0.58}, blend: float = 0.0) {
     if count.* >= BRICKMAP_MAX_EDITS return;
     q := quat_from_euler_xyz(euler);
     edits_cpu[count.*] = .{
@@ -1611,6 +1646,8 @@ add_box :: (count: *s32, pos: Vector3, half_extents: Vector3, euler: Vector3 = .
         radius = length(half_extents),
         half_extents = half_extents,
         rotation = .{q.x, q.y, q.z, q.w},
+        albedo = .{albedo.x, albedo.y, albedo.z, 1.0},
+        blend = blend,
     };
     count.* += 1;
 }
@@ -1732,7 +1769,9 @@ mouse_world_ray :: (resolution: Vector2, tan_half_fov: float,
     if !mouse_valid return .{}, .{}, false;
     if resolution.x <= 1.0 || resolution.y <= 1.0 return .{}, .{}, false;
 
-    uv := Vector2.{mouse_pos.x / resolution.x, mouse_pos.y / resolution.y};
+    // Input mouse coords are integer pixel locations; offset to pixel center to
+    // match fragment shader sampling convention ((pixel + 0.5) / resolution).
+    uv := Vector2.{(mouse_pos.x + 0.5) / resolution.x, (mouse_pos.y + 0.5) / resolution.y};
     p := Vector2.{uv.x * 2.0 - 1.0, uv.y * 2.0 - 1.0};
     p.x *= resolution.x / max(resolution.y, 1.0);
     rd_un := camera_forward + camera_right * (p.x * tan_half_fov) + camera_up * (p.y * tan_half_fov);
@@ -1791,8 +1830,9 @@ pick_edit_from_bvh :: (ray_origin: Vector3, ray_dir: Vector3) -> s32 {
         if node_t > best_t continue;
 
         if node.edit_index >= 0 {
-            if node_t < best_t {
-                best_t = node_t;
+            hit_t := ray_edit_hit_t(ray_origin, ray_dir, node.edit_index);
+            if hit_t >= 0.0 && hit_t < best_t {
+                best_t = hit_t;
                 best_i = node.edit_index;
             }
             continue;
@@ -1809,6 +1849,40 @@ pick_edit_from_bvh :: (ray_origin: Vector3, ray_dir: Vector3) -> s32 {
     }
 
     return best_i;
+}
+
+ray_sphere_hit_t :: (ray_origin: Vector3, ray_dir: Vector3, center: Vector3, radius: float) -> float {
+    oc := ray_origin - center;
+    b := dot(oc, ray_dir);
+    c := dot(oc, oc) - radius * radius;
+    h := b * b - c;
+    if h < 0.0 return -1.0;
+    s := sqrt(h);
+    t0 := -b - s;
+    t1 := -b + s;
+    if t0 >= 0.0 return t0;
+    if t1 >= 0.0 return t1;
+    return -1.0;
+}
+
+ray_obb_hit_t :: (ray_origin: Vector3, ray_dir: Vector3, center: Vector3, rotation: Vector4, half_extents: Vector3) -> float {
+    local_origin := inv_rotate_quat(ray_origin - center, rotation);
+    local_dir := inv_rotate_quat(ray_dir, rotation);
+    bounds := AABB.{min = -half_extents, max = half_extents};
+    return ray_aabb_hit_t(local_origin, local_dir, bounds);
+}
+
+ray_edit_hit_t :: (ray_origin: Vector3, ray_dir: Vector3, edit_index: s32) -> float {
+    if edit_index < 0 || cast(s64) edit_index >= edits_cpu.count return -1.0;
+    e := edits_cpu[edit_index];
+
+    if e.shape == {
+    case .Sphere;
+        return ray_sphere_hit_t(ray_origin, ray_dir, e.position, e.radius);
+    case .Box;
+        return ray_obb_hit_t(ray_origin, ray_dir, e.position, e.rotation, e.half_extents);
+    }
+    return -1.0;
 }
 
 bvh_alloc_node :: () -> s32 {

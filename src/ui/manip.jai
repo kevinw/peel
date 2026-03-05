@@ -475,8 +475,10 @@ pick_object :: (objects: []Manip_Object, ray_origin: Vector3, ray_dir: Vector3) 
 }
 
 mouse_world_ray :: (frame: Manip_Frame_Input) -> (origin: Vector3, dir: Vector3, ok: bool) {
-    nx := (frame.mouse_pos.x / frame.viewport.x) * 2.0 - 1.0;
-    ny := (frame.mouse_pos.y / frame.viewport.y) * 2.0 - 1.0;
+    // Mouse positions are integer pixel coordinates; ray should pass through
+    // pixel centers for consistent hit-testing against rasterized output.
+    nx := ((frame.mouse_pos.x + 0.5) / frame.viewport.x) * 2.0 - 1.0;
+    ny := ((frame.mouse_pos.y + 0.5) / frame.viewport.y) * 2.0 - 1.0;
     aspect := frame.viewport.x / max(frame.viewport.y, 1.0);
     tan_half_fov := tan(frame.fov_y * 0.5);
     dir := frame.camera_forward + frame.camera_right * (nx * aspect * tan_half_fov) + frame.camera_up * (ny * tan_half_fov);
