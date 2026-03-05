@@ -14,6 +14,7 @@ Readback_Stats :: struct {
     stats_max_samples: s64;
     stats_samples_done: s64;
     snapshot_mode: bool;
+    snapshot_target_frame: s64;
     snapshot_width: s64;
     snapshot_height: s64;
     export_jpg_mode: bool;
@@ -50,6 +51,11 @@ readback_stats_init :: (state: *Readback_Stats, log_prefix: string, snapshot_def
 
     snapshot_mode, _ := readback_stats_env_int("PEEL_SNAPSHOT");
     state.snapshot_mode = snapshot_mode > 0;
+    if snapshot_mode > 0 {
+        state.snapshot_target_frame = snapshot_mode;
+    } else {
+        state.snapshot_target_frame = 0;
+    }
 
     snapshot_w, snapshot_w_set := readback_stats_env_int("PEEL_SNAPSHOT_W");
     if snapshot_w_set state.snapshot_width = max(1, snapshot_w);
@@ -164,7 +170,7 @@ per_frame_debug :: (readback_stats: *Readback_Stats, frame_num: s64, swapchain_i
         app_quit_requested = true;
     }
 
-    if readback_stats.snapshot_mode {
+    if readback_stats.snapshot_mode && frame_num >= readback_stats.snapshot_target_frame {
         check_frame_buffer();
         readback_stats.snapshot_mode = false;
         readback_stats_dump_snapshot(readback_stats, swapchain_image, frame_num, tprint("%_snapshot", APP_NAME), APP_NAME);
