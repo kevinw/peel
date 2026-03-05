@@ -2,19 +2,31 @@
 #import "Math";
 #import "Jai-Shader-Transpiler/modules/ShaderFuncs";
 
+// Logical SDF voxels per brick edge (without border texels).
 BRICKMAP_BRICK_RES :: 8;
+// Brick edge size in atlas texels, including a 1-voxel border on each side.
 BRICKMAP_BRICK_TEX_RES :: BRICKMAP_BRICK_RES + 2;
+// Number of logical voxels evaluated per brick.
 BRICKMAP_BRICK_VOXELS :: BRICKMAP_BRICK_RES * BRICKMAP_BRICK_RES * BRICKMAP_BRICK_RES;
+// Number of atlas texels written per brick (including borders).
 BRICKMAP_BRICK_TEXELS :: BRICKMAP_BRICK_TEX_RES * BRICKMAP_BRICK_TEX_RES * BRICKMAP_BRICK_TEX_RES;
+// Brick cells per clipmap edge for each LOD grid.
 BRICKMAP_GRID_RES :: 24;
+// Total brick cells per LOD grid.
 BRICKMAP_GRID_CELLS :: BRICKMAP_GRID_RES * BRICKMAP_GRID_RES * BRICKMAP_GRID_RES;
-BRICKMAP_LOD_COUNT :: 2;
-BRICKMAP_MAX_EDITS :: 1000;
-BRICKMAP_ATLAS_BRICKS_X :: 16;
+// Number of clipmap LOD levels sampled/baked.
+BRICKMAP_LOD_COUNT :: 3;
+// Max editable SDF primitives packed into params.
+BRICKMAP_MAX_EDITS :: 2000;
+// Atlas brick count along XYZ.
+BRICKMAP_ATLAS_BRICKS_X :: 32;
 BRICKMAP_ATLAS_BRICKS_Y :: 16;
-BRICKMAP_ATLAS_BRICKS_Z :: 16;
+BRICKMAP_ATLAS_BRICKS_Z :: 32;
+// Total number of addressable atlas brick slots.
 BRICKMAP_MAX_BRICKS :: BRICKMAP_ATLAS_BRICKS_X * BRICKMAP_ATLAS_BRICKS_Y * BRICKMAP_ATLAS_BRICKS_Z;
+// Max dirty-brick work items processed in one dispatch batch.
 BRICKMAP_MAX_DIRTY_BRICKS :: 2048;
+// Atlas texture width/height/depth in texels.
 BRICKMAP_ATLAS_DIM_X :: BRICKMAP_ATLAS_BRICKS_X * BRICKMAP_BRICK_TEX_RES;
 BRICKMAP_ATLAS_DIM_Y :: BRICKMAP_ATLAS_BRICKS_Y * BRICKMAP_BRICK_TEX_RES;
 BRICKMAP_ATLAS_DIM_Z :: BRICKMAP_ATLAS_BRICKS_Z * BRICKMAP_BRICK_TEX_RES;
@@ -115,6 +127,7 @@ Brickmap_Params :: struct {
     edit_pos_radius: [BRICKMAP_MAX_EDITS] Vector4;
     edit_half_extents_blend: [BRICKMAP_MAX_EDITS] Vector4;
     edit_rotation: [BRICKMAP_MAX_EDITS] Vector4;
+    dirty_lod_brick_xyz_in: [BRICKMAP_MAX_DIRTY_BRICKS] Vector4;
     dirty_lod_brick_xyz: [BRICKMAP_MAX_DIRTY_BRICKS] Vector4;
     dirty_atlas_index: [BRICKMAP_MAX_DIRTY_BRICKS] u32;
 }
@@ -153,27 +166,27 @@ brickmap_vertex_main :: (using in: Brickmap_Vertex_In) -> Brickmap_Vertex_Out {
     return out;
 } @vertex_shader
 
-brickmap_safe_normalize :: (v: Vector3) -> Vector3 {
+safe_normalize :: (v: Vector3) -> Vector3 {
     len2 := dot(v, v);
     if len2 <= 0.000001 return .{0.0, 1.0, 0.0};
     return v * (1.0 / sqrt(len2));
 }
 
-brickmap_rotate_quat :: (v: Vector3, q: Vector4) -> Vector3 {
+rotate_quat :: (v: Vector3, q: Vector4) -> Vector3 {
     t := cross(q.xyz, v) * 2.0;
     return v + t * q.w + cross(q.xyz, t);
 }
 
-brickmap_inv_rotate_quat :: (v: Vector3, q: Vector4) -> Vector3 {
+inv_rotate_quat :: (v: Vector3, q: Vector4) -> Vector3 {
     qc := Vector4.{-q.x, -q.y, -q.z, q.w};
-    return brickmap_rotate_quat(v, qc);
+    return rotate_quat(v, qc);
 }
 
-brickmap_sdf_sphere :: (p: Vector3, radius: float) -> float {
+sdf_sphere :: (p: Vector3, radius: float) -> float {
     return sqrt(dot(p, p)) - radius;
 }
 
-brickmap_sdf_box :: (p: Vector3, b: Vector3) -> float {
+sdf_box :: (p: Vector3, b: Vector3) -> float {
     q := Vector3.{abs(p.x) - b.x, abs(p.y) - b.y, abs(p.z) - b.z};
     outside := Vector3.{max(q.x, 0.0), max(q.y, 0.0), max(q.z, 0.0)};
     outside_len := sqrt(dot(outside, outside));
@@ -181,7 +194,7 @@ brickmap_sdf_box :: (p: Vector3, b: Vector3) -> float {
     return outside_len + inside;
 }
 
-brickmap_eval_edits_sdf :: (params: *Brickmap_Params, p: Vector3) -> float {
+eval_edits_sdf :: (params: *Brickmap_Params, p: Vector3) -> float {
     d := cast(float) 100000.0;
     count := cast(s32) params.edit_count;
     for i: 0..count-1 {
@@ -190,13 +203,13 @@ brickmap_eval_edits_sdf :: (params: *Brickmap_Params, p: Vector3) -> float {
         pos_radius := params.edit_pos_radius[i];
         extents_blend := params.edit_half_extents_blend[i];
         rot := params.edit_rotation[i];
-        q := brickmap_inv_rotate_quat(p - pos_radius.xyz, rot);
+        q := inv_rotate_quat(p - pos_radius.xyz, rot);
 
         sd: float;
         if shape == SDF_SHAPE_BOX {
-            sd = brickmap_sdf_box(q, extents_blend.xyz);
+            sd = sdf_box(q, extents_blend.xyz);
         } else {
-            sd = brickmap_sdf_sphere(q, pos_radius.w);
+            sd = sdf_sphere(q, pos_radius.w);
         }
 
         if op == SDF_OP_SUBTRACT {
@@ -211,21 +224,21 @@ brickmap_eval_edits_sdf :: (params: *Brickmap_Params, p: Vector3) -> float {
     return d;
 }
 
-brickmap_eval_scene_sdf :: (params: *Brickmap_Params, p: Vector3) -> float {
-    d := brickmap_eval_edits_sdf(params, p);
+eval_scene_sdf :: (params: *Brickmap_Params, p: Vector3) -> float {
+    d := eval_edits_sdf(params, p);
     ground := p.y + 1.2;
     return min(d, ground);
 }
 
-brickmap_atlas_brick_coord :: (atlas_index: s32) -> Vector3 {
+atlas_brick_coord :: (atlas_index: s32) -> Vector3 {
     x := atlas_index % BRICKMAP_ATLAS_BRICKS_X;
     y := (atlas_index / BRICKMAP_ATLAS_BRICKS_X) % BRICKMAP_ATLAS_BRICKS_Y;
     z := atlas_index / (BRICKMAP_ATLAS_BRICKS_X * BRICKMAP_ATLAS_BRICKS_Y);
     return .{cast(float) x, cast(float) y, cast(float) z};
 }
 
-brickmap_sample_brick_filtered :: (params: *Brickmap_Params, atlas_index: s32, uvw: Vector3) -> float {
-    brick := brickmap_atlas_brick_coord(atlas_index);
+sample_brick_filtered :: (params: *Brickmap_Params, atlas_index: s32, uvw: Vector3) -> float {
+    brick := atlas_brick_coord(atlas_index);
     local := Vector3.{
         // uvw is in voxel-center space (0 = first center, 7 = last center).
         // Allow half-voxel overreach so the duplicated 1-voxel border participates in filtering.
@@ -250,14 +263,14 @@ brickmap_sample_brick_filtered :: (params: *Brickmap_Params, atlas_index: s32, u
     return sample_3d(params.atlas_texture_index, sampler_index, uvw_norm).x;
 }
 
-brickmap_sample_cached_sdf :: (params: *Brickmap_Params, p: Vector3) -> float {
-    s := brickmap_sample_cached(params, p);
+sample_cached_sdf :: (params: *Brickmap_Params, p: Vector3) -> float {
+    s := sample_cached(params, p);
     lod := cast(s32) s.y;
     if lod < 0 return 100000.0;
     return s.x;
 }
 
-brickmap_sample_cached :: (params: *Brickmap_Params, p: Vector3) -> Vector4 {
+sample_cached :: (params: *Brickmap_Params, p: Vector3) -> Vector4 {
     max_lod := BRICKMAP_LOD_COUNT;
     if params.cache_force_lod0 != 0 {
         max_lod = 1;
@@ -289,18 +302,18 @@ brickmap_sample_cached :: (params: *Brickmap_Params, p: Vector3) -> Vector4 {
         local_x := gx - cast(float) (bx * BRICKMAP_BRICK_RES) - 0.5;
         local_y := gy - cast(float) (by * BRICKMAP_BRICK_RES) - 0.5;
         local_z := gz - cast(float) (bz * BRICKMAP_BRICK_RES) - 0.5;
-        d := brickmap_sample_brick_filtered(params, atlas_index, .{local_x, local_y, local_z});
+        d := sample_brick_filtered(params, atlas_index, .{local_x, local_y, local_z});
         return .{d, cast(float) lod, voxel_size, 1.0};
     }
 
     return .{100000.0, -1.0, max(params.lod_voxel_size[0], 0.0001), 0.0};
 }
 
-brickmap_sample_cached_lod :: (params: *Brickmap_Params, p: Vector3) -> s32 {
-    return cast(s32) brickmap_sample_cached(params, p).y;
+sample_cached_lod :: (params: *Brickmap_Params, p: Vector3) -> s32 {
+    return cast(s32) sample_cached(params, p).y;
 }
 
-brickmap_step_to_next_lod0_cell :: (params: *Brickmap_Params, p: Vector3, rd: Vector3) -> float {
+step_to_next_lod0_cell :: (params: *Brickmap_Params, p: Vector3, rd: Vector3) -> float {
     voxel_size := max(params.lod_voxel_size[0], 0.0001);
     cell_size := voxel_size * cast(float) BRICKMAP_BRICK_RES;
     gx := p.x / cell_size;
@@ -335,7 +348,7 @@ brickmap_step_to_next_lod0_cell :: (params: *Brickmap_Params, p: Vector3, rd: Ve
     return max(t_min + 0.0005, 0.0025);
 }
 
-brickmap_brick_has_surface :: (params: *Brickmap_Params, lod: s32, bx: s32, by: s32, bz: s32) -> bool {
+brick_has_surface :: (params: *Brickmap_Params, lod: s32, bx: s32, by: s32, bz: s32) -> bool {
     if lod < 0 || lod >= BRICKMAP_LOD_COUNT return false;
     voxel_size := max(params.lod_voxel_size[lod], 0.0001);
     brick_world_size := voxel_size * cast(float) BRICKMAP_BRICK_RES;
@@ -352,21 +365,21 @@ brickmap_brick_has_surface :: (params: *Brickmap_Params, lod: s32, bx: s32, by: 
     max_d:     float = -100000.0;
     min_abs_d: float = 100000.0;
 
-    d0 := brickmap_eval_edits_sdf(params, .{min_p.x, min_p.y, min_p.z});
-    d1 := brickmap_eval_edits_sdf(params, .{max_p.x, min_p.y, min_p.z});
-    d2 := brickmap_eval_edits_sdf(params, .{min_p.x, max_p.y, min_p.z});
-    d3 := brickmap_eval_edits_sdf(params, .{max_p.x, max_p.y, min_p.z});
-    d4 := brickmap_eval_edits_sdf(params, .{min_p.x, min_p.y, max_p.z});
-    d5 := brickmap_eval_edits_sdf(params, .{max_p.x, min_p.y, max_p.z});
-    d6 := brickmap_eval_edits_sdf(params, .{min_p.x, max_p.y, max_p.z});
-    d7 := brickmap_eval_edits_sdf(params, .{max_p.x, max_p.y, max_p.z});
-    d8 := brickmap_eval_edits_sdf(params, center_p);
-    d9  := brickmap_eval_edits_sdf(params, .{center_p.x, min_p.y, center_p.z});
-    d10 := brickmap_eval_edits_sdf(params, .{center_p.x, max_p.y, center_p.z});
-    d11 := brickmap_eval_edits_sdf(params, .{min_p.x, center_p.y, center_p.z});
-    d12 := brickmap_eval_edits_sdf(params, .{max_p.x, center_p.y, center_p.z});
-    d13 := brickmap_eval_edits_sdf(params, .{center_p.x, center_p.y, min_p.z});
-    d14 := brickmap_eval_edits_sdf(params, .{center_p.x, center_p.y, max_p.z});
+    d0 := eval_edits_sdf(params, .{min_p.x, min_p.y, min_p.z});
+    d1 := eval_edits_sdf(params, .{max_p.x, min_p.y, min_p.z});
+    d2 := eval_edits_sdf(params, .{min_p.x, max_p.y, min_p.z});
+    d3 := eval_edits_sdf(params, .{max_p.x, max_p.y, min_p.z});
+    d4 := eval_edits_sdf(params, .{min_p.x, min_p.y, max_p.z});
+    d5 := eval_edits_sdf(params, .{max_p.x, min_p.y, max_p.z});
+    d6 := eval_edits_sdf(params, .{min_p.x, max_p.y, max_p.z});
+    d7 := eval_edits_sdf(params, .{max_p.x, max_p.y, max_p.z});
+    d8 := eval_edits_sdf(params, center_p);
+    d9  := eval_edits_sdf(params, .{center_p.x, min_p.y, center_p.z});
+    d10 := eval_edits_sdf(params, .{center_p.x, max_p.y, center_p.z});
+    d11 := eval_edits_sdf(params, .{min_p.x, center_p.y, center_p.z});
+    d12 := eval_edits_sdf(params, .{max_p.x, center_p.y, center_p.z});
+    d13 := eval_edits_sdf(params, .{center_p.x, center_p.y, min_p.z});
+    d14 := eval_edits_sdf(params, .{center_p.x, center_p.y, max_p.z});
 
     if d0 < min_d min_d = d0; if d0 > max_d max_d = d0; if abs(d0) < min_abs_d min_abs_d = abs(d0);
     if d1 < min_d min_d = d1; if d1 > max_d max_d = d1; if abs(d1) < min_abs_d min_abs_d = abs(d1);
@@ -389,18 +402,18 @@ brickmap_brick_has_surface :: (params: *Brickmap_Params, lod: s32, bx: s32, by: 
     return min_abs_d <= voxel_size * MARGIN;
 }
 
-brickmap_scene_normal :: (params: *Brickmap_Params, p: Vector3) -> Vector3 {
+scene_normal :: (params: *Brickmap_Params, p: Vector3) -> Vector3 {
     eps := 0.02;
-    dpx := brickmap_eval_scene_sdf(params, p + .{eps, 0.0, 0.0});
-    dnx := brickmap_eval_scene_sdf(params, p - .{eps, 0.0, 0.0});
-    dpy := brickmap_eval_scene_sdf(params, p + .{0.0, eps, 0.0});
-    dny := brickmap_eval_scene_sdf(params, p - .{0.0, eps, 0.0});
-    dpz := brickmap_eval_scene_sdf(params, p + .{0.0, 0.0, eps});
-    dnz := brickmap_eval_scene_sdf(params, p - .{0.0, 0.0, eps});
-    return brickmap_safe_normalize(.{dpx - dnx, dpy - dny, dpz - dnz});
+    dpx := eval_scene_sdf(params, p + .{eps, 0.0, 0.0});
+    dnx := eval_scene_sdf(params, p - .{eps, 0.0, 0.0});
+    dpy := eval_scene_sdf(params, p + .{0.0, eps, 0.0});
+    dny := eval_scene_sdf(params, p - .{0.0, eps, 0.0});
+    dpz := eval_scene_sdf(params, p + .{0.0, 0.0, eps});
+    dnz := eval_scene_sdf(params, p - .{0.0, 0.0, eps});
+    return safe_normalize(.{dpx - dnx, dpy - dny, dpz - dnz});
 }
 
-brickmap_cached_normal :: (params: *Brickmap_Params, p: Vector3, voxel: float) -> Vector3 {
+cached_normal :: (params: *Brickmap_Params, p: Vector3, voxel: float) -> Vector3 {
     // TODO(brickmap-quality/perf):
     // Prefer seam-aware cached-field gradient as the default normal path:
     // 1) Sample across brick borders with guard/border texels + consistent atlas-space epsilon.
@@ -408,16 +421,16 @@ brickmap_cached_normal :: (params: *Brickmap_Params, p: Vector3, voxel: float) -
     // 3) If still too expensive, evaluate baking a compact gradient/normal into atlas (e.g. oct-encoded),
     //    but keep memory/bandwidth tradeoffs explicit versus deriving from SDF samples.
     eps := max(voxel * 0.45, 0.02);
-    s_px := brickmap_sample_cached(params, p + .{eps, 0.0, 0.0});
-    s_nx := brickmap_sample_cached(params, p - .{eps, 0.0, 0.0});
-    s_py := brickmap_sample_cached(params, p + .{0.0, eps, 0.0});
-    s_ny := brickmap_sample_cached(params, p - .{0.0, eps, 0.0});
-    s_pz := brickmap_sample_cached(params, p + .{0.0, 0.0, eps});
-    s_nz := brickmap_sample_cached(params, p - .{0.0, 0.0, eps});
+    s_px := sample_cached(params, p + .{eps, 0.0, 0.0});
+    s_nx := sample_cached(params, p - .{eps, 0.0, 0.0});
+    s_py := sample_cached(params, p + .{0.0, eps, 0.0});
+    s_ny := sample_cached(params, p - .{0.0, eps, 0.0});
+    s_pz := sample_cached(params, p + .{0.0, 0.0, eps});
+    s_nz := sample_cached(params, p - .{0.0, 0.0, eps});
     if cast(s32) s_px.y < 0 || cast(s32) s_nx.y < 0 || cast(s32) s_py.y < 0 || cast(s32) s_ny.y < 0 || cast(s32) s_pz.y < 0 || cast(s32) s_nz.y < 0 {
         return .{0.0, 1.0, 0.0};
     }
-    return brickmap_safe_normalize(.{s_px.x - s_nx.x, s_py.x - s_ny.x, s_pz.x - s_nz.x});
+    return safe_normalize(.{s_px.x - s_nx.x, s_py.x - s_ny.x, s_pz.x - s_nz.x});
 }
 
 brickmap_fragment_main :: (using in: Brickmap_Fragment_In, params: *Brickmap_Params) -> struct { out_color: Vector4; } {
@@ -428,7 +441,7 @@ brickmap_fragment_main :: (using in: Brickmap_Fragment_In, params: *Brickmap_Par
 
     tan_half := params.camera_tan_half_fov;
     ro := params.camera_pos;
-    rd := brickmap_safe_normalize(params.camera_forward + params.camera_right * (p.x * tan_half) + params.camera_up * (p.y * tan_half));
+    rd := safe_normalize(params.camera_forward + params.camera_right * (p.x * tan_half) + params.camera_up * (p.y * tan_half));
 
     if params.atlas_debug_fullscreen != 0 {
         debug_uvw := Vector3.{uv.x, uv.y, clamp(params.atlas_debug_slice, 0.0, 1.0)};
@@ -494,7 +507,7 @@ brickmap_fragment_main :: (using in: Brickmap_Fragment_In, params: *Brickmap_Par
         d_ground := pos.y + 1.2;
         non_ground_d := cast(float) 100000.0;
         if use_cache {
-            cached := brickmap_sample_cached(params, pos);
+            cached := sample_cached(params, pos);
             d_cached := cached.x;
             sample_lod = cast(s32) cached.y;
             sample_voxel := cached.z;
@@ -508,7 +521,7 @@ brickmap_fragment_main :: (using in: Brickmap_Fragment_In, params: *Brickmap_Par
                 non_ground_d = d_cached;
                 d = min(non_ground_d, d_ground);
             } else {
-                d_skip := brickmap_step_to_next_lod0_cell(params, pos, rd);
+                d_skip := step_to_next_lod0_cell(params, pos, rd);
                 non_ground_d = 100000.0;
                 d = min(d_skip, d_ground);
                 // On cache miss, never treat cell-boundary skip distance as a surface hit.
@@ -525,7 +538,7 @@ brickmap_fragment_main :: (using in: Brickmap_Fragment_In, params: *Brickmap_Par
             hit_lod = sample_lod;
             hit_cached_d = d_cached;
         } else {
-            non_ground_d = brickmap_eval_edits_sdf(params, pos);
+            non_ground_d = eval_edits_sdf(params, pos);
             d = min(non_ground_d, d_ground);
         }
 
@@ -598,21 +611,21 @@ brickmap_fragment_main :: (using in: Brickmap_Fragment_In, params: *Brickmap_Par
             if is_ground {
                 n = .{0.0, 1.0, 0.0};
             } else {
-                n = brickmap_cached_normal(params, pos, hit_voxel);
+                n = cached_normal(params, pos, hit_voxel);
             }
         } else {
             for 0..3 {
                 refine_pos := ro + rd * t;
-                t -= brickmap_eval_scene_sdf(params, refine_pos) * 0.7;
+                t -= eval_scene_sdf(params, refine_pos) * 0.7;
                 if t < 0.0 {
                     t = 0.0;
                     break;
                 }
             }
             pos = ro + rd * t;
-            n = brickmap_scene_normal(params, pos);
+            n = scene_normal(params, pos);
         }
-        sun := brickmap_safe_normalize(.{0.6, 0.7, 0.3});
+        sun := safe_normalize(.{0.6, 0.7, 0.3});
         ndl := max(dot(n, sun), 0.0);
         base := Vector3.{0.48, 0.52, 0.58};
         color = base * (0.2 + 0.8 * ndl);
@@ -632,7 +645,7 @@ brickmap_classify_dirty_compute :: (using in: Brickmap_Compute_In, params: *Bric
     candidates := min(cast(s32) params.debug_classify_candidates, BRICKMAP_MAX_DIRTY_BRICKS);
     if i >= candidates return;
 
-    req := params.dirty_lod_brick_xyz[i];
+    req := params.dirty_lod_brick_xyz_in[i];
     lod := cast(s32) req.x;
     bx := cast(s32) req.y;
     by := cast(s32) req.z;
@@ -649,7 +662,7 @@ brickmap_classify_dirty_compute :: (using in: Brickmap_Compute_In, params: *Bric
     ptr_idx := ptr_base + lx + ly * BRICKMAP_GRID_RES + lz * BRICKMAP_GRID_RES * BRICKMAP_GRID_RES;
     atlas_index := params.pointer_grid[ptr_idx];
 
-    has_surface := brickmap_brick_has_surface(params, lod, bx, by, bz);
+    has_surface := brick_has_surface(params, lod, bx, by, bz);
     if !has_surface {
         params.pointer_grid[ptr_idx] = -1;
         return;
@@ -714,7 +727,7 @@ brickmap_bake_compute :: (using in: Brickmap_Compute_In, params: *Brickmap_Param
     world_vox_z := cast(float) (brick_z * BRICKMAP_BRICK_RES + sample_vz) + 0.5;
 
     p := Vector3.{world_vox_x * voxel_size, world_vox_y * voxel_size, world_vox_z * voxel_size};
-    d := brickmap_eval_edits_sdf(params, p);
+    d := eval_edits_sdf(params, p);
     if params.bake_debug_gradient != 0 {
         fx := cast(float) vx / cast(float) (BRICKMAP_BRICK_TEX_RES - 1);
         fy := cast(float) vy / cast(float) (BRICKMAP_BRICK_TEX_RES - 1);
@@ -739,7 +752,7 @@ brickmap_bake_compute :: (using in: Brickmap_Compute_In, params: *Brickmap_Param
         params.debug_bake_seen_atlas[brick_i] = cast(u32) max(atlas_index, 0);
     }
     if atlas_index < 0 return;
-    atlas_brick := brickmap_atlas_brick_coord(atlas_index);
+    atlas_brick := atlas_brick_coord(atlas_index);
     tx := cast(s32) atlas_brick.x * BRICKMAP_BRICK_TEX_RES + vx;
     ty := cast(s32) atlas_brick.y * BRICKMAP_BRICK_TEX_RES + vy;
     tz := cast(s32) atlas_brick.z * BRICKMAP_BRICK_TEX_RES + vz;
