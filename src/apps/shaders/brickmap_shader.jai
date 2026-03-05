@@ -130,6 +130,7 @@ Brickmap_Params :: struct {
     dirty_lod_brick_xyz_in: [BRICKMAP_MAX_DIRTY_BRICKS] Vector4;
     dirty_lod_brick_xyz: [BRICKMAP_MAX_DIRTY_BRICKS] Vector4;
     dirty_atlas_index: [BRICKMAP_MAX_DIRTY_BRICKS] u32;
+    dirty_classify_result: [BRICKMAP_MAX_DIRTY_BRICKS] u32;
 }
 
 Brickmap_Vertex_In :: struct {
@@ -644,6 +645,7 @@ brickmap_classify_dirty_compute :: (using in: Brickmap_Compute_In, params: *Bric
     i := cast(s32) thread_id.x;
     candidates := min(cast(s32) params.debug_classify_candidates, BRICKMAP_MAX_DIRTY_BRICKS);
     if i >= candidates return;
+    params.dirty_classify_result[i] = 0;
 
     req := params.dirty_lod_brick_xyz_in[i];
     lod := cast(s32) req.x;
@@ -673,6 +675,7 @@ brickmap_classify_dirty_compute :: (using in: Brickmap_Compute_In, params: *Bric
         alloc_slot := cast(s32) atomic_add_u32(*params.atlas_alloc_next, 1);
         if alloc_slot >= BRICKMAP_MAX_BRICKS {
             atomic_add_u32(*params.debug_classify_rejected_capacity, 1);
+            params.dirty_classify_result[i] = 2;
             return;
         }
         atlas_index = alloc_slot;
@@ -685,8 +688,10 @@ brickmap_classify_dirty_compute :: (using in: Brickmap_Compute_In, params: *Bric
     out_i := cast(s32) atomic_add_u32(*params.dirty_count, 1);
     if out_i >= BRICKMAP_MAX_DIRTY_BRICKS {
         atomic_add_u32(*params.debug_classify_rejected_capacity, 1);
+        params.dirty_classify_result[i] = 2;
         return;
     }
+    params.dirty_classify_result[i] = 1;
     params.dirty_lod_brick_xyz[out_i] = req;
     params.dirty_atlas_index[out_i] = cast(u32) atlas_index;
     atomic_min_u32(*params.debug_bake_min_atlas, cast(u32) max(atlas_index, 0));
@@ -735,19 +740,7 @@ brickmap_bake_compute :: (using in: Brickmap_Compute_In, params: *Brickmap_Param
         d = (fx + fy + fz) / 3.0 * 2.0 - 1.0;
     }
 
-    atlas_index: s32 = -1;
-    lx := brick_x - params.lod_origin_brick_x[lod];
-    ly := brick_y - params.lod_origin_brick_y[lod];
-    lz := brick_z - params.lod_origin_brick_z[lod];
-    if lx >= 0 && ly >= 0 && lz >= 0 && lx < BRICKMAP_GRID_RES && ly < BRICKMAP_GRID_RES && lz < BRICKMAP_GRID_RES {
-        ptr_base := lod * BRICKMAP_GRID_CELLS;
-        ptr_idx := ptr_base + lx + ly * BRICKMAP_GRID_RES + lz * BRICKMAP_GRID_RES * BRICKMAP_GRID_RES;
-        atlas_index = params.pointer_grid[ptr_idx];
-    }
-    if atlas_index < 0 {
-        // Debug path when classify is skipped and atlas mapping is pre-seeded by CPU.
-        atlas_index = cast(s32) params.dirty_atlas_index[brick_i];
-    }
+    atlas_index := cast(s32) params.dirty_atlas_index[brick_i];
     if voxel_i == 0 {
         params.debug_bake_seen_atlas[brick_i] = cast(u32) max(atlas_index, 0);
     }

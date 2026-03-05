@@ -585,18 +585,21 @@ tick :: () {
         // Keep output queue seeded for debug/skip-classify paths.
         params_cpu.dirty_lod_brick_xyz[i] = params_cpu.dirty_lod_brick_xyz_in[i];
         params_cpu.dirty_atlas_index[i] = 0;
+        params_cpu.dirty_classify_result[i] = 0;
     }
 
     params_cpu.dirty_count = 0;
     bake_threads: s32 = 0;
     main_queue := gpu_get_queue(.MAIN, 0);
     if pending_dirty_count > 0 {
-        params_cpu.dirty_count = cast(u32) pending_dirty_count;
         params_cpu.atlas_alloc_next = cast(u32) next_atlas_index;
 
         if skip_classify_debug {
+            params_cpu.debug_classify_candidates = cast(u32) pending_dirty_count;
+            params_cpu.dirty_count = cast(u32) pending_dirty_count;
             for i: 0..pending_dirty_count-1 {
                 params_cpu.dirty_atlas_index[i] = cast(u32) i;
+                params_cpu.dirty_classify_result[i] = 1;
             }
             params_cpu.debug_classify_out_count = cast(u32) pending_dirty_count;
             params_cpu.debug_bake_min_atlas = 0;
@@ -671,14 +674,10 @@ tick :: () {
         if log_updates {
             log("BRICKMAP baked frame=% dirty_bricks=% threads=%", frame_count, pending_dirty_count, bake_threads);
         }
-
-        cleared_dirty: s32;
-        if !skip_classify_debug && params_cpu.debug_classify_rejected_capacity > 0 {
-            cleared_dirty = cast(s32) params_cpu.dirty_count;
-            clear_processed_dirty_flags_from_gpu(cleared_dirty);
+        if skip_classify_debug {
+            clear_processed_dirty_flags_from_batch(pending_dirty_count);
         } else {
-            cleared_dirty = pending_dirty_count;
-            clear_processed_dirty_flags_from_batch(cleared_dirty);
+            apply_classify_results_to_dirty_flags(pending_dirty_count);
         }
         pending_dirty_count = 0;
     }
@@ -1180,6 +1179,31 @@ clear_processed_dirty_flags_from_gpu :: (processed_count: s32) {
         idx_local := flatten_3d(lx, ly, lz, BRICKMAP_GRID_RES);
         cell := lod * BRICKMAP_GRID_CELLS + idx_local;
         dirty_flags[cell] = false;
+    }
+}
+
+apply_classify_results_to_dirty_flags :: (candidate_count: s32) {
+    count := clamp(candidate_count, 0, BRICKMAP_MAX_DIRTY_BRICKS);
+    for i: 0..count-1 {
+        req := dirty_cpu[i];
+        lod := cast(s32) req.lod;
+        if lod < 0 || lod >= BRICKMAP_LOD_COUNT continue;
+
+        info := lod_info_cpu[lod];
+        lx := req.brick_x - info.origin_brick_x;
+        ly := req.brick_y - info.origin_brick_y;
+        lz := req.brick_z - info.origin_brick_z;
+        if lx < 0 || ly < 0 || lz < 0 continue;
+        if lx >= BRICKMAP_GRID_RES || ly >= BRICKMAP_GRID_RES || lz >= BRICKMAP_GRID_RES continue;
+
+        idx_local := flatten_3d(lx, ly, lz, BRICKMAP_GRID_RES);
+        cell := lod * BRICKMAP_GRID_CELLS + idx_local;
+        result := params_cpu.dirty_classify_result[i];
+        if result == 2 {
+            dirty_flags[cell] = true;
+        } else {
+            dirty_flags[cell] = false;
+        }
     }
 }
 
