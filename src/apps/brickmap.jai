@@ -13,7 +13,21 @@ AABB :: struct {
 
 Brickmap_BVH :: struct {
     edit_bounds: [BRICKMAP_MAX_EDITS] AABB;
+    build_indices: [BRICKMAP_MAX_EDITS] s32;
+    nodes: [BRICKMAP_MAX_EDITS * 2] Brickmap_BVH_Node;
     edit_count: s32;
+    node_count: s32;
+    root_node: s32;
+    max_depth: s32;
+    leaf_count: s32;
+    leaf_depth_sum: s32;
+}
+
+Brickmap_BVH_Node :: struct {
+    bounds: AABB;
+    left: s32;
+    right: s32;
+    edit_index: s32;
 }
 
 Brickmap_Validation_Counters :: struct {
@@ -261,6 +275,9 @@ ui :: () {
             Text("Manip mode/space: % / %", manip_ctx.mode, manip_ctx.space);
         }
         Text("Edits: %", params_cpu.edit_count);
+        avg_leaf_depth := ifx bvh.leaf_count > 0 then cast(float) bvh.leaf_depth_sum / cast(float) bvh.leaf_count else 0.0;
+        Text("BVH nodes/leaves: % / %", bvh.node_count, bvh.leaf_count);
+        Text("BVH depth max/avg_leaf: % / %", bvh.max_depth, avg_leaf_depth);
         Text("Dirty bricks pending: %", pending_dirty_count);
         Text("Dirty backlog (flags): %", dirty_backlog_count);
         Text("Dirty bricks after classify: %", params_cpu.dirty_count);
@@ -729,7 +746,7 @@ seed_initial_scene :: () {
         shape: u32 = cast(u32) (ifx random_get_zero_to_one() < 0.5 then SDF_SHAPE_SPHERE else SDF_SHAPE_BOX);
         op: u32 = cast(u32) (ifx random_get_zero_to_one() < 0.82 then SDF_OP_UNION else SDF_OP_SUBTRACT);
         pos := Vector3.{
-            random_get_within_range(-20.0, 20.0),
+            random_get_within_range(-40.0, 40.0),
             random_get_within_range(-1.2, 3.0),
             random_get_within_range(-26.0, -2.0),
         };
@@ -780,8 +797,18 @@ apply_runtime_edit :: () {
 rebuild_bvh :: () {
     count := cast(s32) params_cpu.edit_count;
     bvh.edit_count = count;
+    bvh.node_count = 0;
+    bvh.root_node = -1;
+    bvh.max_depth = 0;
+    bvh.leaf_count = 0;
+    bvh.leaf_depth_sum = 0;
     for i: 0..count-1 {
         bvh.edit_bounds[i] = edit_bounds(i);
+        bvh.build_indices[i] = i;
+    }
+
+    if count > 0 {
+        bvh.root_node = bvh_build_range(0, count, 0);
     }
 }
 
@@ -1158,16 +1185,38 @@ clear_processed_dirty_flags_from_gpu :: (processed_count: s32) {
 
 bvh_query_overlap :: (bounds: AABB, out_indices: *[BRICKMAP_MAX_EDITS] s32) -> s32 {
     count: s32 = 0;
-    for i: 0..bvh.edit_count-1 {
-        b := bvh.edit_bounds[i];
-        if b.max.x < bounds.min.x || b.min.x > bounds.max.x continue;
-        if b.max.y < bounds.min.y || b.min.y > bounds.max.y continue;
-        if b.max.z < bounds.min.z || b.min.z > bounds.max.z continue;
-        if count < BRICKMAP_MAX_EDITS {
-            out_indices.*[count] = i;
-            count += 1;
+    if bvh.root_node < 0 return count;
+
+    stack: [BRICKMAP_MAX_EDITS * 2] s32;
+    sp: s32 = 0;
+    stack[sp] = bvh.root_node;
+    sp += 1;
+
+    while sp > 0 {
+        sp -= 1;
+        node_index := stack[sp];
+        if node_index < 0 continue;
+        node := bvh.nodes[node_index];
+        if !aabb_overlaps(node.bounds, bounds) continue;
+
+        if node.edit_index >= 0 {
+            if count < BRICKMAP_MAX_EDITS {
+                out_indices.*[count] = node.edit_index;
+                count += 1;
+            }
+            continue;
+        }
+
+        if node.left >= 0 {
+            stack[sp] = node.left;
+            sp += 1;
+        }
+        if node.right >= 0 {
+            stack[sp] = node.right;
+            sp += 1;
         }
     }
+
     return count;
 }
 
@@ -1381,17 +1430,160 @@ ray_aabb_hit_t :: (ray_origin: Vector3, ray_dir: Vector3, bounds: AABB) -> float
 pick_edit_from_bvh :: (ray_origin: Vector3, ray_dir: Vector3) -> s32 {
     best_i: s32 = -1;
     best_t: float = cast(float) 1000000000.0;
-    count := bvh.edit_count;
-    for i: 0..count-1 {
-        bounds := bvh.edit_bounds[i];
-        hit_t := ray_aabb_hit_t(ray_origin, ray_dir, bounds);
-        if hit_t < 0.0 continue;
-        if hit_t < best_t {
-            best_t = hit_t;
-            best_i = i;
+    if bvh.root_node < 0 return best_i;
+
+    stack: [BRICKMAP_MAX_EDITS * 2] s32;
+    sp: s32 = 0;
+    stack[sp] = bvh.root_node;
+    sp += 1;
+
+    while sp > 0 {
+        sp -= 1;
+        node_index := stack[sp];
+        if node_index < 0 continue;
+        node := bvh.nodes[node_index];
+
+        node_t := ray_aabb_hit_t(ray_origin, ray_dir, node.bounds);
+        if node_t < 0.0 continue;
+        if node_t > best_t continue;
+
+        if node.edit_index >= 0 {
+            if node_t < best_t {
+                best_t = node_t;
+                best_i = node.edit_index;
+            }
+            continue;
+        }
+
+        if node.left >= 0 {
+            stack[sp] = node.left;
+            sp += 1;
+        }
+        if node.right >= 0 {
+            stack[sp] = node.right;
+            sp += 1;
         }
     }
+
     return best_i;
+}
+
+bvh_alloc_node :: () -> s32 {
+    assert(bvh.node_count < bvh.nodes.count, "BVH node overflow.");
+    out := bvh.node_count;
+    bvh.node_count += 1;
+    return out;
+}
+
+bvh_axis_value :: (v: Vector3, axis: s32) -> float {
+    if axis == {
+    case 0; return v.x;
+    case 1; return v.y;
+    case 2; return v.z;
+    }
+    return v.x;
+}
+
+aabb_center :: (b: AABB) -> Vector3 {
+    return (b.min + b.max) * 0.5;
+}
+
+aabb_union :: (a: AABB, b: AABB) -> AABB {
+    return .{
+        min = .{
+            min(a.min.x, b.min.x),
+            min(a.min.y, b.min.y),
+            min(a.min.z, b.min.z),
+        },
+        max = .{
+            max(a.max.x, b.max.x),
+            max(a.max.y, b.max.y),
+            max(a.max.z, b.max.z),
+        },
+    };
+}
+
+aabb_overlaps :: (a: AABB, b: AABB) -> bool {
+    if a.max.x < b.min.x || a.min.x > b.max.x return false;
+    if a.max.y < b.min.y || a.min.y > b.max.y return false;
+    if a.max.z < b.min.z || a.min.z > b.max.z return false;
+    return true;
+}
+
+bvh_build_range :: (start: s32, end: s32, depth: s32) -> s32 {
+    node_index := bvh_alloc_node();
+    count := end - start;
+    assert(count > 0, "Invalid BVH build range.");
+    if depth > bvh.max_depth bvh.max_depth = depth;
+
+    bounds := bvh.edit_bounds[bvh.build_indices[start]];
+    centroid_min := aabb_center(bounds);
+    centroid_max := centroid_min;
+    for i: start+1..end-1 {
+        b := bvh.edit_bounds[bvh.build_indices[i]];
+        bounds = aabb_union(bounds, b);
+        c := aabb_center(b);
+        centroid_min.x = min(centroid_min.x, c.x);
+        centroid_min.y = min(centroid_min.y, c.y);
+        centroid_min.z = min(centroid_min.z, c.z);
+        centroid_max.x = max(centroid_max.x, c.x);
+        centroid_max.y = max(centroid_max.y, c.y);
+        centroid_max.z = max(centroid_max.z, c.z);
+    }
+
+    if count == 1 {
+        bvh.leaf_count += 1;
+        bvh.leaf_depth_sum += depth;
+        bvh.nodes[node_index] = .{
+            bounds = bounds,
+            left = -1,
+            right = -1,
+            edit_index = bvh.build_indices[start],
+        };
+        return node_index;
+    }
+
+    extent := centroid_max - centroid_min;
+    axis: s32 = 0;
+    if extent.y > extent.x {
+        axis = 1;
+    }
+    if extent.z > bvh_axis_value(extent, axis) {
+        axis = 2;
+    }
+    split_value := (bvh_axis_value(centroid_min, axis) + bvh_axis_value(centroid_max, axis)) * 0.5;
+
+    left_i := start;
+    right_i := end - 1;
+    while left_i <= right_i {
+        idx := bvh.build_indices[left_i];
+        c := aabb_center(bvh.edit_bounds[idx]);
+        if bvh_axis_value(c, axis) < split_value {
+            left_i += 1;
+            continue;
+        }
+
+        tmp := bvh.build_indices[left_i];
+        bvh.build_indices[left_i] = bvh.build_indices[right_i];
+        bvh.build_indices[right_i] = tmp;
+        right_i -= 1;
+    }
+
+    split := left_i;
+    if split <= start || split >= end {
+        split = start + count / 2;
+    }
+
+    left := bvh_build_range(start, split, depth + 1);
+    right := bvh_build_range(split, end, depth + 1);
+
+    bvh.nodes[node_index] = .{
+        bounds = bounds,
+        left = left,
+        right = right,
+        edit_index = -1,
+    };
+    return node_index;
 }
 
 edit_to_manip_object :: (edit_index: s32) -> Manip_Object {
