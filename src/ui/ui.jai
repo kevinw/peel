@@ -96,7 +96,7 @@ ui_render :: (wait_value: u64, signal_value: u64, ui_render_frame_info: *UI_Rend
         return;
     }
 
-    // ShowDemoWindow(null);
+    ShowDemoWindow(null);
     call_event_functions(.ui);
     Render();
 

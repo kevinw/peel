@@ -31,11 +31,16 @@ BRICKMAP_ATLAS_DIM_X :: BRICKMAP_ATLAS_BRICKS_X * BRICKMAP_BRICK_TEX_RES;
 BRICKMAP_ATLAS_DIM_Y :: BRICKMAP_ATLAS_BRICKS_Y * BRICKMAP_BRICK_TEX_RES;
 BRICKMAP_ATLAS_DIM_Z :: BRICKMAP_ATLAS_BRICKS_Z * BRICKMAP_BRICK_TEX_RES;
 
-SDF_SHAPE_SPHERE :: 0;
-SDF_SHAPE_BOX :: 1;
-SDF_OP_UNION :: 0;
-SDF_OP_SUBTRACT :: 1;
-SDF_OP_INTERSECT :: 2;
+SDF_Shape :: enum u32 {
+    Sphere :: 0;
+    Box :: 1;
+}
+
+SDF_Op :: enum u32 {
+    Union :: 0;
+    Subtract :: 1;
+    Intersect :: 2;
+}
 
 Brickmap_Lod_Info :: struct {
     origin_brick: IVector3;
@@ -47,8 +52,8 @@ Brickmap_Lod_Info :: struct {
 }
 
 SDF_Edit :: struct {
-    shape: u32;
-    op: u32;
+    shape: SDF_Shape;
+    op: SDF_Op;
     _pad0: u32;
     _pad1: u32;
 
@@ -120,8 +125,8 @@ Brickmap_Params :: struct {
     lod_origin_brick_y: [BRICKMAP_LOD_COUNT] s32;
     lod_origin_brick_z: [BRICKMAP_LOD_COUNT] s32;
     lod_voxel_size: [BRICKMAP_LOD_COUNT] float;
-    edit_shape: [BRICKMAP_MAX_EDITS] u32;
-    edit_op: [BRICKMAP_MAX_EDITS] u32;
+    edit_shape: [BRICKMAP_MAX_EDITS] SDF_Shape;
+    edit_op: [BRICKMAP_MAX_EDITS] SDF_Op;
     edit_pos_radius: [BRICKMAP_MAX_EDITS] Vector4;
     edit_half_extents_blend: [BRICKMAP_MAX_EDITS] Vector4;
     edit_rotation: [BRICKMAP_MAX_EDITS] Vector4;
@@ -148,6 +153,11 @@ Brickmap_Compute_In :: struct {
     thread_id: UVector3; @thread_position_in_grid
 }
 
+Brickmap_Blit_Params :: struct {
+    source_texture_index: u32;
+    source_sampler_index: u32;
+}
+
 brickmap_vertex_main :: (using in: Brickmap_Vertex_In) -> Brickmap_Vertex_Out {
     using out: Brickmap_Vertex_Out;
 
@@ -164,6 +174,28 @@ brickmap_vertex_main :: (using in: Brickmap_Vertex_In) -> Brickmap_Vertex_Out {
     uv = .{pos.x * 0.5 + 0.5, pos.y * 0.5 + 0.5};
     return out;
 } @vertex_shader
+
+brickmap_blit_vertex_main :: (using in: Brickmap_Vertex_In) -> Brickmap_Vertex_Out {
+    using out: Brickmap_Vertex_Out;
+
+    pos: Vector2;
+    if vertex_id == 0 {
+        pos = .{-1.0, -1.0};
+    } else if vertex_id == 1 {
+        pos = .{3.0, -1.0};
+    } else {
+        pos = .{-1.0, 3.0};
+    }
+
+    gl_Position = .{pos.x, pos.y, 0.0, 1.0};
+    uv = .{pos.x * 0.5 + 0.5, pos.y * 0.5 + 0.5};
+    return out;
+} @vertex_shader
+
+brickmap_blit_fragment_main :: (using in: Brickmap_Fragment_In, params: *Brickmap_Blit_Params) -> struct { out_color: Vector4; } {
+    c := sample_2d(params.source_texture_index, params.source_sampler_index, .{uv.x, 1.0 - uv.y});
+    return .{out_color = c};
+} @fragment_shader
 
 safe_normalize :: (v: Vector3) -> Vector3 {
     len2 := dot(v, v);
@@ -197,7 +229,6 @@ eval_edits_sdf :: (params: *Brickmap_Params, p: Vector3) -> float {
     d := cast(float) 100000.0;
     count := cast(s32) params.edit_count;
     for i: 0..count-1 {
-        shape := params.edit_shape[i];
         op := params.edit_op[i];
         pos_radius := params.edit_pos_radius[i];
         extents_blend := params.edit_half_extents_blend[i];
@@ -205,18 +236,17 @@ eval_edits_sdf :: (params: *Brickmap_Params, p: Vector3) -> float {
         q := inv_rotate_quat(p - pos_radius.xyz, rot);
 
         sd: float;
-        if shape == SDF_SHAPE_BOX {
+        if #complete params.edit_shape[i] == {
+        case .Box;
             sd = sdf_box(q, extents_blend.xyz);
-        } else {
+        case .Sphere;
             sd = sdf_sphere(q, pos_radius.w);
         }
 
-        if op == SDF_OP_SUBTRACT {
-            d = max(d, -sd);
-        } else if op == SDF_OP_INTERSECT {
-            d = max(d, sd);
-        } else {
-            d = min(d, sd);
+        if #complete op == {
+        case .Union;     d = min(d, sd);
+        case .Subtract;  d = max(d, -sd);
+        case .Intersect; d = max(d, sd);
         }
     }
 
@@ -581,7 +611,7 @@ brickmap_fragment_main :: (using in: Brickmap_Fragment_In, params: *Brickmap_Par
         }
         t += step_len;
         prev_d = d;
-        if t > 80.0 break;
+        if t > 80.0 break; // TODO: make this a named constant and tune based on expected scene scale.
     }
 
     sky_a := Vector3.{0.12, 0.14, 0.18};
@@ -629,11 +659,13 @@ brickmap_fragment_main :: (using in: Brickmap_Fragment_In, params: *Brickmap_Par
         base := Vector3.{0.48, 0.52, 0.58};
         color = base * (0.2 + 0.8 * ndl);
 
-        // Grid-like accent from world position to make edits easier to read.
-        grid_u := abs(fract(pos.x * 0.25) - 0.5) * 2.0;
-        grid_v := abs(fract(pos.z * 0.25) - 0.5) * 2.0;
-        line := 1.0 - clamp(min(grid_u, grid_v) * 22.0, 0.0, 1.0);
-        color = mix(color, color * 1.35, line * 0.18);
+        // Optional grid-like accent from world position to make edits easier to read.
+        if false {
+            grid_u := abs(fract(pos.x * 0.25) - 0.5) * 2.0;
+            grid_v := abs(fract(pos.z * 0.25) - 0.5) * 2.0;
+            line := 1.0 - clamp(min(grid_u, grid_v) * 22.0, 0.0, 1.0);
+            color = mix(color, color * 1.35, line * 0.18);
+        }
     }
 
     return .{out_color = .{color.x, color.y, color.z, 1.0}};
