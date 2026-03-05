@@ -25,7 +25,7 @@ BRICKMAP_ATLAS_BRICKS_Z :: 32;
 // Total number of addressable atlas brick slots.
 BRICKMAP_MAX_BRICKS :: BRICKMAP_ATLAS_BRICKS_X * BRICKMAP_ATLAS_BRICKS_Y * BRICKMAP_ATLAS_BRICKS_Z;
 // Max dirty-brick work items processed in one dispatch batch.
-BRICKMAP_MAX_DIRTY_BRICKS :: 2048;
+BRICKMAP_MAX_DIRTY_BRICKS :: 10000;
 // Atlas texture width/height/depth in texels.
 BRICKMAP_ATLAS_DIM_X :: BRICKMAP_ATLAS_BRICKS_X * BRICKMAP_BRICK_TEX_RES;
 BRICKMAP_ATLAS_DIM_Y :: BRICKMAP_ATLAS_BRICKS_Y * BRICKMAP_BRICK_TEX_RES;
@@ -106,8 +106,14 @@ Brickmap_Params :: struct {
     bake_debug_gradient: u32;
     cache_debug_show_selected_lod: u32;
     cache_debug_show_distance: u32;
+    cache_debug_show_cell_state: u32;
+    debug_force_flat_color: u32;
     cache_force_lod0: u32;
     atlas_debug_slice: float;
+    frame_index: u32;
+    _pad_frame_index0: u32;
+    _pad_frame_index1: u32;
+    _pad_frame_index2: u32;
     debug_classify_candidates: u32;
     debug_classify_surface: u32;
     debug_classify_existing: u32;
@@ -121,6 +127,8 @@ Brickmap_Params :: struct {
     _pad4: [2] u32;
     debug_bake_seen_atlas: [BRICKMAP_MAX_DIRTY_BRICKS] u32;
     pointer_grid: [BRICKMAP_LOD_COUNT * BRICKMAP_GRID_CELLS] s32;
+    pointer_grid_valid: [BRICKMAP_LOD_COUNT * BRICKMAP_GRID_CELLS] u32;
+    pointer_grid_publish_frame: [BRICKMAP_LOD_COUNT * BRICKMAP_GRID_CELLS] u32;
     lod_origin_brick_x: [BRICKMAP_LOD_COUNT] s32;
     lod_origin_brick_y: [BRICKMAP_LOD_COUNT] s32;
     lod_origin_brick_z: [BRICKMAP_LOD_COUNT] s32;
@@ -304,7 +312,8 @@ sample_cached :: (params: *Brickmap_Params, p: Vector3) -> Vector4 {
     if params.cache_force_lod0 != 0 {
         max_lod = 1;
     }
-    for lod: 0..max_lod-1 {
+    for lod_i: 0..max_lod-1 {
+        lod := cast(s32) lod_i;
         voxel_size := max(params.lod_voxel_size[lod], 0.0001);
 
         gx := p.x / voxel_size;
@@ -324,6 +333,7 @@ sample_cached :: (params: *Brickmap_Params, p: Vector3) -> Vector4 {
 
         ptr_base := lod * BRICKMAP_GRID_CELLS;
         ptr_idx := ptr_base + lx + ly * BRICKMAP_GRID_RES + lz * BRICKMAP_GRID_RES * BRICKMAP_GRID_RES;
+        if params.pointer_grid_valid[ptr_idx] == 0 continue;
         atlas_index := params.pointer_grid[ptr_idx];
         if atlas_index < 0 continue;
 
@@ -340,6 +350,44 @@ sample_cached :: (params: *Brickmap_Params, p: Vector3) -> Vector4 {
 
 sample_cached_lod :: (params: *Brickmap_Params, p: Vector3) -> s32 {
     return cast(s32) sample_cached(params, p).y;
+}
+
+probe_cached_cell :: (params: *Brickmap_Params, p: Vector3) -> Vector4 {
+    max_lod := BRICKMAP_LOD_COUNT;
+    if params.cache_force_lod0 != 0 max_lod = 1;
+
+    for lod_i: 0..max_lod-1 {
+        lod := cast(s32) lod_i;
+        voxel_size := max(params.lod_voxel_size[lod], 0.0001);
+
+        gx := p.x / voxel_size;
+        gy := p.y / voxel_size;
+        gz := p.z / voxel_size;
+
+        bx := cast(s32) floor(gx / cast(float) BRICKMAP_BRICK_RES);
+        by := cast(s32) floor(gy / cast(float) BRICKMAP_BRICK_RES);
+        bz := cast(s32) floor(gz / cast(float) BRICKMAP_BRICK_RES);
+
+        lx := bx - params.lod_origin_brick_x[lod];
+        ly := by - params.lod_origin_brick_y[lod];
+        lz := bz - params.lod_origin_brick_z[lod];
+        if lx < 0 || ly < 0 || lz < 0 continue;
+        if lx >= BRICKMAP_GRID_RES || ly >= BRICKMAP_GRID_RES || lz >= BRICKMAP_GRID_RES continue;
+
+        ptr_base := lod * BRICKMAP_GRID_CELLS;
+        ptr_idx := ptr_base + lx + ly * BRICKMAP_GRID_RES + lz * BRICKMAP_GRID_RES * BRICKMAP_GRID_RES;
+        atlas_index := params.pointer_grid[ptr_idx];
+        valid := params.pointer_grid_valid[ptr_idx];
+        if atlas_index < 0 {
+            return .{cast(float) lod, cast(float) valid, 0.0, cast(float) atlas_index};
+        }
+
+        publish_frame := params.pointer_grid_publish_frame[ptr_idx];
+        age := params.frame_index - publish_frame;
+        return .{cast(float) lod, cast(float) valid, cast(float) age, cast(float) atlas_index};
+    }
+
+    return .{-1.0, 0.0, 0.0, -2.0};
 }
 
 step_to_next_lod0_cell :: (params: *Brickmap_Params, p: Vector3, rd: Vector3) -> float {
@@ -463,6 +511,10 @@ cached_normal :: (params: *Brickmap_Params, p: Vector3, voxel: float) -> Vector3
 }
 
 brickmap_fragment_main :: (using in: Brickmap_Fragment_In, params: *Brickmap_Params) -> struct { out_color: Vector4; } {
+    if params.debug_force_flat_color != 0 {
+        return .{out_color = .{0.22, 0.35, 0.58, 1.0}};
+    }
+
     p := Vector2.{uv.x * 2.0 - 1.0, uv.y * 2.0 - 1.0};
     denom := max(params.resolution.y, 1.0);
     aspect := params.resolution.x / denom;
@@ -496,7 +548,7 @@ brickmap_fragment_main :: (using in: Brickmap_Fragment_In, params: *Brickmap_Par
         ptr_base := 0 * BRICKMAP_GRID_CELLS;
         ptr_idx := ptr_base + gx + gy * BRICKMAP_GRID_RES + lz * BRICKMAP_GRID_RES * BRICKMAP_GRID_RES;
         atlas_index := params.pointer_grid[ptr_idx];
-        occupied := atlas_index >= 0;
+        occupied := atlas_index >= 0 && params.pointer_grid_valid[ptr_idx] != 0;
         occ := ifx occupied then 1.0 else 0.0;
         idx_t := clamp(cast(float) max(atlas_index, 0) / cast(float) BRICKMAP_MAX_BRICKS, 0.0, 1.0);
         c := mix(Vector3.{0.08, 0.08, 0.08}, Vector3.{0.15, 0.95, 0.35}, occ);
@@ -620,6 +672,31 @@ brickmap_fragment_main :: (using in: Brickmap_Fragment_In, params: *Brickmap_Par
     color := mix(sky_a, sky_b, sky_t);
 
     if hit {
+        if use_cache && params.cache_debug_show_cell_state != 0 {
+            probe_pos := ro + rd * t;
+            probe := probe_cached_cell(params, probe_pos);
+            lod := cast(s32) probe.x;
+            valid := cast(s32) probe.y;
+            publish_age := cast(s32) probe.z;
+            atlas_index := cast(s32) probe.w;
+            if lod < 0 {
+                return .{out_color = .{0.02, 0.02, 0.02, 1.0}};
+            }
+            if atlas_index < 0 {
+                return .{out_color = .{0.35, 0.35, 0.35, 1.0}};
+            }
+            if valid == 0 {
+                return .{out_color = .{1.0, 0.0, 0.0, 1.0}};
+            }
+            age_t := clamp(cast(float) publish_age / 6.0, 0.0, 1.0);
+            lod_color := Vector3.{0.15, 0.85, 1.0};
+            if lod == 1 lod_color = .{1.0, 0.65, 0.2};
+            if lod >= 2 lod_color = .{1.0, 0.0, 1.0};
+            recent := ifx publish_age <= 1 then 1.0 else 0.0;
+            c := mix(lod_color, Vector3.{0.25, 0.25, 0.25}, age_t);
+            c = mix(c, Vector3.{1.0, 1.0, 0.0}, recent * 0.85);
+            return .{out_color = .{c.x, c.y, c.z, 1.0}};
+        }
         if hit_is_ground {
             // High-contrast floor debug color to separate floor-hits from sky misses.
             return .{out_color = .{0.10, 0.92, 0.18, 1.0}};
@@ -697,6 +774,8 @@ brickmap_classify_dirty_compute :: (using in: Brickmap_Compute_In, params: *Bric
     has_surface := brick_has_surface(params, lod, bx, by, bz);
     if !has_surface {
         params.pointer_grid[ptr_idx] = -1;
+        params.pointer_grid_valid[ptr_idx] = 0;
+        params.pointer_grid_publish_frame[ptr_idx] = 0;
         return;
     }
     atomic_add_u32(*params.debug_classify_surface, 1);
@@ -714,6 +793,8 @@ brickmap_classify_dirty_compute :: (using in: Brickmap_Compute_In, params: *Bric
     } else {
         atomic_add_u32(*params.debug_classify_existing, 1);
     }
+    // Mark cell invalid while bake writes texels; publish pass flips it to valid.
+    params.pointer_grid_valid[ptr_idx] = 0;
 
     out_i := cast(s32) atomic_add_u32(*params.dirty_count, 1);
     if out_i >= BRICKMAP_MAX_DIRTY_BRICKS {
@@ -780,4 +861,38 @@ brickmap_bake_compute :: (using in: Brickmap_Compute_In, params: *Brickmap_Param
     ty := cast(s32) atlas_brick.y * BRICKMAP_BRICK_TEX_RES + vy;
     tz := cast(s32) atlas_brick.z * BRICKMAP_BRICK_TEX_RES + vz;
     write_3d(params.atlas_texture_index, cast(u32) tx, cast(u32) ty, cast(u32) tz, .{d, 0.0, 0.0, 1.0});
+} @compute_shader
+
+brickmap_publish_compute :: (using in: Brickmap_Compute_In, params: *Brickmap_Params) {
+    i := cast(s32) thread_id.x;
+    count := min(cast(s32) params.dirty_count, BRICKMAP_MAX_DIRTY_BRICKS);
+    if i >= count return;
+
+    req := params.dirty_lod_brick_xyz[i];
+    lod := cast(s32) req.x;
+    if lod < 0 || lod >= BRICKMAP_LOD_COUNT return;
+
+    bx := cast(s32) req.y;
+    by := cast(s32) req.z;
+    bz := cast(s32) req.w;
+
+    lx := bx - params.lod_origin_brick_x[lod];
+    ly := by - params.lod_origin_brick_y[lod];
+    lz := bz - params.lod_origin_brick_z[lod];
+    if lx < 0 || ly < 0 || lz < 0 return;
+    if lx >= BRICKMAP_GRID_RES || ly >= BRICKMAP_GRID_RES || lz >= BRICKMAP_GRID_RES return;
+
+    ptr_base := lod * BRICKMAP_GRID_CELLS;
+    ptr_idx := ptr_base + lx + ly * BRICKMAP_GRID_RES + lz * BRICKMAP_GRID_RES * BRICKMAP_GRID_RES;
+
+    atlas_index := cast(s32) params.dirty_atlas_index[i];
+    if atlas_index < 0 {
+        params.pointer_grid[ptr_idx] = -1;
+        params.pointer_grid_valid[ptr_idx] = 0;
+        params.pointer_grid_publish_frame[ptr_idx] = 0;
+        return;
+    }
+    params.pointer_grid[ptr_idx] = atlas_index;
+    params.pointer_grid_valid[ptr_idx] = 1;
+    params.pointer_grid_publish_frame[ptr_idx] = params.frame_index;
 } @compute_shader
