@@ -493,44 +493,6 @@ sample_cached_albedo :: (params: *Brickmap_Params, p: Vector3) -> Vector3 {
     return .{0.48, 0.52, 0.58};
 }
 
-probe_cached_cell :: (params: *Brickmap_Params, p: Vector3) -> Vector4 {
-    max_lod := BRICKMAP_LOD_COUNT;
-    if params.cache_force_lod0 != 0 max_lod = 1;
-
-    for lod_i: 0..max_lod-1 {
-        lod := cast(s32) lod_i;
-        voxel_size := max(params.lod_voxel_size[lod], 0.0001);
-
-        gx := p.x / voxel_size;
-        gy := p.y / voxel_size;
-        gz := p.z / voxel_size;
-
-        bx := cast(s32) floor(gx / cast(float) BRICKMAP_BRICK_RES);
-        by := cast(s32) floor(gy / cast(float) BRICKMAP_BRICK_RES);
-        bz := cast(s32) floor(gz / cast(float) BRICKMAP_BRICK_RES);
-
-        lx := bx - params.lod_origin_brick_x[lod];
-        ly := by - params.lod_origin_brick_y[lod];
-        lz := bz - params.lod_origin_brick_z[lod];
-        if lx < 0 || ly < 0 || lz < 0 continue;
-        if lx >= BRICKMAP_GRID_RES || ly >= BRICKMAP_GRID_RES || lz >= BRICKMAP_GRID_RES continue;
-
-        ptr_base := lod * BRICKMAP_GRID_CELLS;
-        ptr_idx := ptr_base + lx + ly * BRICKMAP_GRID_RES + lz * BRICKMAP_GRID_RES * BRICKMAP_GRID_RES;
-        atlas_index := params.pointer_grid[ptr_idx];
-        valid := params.pointer_grid_valid[ptr_idx];
-        if atlas_index < 0 {
-            return .{cast(float) lod, cast(float) valid, 0.0, cast(float) atlas_index};
-        }
-
-        publish_frame := params.pointer_grid_publish_frame[ptr_idx];
-        age := params.frame_index - publish_frame;
-        return .{cast(float) lod, cast(float) valid, cast(float) age, cast(float) atlas_index};
-    }
-
-    return .{-1.0, 0.0, 0.0, -2.0};
-}
-
 step_to_next_lod0_cell :: (params: *Brickmap_Params, p: Vector3, rd: Vector3) -> float {
     voxel_size := max(params.lod_voxel_size[0], 0.0001);
     cell_size := voxel_size * cast(float) BRICKMAP_BRICK_RES;
@@ -739,7 +701,7 @@ brickmap_fragment_main :: (using in: Brickmap_Fragment_In, params: *Brickmap_Par
             if sample_lod >= 0 {
                 // Bias sampled distance slightly inward to counter
                 // non-conservative interpolation on coarse voxels.
-                d_cached -= sample_voxel * 0.35;
+                d_cached -= sample_voxel * INWARD_SAMPLED_BIAS;
                 non_ground_d = d_cached;
                 d = min(non_ground_d, d_ground);
             } else {
@@ -769,7 +731,7 @@ brickmap_fragment_main :: (using in: Brickmap_Fragment_In, params: *Brickmap_Par
             lod_voxel := max(params.lod_voxel_size[sample_lod], 0.0001);
             // Cached SDF is sampled from voxel data; treat near-surface values
             // relative to voxel size to avoid missing thin silhouettes.
-            hit_eps = max(hit_eps, lod_voxel * 0.24);
+            hit_eps = max(hit_eps, lod_voxel * HIT_EPSILON_VOXEL_SCALE);
         }
 
         if d < hit_eps {
@@ -813,34 +775,9 @@ brickmap_fragment_main :: (using in: Brickmap_Fragment_In, params: *Brickmap_Par
     color := mix(sky_a, sky_b, sky_t);
 
     if hit {
-        if use_cache && params.cache_debug_show_cell_state != 0 {
-            probe_pos := ro + rd * t;
-            probe := probe_cached_cell(params, probe_pos);
-            lod := cast(s32) probe.x;
-            valid := cast(s32) probe.y;
-            publish_age := cast(s32) probe.z;
-            atlas_index := cast(s32) probe.w;
-            if lod < 0 {
-                return .{out_color = .{0.02, 0.02, 0.02, 1.0}};
-            }
-            if atlas_index < 0 {
-                return .{out_color = .{0.35, 0.35, 0.35, 1.0}};
-            }
-            if valid == 0 {
-                return .{out_color = .{1.0, 0.0, 0.0, 1.0}};
-            }
-            age_t := clamp(cast(float) publish_age / 6.0, 0.0, 1.0);
-            lod_color := Vector3.{0.15, 0.85, 1.0};
-            if lod == 1 lod_color = .{1.0, 0.65, 0.2};
-            if lod >= 2 lod_color = .{1.0, 0.0, 1.0};
-            recent := ifx publish_age <= 1 then 1.0 else 0.0;
-            c := mix(lod_color, Vector3.{0.25, 0.25, 0.25}, age_t);
-            c = mix(c, Vector3.{1.0, 1.0, 0.0}, recent * 0.85);
-            return .{out_color = .{c.x, c.y, c.z, 1.0}};
-        }
         if hit_is_ground {
             // High-contrast floor debug color to separate floor-hits from sky misses.
-            return .{out_color = .{0.10, 0.92, 0.18, 1.0}};
+            return .{out_color = .{0.5, 0.72, 0.38, 1.0}};
         }
         if use_cache && params.cache_debug_show_selected_lod != 0 {
             if hit_lod == 0 return .{out_color = .{0.15, 0.85, 1.0, 1.0}};
@@ -952,9 +889,6 @@ brickmap_classify_dirty_compute :: (using in: Brickmap_Compute_In, params: *Bric
     params.dirty_classify_result[i] = 1;
     params.dirty_lod_brick_xyz[out_i] = req;
     params.dirty_atlas_index[out_i] = cast(u32) atlas_index;
-    atomic_min_u32(*params.debug_bake_min_atlas, cast(u32) max(atlas_index, 0));
-    atomic_max_u32(*params.debug_bake_max_atlas, cast(u32) max(atlas_index, 0));
-    atomic_add_u32(*params.debug_bake_total_voxels, cast(u32) BRICKMAP_BRICK_TEXELS);
     atomic_add_u32(*params.debug_bake_bricks_touched, 1);
 } @compute_shader
 

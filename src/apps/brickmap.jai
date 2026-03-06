@@ -6,6 +6,12 @@ WRITE_SHADER_OUTPUT :: true;
 SHR :: #import,file "../shader_hot_reload.jai";
 #load "shaders/brickmap_shader.jai";
 
+// BRICK VISUAL FIDELITY TUNABLES
+BASE_VOXEL :: 0.08;
+INWARD_SAMPLED_BIAS :: 0.10;
+HIT_EPSILON_VOXEL_SCALE :: 0.12;
+
+
 AABB :: struct {
     min: Vector3;
     max: Vector3;
@@ -124,7 +130,6 @@ bake_gradient_debug := false;
 skip_classify_debug := false;
 cache_debug_show_selected_lod := false;
 cache_debug_show_distance := false;
-cache_debug_show_cell_state := false;
 debug_force_flat_color := false;
 cache_force_lod0 := false;
 auto_fly_forward := false;
@@ -364,7 +369,6 @@ ui :: () {
         Checkbox("Debug Force Flat Color", *debug_force_flat_color);
         Checkbox("Cache Debug: Selected LOD", *cache_debug_show_selected_lod);
         Checkbox("Cache Debug: Distance", *cache_debug_show_distance);
-        Checkbox("Cache Debug: Cell State", *cache_debug_show_cell_state);
         Checkbox("Cache Debug: Force LOD0", *cache_force_lod0);
         Checkbox("Draw Brick Debug", *draw_brick_debug);
         Checkbox("Edit Manip", *edit_manip_enabled);
@@ -426,7 +430,6 @@ ui :: () {
                 Text("GPU classify rejected(cap): %", debug_classify_rejected_capacity);
                 Text("GPU classify out_count: %", debug_classify_out_count);
                 Text("GPU bake bricks/voxels: % / %", debug_bake_bricks_touched, debug_bake_total_voxels);
-                Text("GPU bake atlas min..max: % .. %", debug_bake_min_atlas, debug_bake_max_atlas);
                 seen_count := cast(s32) min(params_cpu.debug_classify_out_count, cast(u32) BRICKMAP_MAX_DIRTY_BRICKS);
                 seen_min: s32 = 1 << 30;
                 seen_max: s32 = -1;
@@ -621,7 +624,7 @@ tick :: () {
         }
 
         using params_cpu;
-        log("BRICKMAP_GPU_DEBUG edits=% dirty_pending=% dirty_after=% atlas_used=%/% ptr_cells=% classify(cand=% surf=% exist=% new=% reject=% out=%) bake(bricks=% voxels=% atlas=%..% seen=%..% nonzero=%/%)",
+        log("BRICKMAP_GPU_DEBUG edits=% dirty_pending=% dirty_after=% atlas_used=%/% ptr_cells=% classify(cand=% surf=% exist=% new=% reject=% out=%) bake(bricks=% voxels=% seen=%..% nonzero=%/%)",
             edit_count,
             pending_dirty_count,
             dirty_count,
@@ -635,7 +638,6 @@ tick :: () {
             debug_classify_out_count,
             debug_bake_bricks_touched,
             debug_bake_total_voxels,
-            debug_bake_min_atlas, debug_bake_max_atlas,
             seen_min, seen_max, seen_nonzero, seen_count);
         debug_autolog_once = true;
     }
@@ -686,7 +688,6 @@ tick :: () {
     params_cpu.bake_debug_gradient = to_u32(bake_gradient_debug);
     params_cpu.cache_debug_show_selected_lod = to_u32(cache_debug_show_selected_lod);
     params_cpu.cache_debug_show_distance = to_u32(cache_debug_show_distance);
-    params_cpu.cache_debug_show_cell_state = to_u32(cache_debug_show_cell_state);
     params_cpu.debug_force_flat_color = to_u32(debug_force_flat_color);
     params_cpu.cache_force_lod0 = to_u32(cache_force_lod0);
     params_cpu.frame_index = cast(u32) frame_count;
@@ -836,8 +837,6 @@ tick :: () {
                 dirty_classify_result[i] = 1;
             }
             debug_classify_out_count = cast(u32) pending_dirty_count;
-            debug_bake_min_atlas = 0;
-            debug_bake_max_atlas = cast(u32) max(0, pending_dirty_count - 1);
             if next_atlas_index < pending_dirty_count {
                 next_atlas_index = pending_dirty_count;
                 atlas_alloc_next = cast(u32) next_atlas_index;
@@ -855,8 +854,6 @@ tick :: () {
                 dirty_count = 0;
                 debug_bake_total_voxels = 0;
                 debug_bake_bricks_touched = 0;
-                debug_bake_min_atlas = cast(u32) 0xFFFFFFFF;
-                debug_bake_max_atlas = 0;
             }
 
             result=, classify_cmd := gpu_start_command_recording(main_queue);
@@ -888,10 +885,6 @@ tick :: () {
                 atlas_capacity_reached = false;
             }
             params_cpu.debug_classify_out_count = params_cpu.dirty_count;
-            if params_cpu.dirty_count == 0 {
-                params_cpu.debug_bake_min_atlas = 0;
-                params_cpu.debug_bake_max_atlas = 0;
-            }
             bake_threads = cast(s32) params_cpu.dirty_count * BRICKMAP_BRICK_TEXELS;
         }
     }
@@ -1223,12 +1216,11 @@ mark_all_edits_dirty :: (reason: string) {
 
 update_lod_origins :: (camera_moved: bool) {
     if !camera_moved return;
-    base_voxel := 0.14;
 
     changed := false;
     queued_total: s32 = 0;
     for lod: 0..BRICKMAP_LOD_COUNT-1 {
-        voxel_size := base_voxel * cast(float) (1 << lod);
+        voxel_size := BASE_VOXEL * cast(float) (1 << lod);
         brick_world_size := voxel_size * cast(float) BRICKMAP_BRICK_RES;
 
         origin_x := cast(s32) floor(camera.position.x / brick_world_size) - BRICKMAP_GRID_RES / 2;
