@@ -84,6 +84,7 @@ on_unload :: () {
 app_ui_open := true;
 
 app_ui :: () {
+    if !app_ui_enabled return;
     using,except(Viewport) _ :: #import "ImGui";
     Persist :: #import,file "../ui/persist_controls.jai";
     inspect_globals();

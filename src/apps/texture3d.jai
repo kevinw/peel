@@ -104,7 +104,7 @@ tick :: () {
     assert(result == .SUCCESS);
     if !swapchain_image return;
 
-    texture3d_ui();
+    if app_ui_enabled texture3d_ui();
 
     _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
     if dims_ok && win_w > 0 && win_h > 0 {

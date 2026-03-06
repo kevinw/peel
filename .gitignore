@@ -61,3 +61,6 @@ dist/pbr.dylib
 dist/tetris
 dist/tetris.dylib
 dist/ui_gallery.dylib
+dist/texture3d
+dist/texture3d.dylib
+dist/ui_gallery

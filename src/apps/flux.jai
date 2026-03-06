@@ -153,6 +153,7 @@ flux_mouse_ray_to_terrain_uv :: (mouse_x: s64, mouse_y: s64, win_w: u32, win_h: 
 flux_ui_open: bool = true;
 
 flux_ui :: () {
+    if !app_ui_enabled return;
     using,except(Viewport) ImGui;
     Persist :: #import,file "../ui/persist_controls.jai";
 

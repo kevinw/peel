@@ -28,6 +28,7 @@ perf_capture_gpu_ms_sum: float64 = 0;
 perf_capture_count: s64 = 0;
 perf_capture_gpu_count: s64 = 0;
 perf_capture_reported := false;
+app_ui_enabled := true;
 
 snapshot: struct {
     enabled := false;
@@ -224,6 +225,12 @@ app_update :: (update_ctx: *App_Update_Ctx) {
             case .QUIT;
                 app_quit_requested = true;
             case .KEYBOARD;
+                if key_code == .F1 && key_pressed {
+                    app_ui_enabled = !app_ui_enabled;
+                    if !app_ui_enabled ui_cancel_pending_frame(*current_ui_render_frame);
+                    continue;
+                }
+
                 if ui_has_keyboard continue;
 
                 if key_code == #char "R" && key_pressed {
@@ -290,6 +297,7 @@ app_update :: (update_ctx: *App_Update_Ctx) {
 }
 
 ui_wants_keyboard :: () -> bool {
+    if !app_should_render_ui() return false;
     using,only(GetCurrentContext, GetIO) _ :: #import "ImGui";
     if GetCurrentContext() != null {
         io := GetIO();
@@ -362,10 +370,16 @@ host_init :: (init_ctx: Init_Ctx) -> bool {
     perf_capture_count = 0;
     perf_capture_gpu_count = 0;
     perf_capture_reported = false;
+    app_ui_enabled = true;
     snapshot = {};
     env_reload_snapshot_mode, did_parse_reload_snapshot_mode := Env_Vars.try_parse_env_int("PEEL_SHADER_RELOAD_SNAPSHOT");
     if did_parse_reload_snapshot_mode {
         snapshot.enabled = env_reload_snapshot_mode > 0;
+    }
+
+    env_disable_ui, did_parse_disable_ui := Env_Vars.try_parse_env_int("PEEL_DISABLE_UI");
+    if did_parse_disable_ui {
+        app_ui_enabled = env_disable_ui <= 0;
     }
     #if OS == {
         case .WINDOWS;
@@ -410,7 +424,7 @@ shader_reload_on_ui :: () { SHR.shader_hot_reload_imgui(*shader_reload_ctx, ui_g
 #scope_file
 
 app_should_render_ui :: () -> bool {
-    return true;
+    return app_ui_enabled;
 }
 
 wait_for_initial_focus_before_dll_init :: () {

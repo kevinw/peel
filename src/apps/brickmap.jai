@@ -344,6 +344,7 @@ on_unload :: () {
 } @on_unload
 
 ui :: () {
+    if !app_ui_enabled return;
     using ImGui;
     SetNextWindowPos(.{24.0, 24.0}, .FirstUseEver);
     SetNextWindowSize(.{560.0, 420.0}, .FirstUseEver);
