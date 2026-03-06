@@ -1,11 +1,6 @@
 num_app_reloads: int = 0;
 SAVE_AND_RESTORE_WINDOW_POS :: true;
-
-USE_GLOBAL_DLL_CONTEXT :: false;
 CHECK_CONTEXT :: false;
-#if USE_GLOBAL_DLL_CONTEXT {
-    bare_context: #Context;
-}
 
 ////
 
@@ -44,13 +39,10 @@ get_globals :: () -> []Global_Entry {
     push_remapped_context_without_stack_trace :: () #expand { }
 } else {
     push_remapped_context_without_stack_trace :: () #expand {
-        host_context := context;
-        #if USE_GLOBAL_DLL_CONTEXT {
-            dll_context := *bare_context;
-        } else {
-            dll_context := remap_context();
-        }
+        dll_context := remap_context();
+
         #if CHECK_CONTEXT {
+            host_context := context;
             check_context(*host_context, host_context.context_info, "host context");
             check_context(dll_context,  dll_context.context_info,  "dll_context");
         }
