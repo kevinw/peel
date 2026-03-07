@@ -10,6 +10,7 @@ SHR :: #import,file "../shader_hot_reload.jai";
 BASE_VOXEL :: 0.08;
 INWARD_SAMPLED_BIAS :: 0.10;
 HIT_EPSILON_VOXEL_SCALE :: 0.12;
+BRICKMAP_PARAM_RING_SLOTS :: 32;
 
 
 AABB :: struct {
@@ -60,11 +61,11 @@ compute_bake_pipeline: Gpu_Pipeline;
 compute_publish_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 
-params_ring_cpu: *[SGPU_FRAMES_IN_FLIGHT] Brickmap_Params;
+params_ring_cpu: *[BRICKMAP_PARAM_RING_SLOTS] Brickmap_Params;
 params_ring_gpu: Gpu_Ptr;
 params_cpu: *Brickmap_Params;
 params_gpu: Gpu_Ptr;
-blit_params_ring_cpu: *[SGPU_FRAMES_IN_FLIGHT] Brickmap_Blit_Params;
+blit_params_ring_cpu: *[BRICKMAP_PARAM_RING_SLOTS] Brickmap_Blit_Params;
 blit_params_ring_gpu: Gpu_Ptr;
 blit_params_cpu: *Brickmap_Blit_Params;
 blit_params_gpu: Gpu_Ptr;
@@ -83,6 +84,8 @@ atlas_texture: Gpu_Texture;
 atlas_view: Gpu_Texture_View;
 atlas_albedo_texture: Gpu_Texture;
 atlas_albedo_view: Gpu_Texture_View;
+atlas_normal_texture: Gpu_Texture;
+atlas_normal_view: Gpu_Texture_View;
 atlas_linear_sampler: Gpu_Sampler;
 atlas_point_sampler: Gpu_Sampler;
 render_texture: Gpu_Texture;
@@ -136,7 +139,7 @@ auto_fly_forward := false;
 auto_fly_speed: float = 8.0;
 log_validation_every_frame := false;
 debug_wait_idle_every_frame := false;
-debug_strict_compute_sync := true;
+debug_strict_compute_sync := false;
 debug_render_direct_swapchain := false;
 atlas_debug_slice: float = 0.5;
 render_scale: float = 0.75;
@@ -146,7 +149,7 @@ guard_corruption_count: s32;
 guard_corruption_reported := false;
 params_ring_last_slot: s64 = -1;
 bindless_index_logged_once := false;
-BRICKMAP_RANDOM_STARTUP_EDITS :: 4000;
+BRICKMAP_RANDOM_STARTUP_EDITS :: 20;
 BRICKMAP_RANDOM_STARTUP_SEED  :: cast(u64) 0xB17C_A11A_5EED;
 
 gizmo_ctx: Gizmo.Gizmo_Context;
@@ -175,6 +178,20 @@ focus_t: float;
 focus_duration: float = 0.25;
 validation_frame: Brickmap_Validation_Counters;
 validation_total: Brickmap_Validation_Counters;
+cpu_classify_wait_last_ms: float;
+cpu_classify_wait_avg_ms: float;
+cpu_bake_wait_last_ms: float;
+cpu_bake_wait_avg_ms: float;
+cpu_offscreen_wait_last_ms: float;
+cpu_offscreen_wait_avg_ms: float;
+cpu_classify_encode_last_ms: float;
+cpu_classify_encode_avg_ms: float;
+cpu_bake_encode_last_ms: float;
+cpu_bake_encode_avg_ms: float;
+cpu_offscreen_encode_last_ms: float;
+cpu_offscreen_encode_avg_ms: float;
+cpu_present_encode_last_ms: float;
+cpu_present_encode_avg_ms: float;
 
 on_dll_init :: () {
     graphics_source := cast([]u8) get_transpiled(.METAL, brickmap_vertex_main, brickmap_fragment_main);
@@ -213,10 +230,11 @@ on_dll_init :: () {
     gpu_arena = gpu_make_arena(arena_bytes, label = "brickmap arena");
     assert(gpu_arena.cpu != null, "Brickmap arena allocation failed.");
 
-    // Keep params in per-frame rings so CPU writes don't race with in-flight GPU reads.
-    blit_params_ring_cpu, blit_params_ring_gpu = sgpu_arena_alloc_frame_ring(*gpu_arena, Brickmap_Blit_Params);
+    // Keep params in a deeper ring than SGPU_FRAMES_IN_FLIGHT; render + blit + UI can leave
+    // transient parameter reads live long enough that a 3-slot ring is too aggressive on Metal.
+    blit_params_ring_cpu, blit_params_ring_gpu = gpu_arena_alloc(*gpu_arena, [BRICKMAP_PARAM_RING_SLOTS] Brickmap_Blit_Params);
     params_guard_before_cpu, _ = gpu_arena_alloc(*gpu_arena, [4096]u8);
-    params_ring_cpu, params_ring_gpu = sgpu_arena_alloc_frame_ring(*gpu_arena, Brickmap_Params);
+    params_ring_cpu, params_ring_gpu = gpu_arena_alloc(*gpu_arena, [BRICKMAP_PARAM_RING_SLOTS] Brickmap_Params);
     params_guard_after_cpu, _ = gpu_arena_alloc(*gpu_arena, [4096]u8);
 
     assert(params_ring_cpu != null, "Brickmap params ring alloc failed.");
@@ -224,12 +242,12 @@ on_dll_init :: () {
     assert(params_guard_before_cpu != null, "Brickmap params before-guard alloc failed.");
     assert(params_guard_after_cpu != null, "Brickmap params after-guard alloc failed.");
 
-    params_cpu = sgpu_frame_ring_cpu_slot(params_ring_cpu, 0);
-    params_gpu = sgpu_frame_ring_gpu_slot(params_ring_gpu, Brickmap_Params, 0);
-    blit_params_cpu = sgpu_frame_ring_cpu_slot(blit_params_ring_cpu, 0);
-    blit_params_gpu = sgpu_frame_ring_gpu_slot(blit_params_ring_gpu, Brickmap_Blit_Params, 0);
+    params_cpu = brickmap_params_ring_cpu_slot(params_ring_cpu, 0);
+    params_gpu = brickmap_params_ring_gpu_slot(params_ring_gpu, Brickmap_Params, 0);
+    blit_params_cpu = brickmap_params_ring_cpu_slot(blit_params_ring_cpu, 0);
+    blit_params_gpu = brickmap_params_ring_gpu_slot(blit_params_ring_gpu, Brickmap_Blit_Params, 0);
 
-    for i: 0..SGPU_FRAMES_IN_FLIGHT-1 {
+    for i: 0..BRICKMAP_PARAM_RING_SLOTS-1 {
         params_ring_cpu.*[i] = .{};
         blit_params_ring_cpu.*[i] = .{};
     }
@@ -263,6 +281,16 @@ on_dll_init :: () {
     assert(atlas_albedo_texture != 0, "Brickmap atlas albedo texture handle invalid.");
     atlas_albedo_view = gpu_texture_view(atlas_albedo_texture);
     assert(atlas_albedo_view != 0, "Brickmap atlas albedo texture view creation failed.");
+    texture_result, atlas_normal_texture = gpu_create_texture(.{
+        type = ._3D,
+        dimensions = .[BRICKMAP_ATLAS_DIM_X, BRICKMAP_ATLAS_DIM_Y, BRICKMAP_ATLAS_DIM_Z],
+        format = .R8G8B8A8_SNORM,
+        usage = .SAMPLED | .STORAGE,
+    });
+    assert(texture_result == .SUCCESS, tprint("Brickmap atlas normal texture creation failed: %", texture_result));
+    assert(atlas_normal_texture != 0, "Brickmap atlas normal texture handle invalid.");
+    atlas_normal_view = gpu_texture_view(atlas_normal_texture);
+    assert(atlas_normal_view != 0, "Brickmap atlas normal texture view creation failed.");
     atlas_linear_sampler = gpu_create_sampler(.{
         min_filter = .LINEAR, mag_filter = .LINEAR, mip_filter = .NEAREST,
         address_mode_u = .CLAMP_TO_EDGE, address_mode_v = .CLAMP_TO_EDGE, address_mode_w = .CLAMP_TO_EDGE,
@@ -275,6 +303,7 @@ on_dll_init :: () {
     assert(atlas_point_sampler != 0, "Brickmap atlas point sampler creation failed.");
     params_cpu.atlas_texture_index = cast(u32) atlas_view - 1;
     params_cpu.atlas_albedo_texture_index = cast(u32) atlas_albedo_view - 1;
+    params_cpu.atlas_normal_texture_index = cast(u32) atlas_normal_view - 1;
     params_cpu.atlas_sampler_linear_index = cast(u32) atlas_linear_sampler - 1;
     params_cpu.atlas_sampler_point_index = cast(u32) atlas_point_sampler - 1;
     render_sampler = gpu_create_sampler(.{
@@ -334,6 +363,8 @@ on_unload :: () {
     gpu_free(render_point_sampler);
     gpu_free(atlas_point_sampler);
     gpu_free(atlas_linear_sampler);
+    gpu_free_texture_view(atlas_normal_view);
+    gpu_free(atlas_normal_texture);
     gpu_free_texture_view(atlas_albedo_view);
     gpu_free(atlas_albedo_texture);
     gpu_free_texture_view(atlas_view);
@@ -457,6 +488,16 @@ ui :: () {
                 Text("VAL shift preserve/invalidate/requeue/drop: % / % / % / %", shift_preserved_cells, shift_invalidated_cells, shift_requeued_cells, shift_dropped_cells);
                 Text("VAL queue overflow frame/total: % / %", enqueue_overflow, enqueue_overflow);
             }
+            Separator();
+            Text("CPU wait ms classify/bake/offscreen: % / % / %",
+                cpu_classify_wait_avg_ms,
+                cpu_bake_wait_avg_ms,
+                cpu_offscreen_wait_avg_ms);
+            Text("CPU encode ms classify/bake/offscreen/present: % / % / % / %",
+                cpu_classify_encode_avg_ms,
+                cpu_bake_encode_avg_ms,
+                cpu_offscreen_encode_avg_ms,
+                cpu_present_encode_avg_ms);
             Text("Auto edit after frame: %", auto_edit_after);
             Text("Auto edit done: %", ifx auto_edit_done then "yes" else "no");
             Separator();
@@ -496,11 +537,11 @@ tick :: () {
     if !swapchain_image return;
 
     frame_number := cast(s64) gpu_submission_frame_index();
-    slot := sgpu_frame_ring_index(frame_number);
-    params_cpu = sgpu_frame_ring_cpu_slot(params_ring_cpu, frame_number);
-    params_gpu = sgpu_frame_ring_gpu_slot(params_ring_gpu, Brickmap_Params, frame_number);
-    blit_params_cpu = sgpu_frame_ring_cpu_slot(blit_params_ring_cpu, frame_number);
-    blit_params_gpu = sgpu_frame_ring_gpu_slot(blit_params_ring_gpu, Brickmap_Blit_Params, frame_number);
+    slot := brickmap_params_ring_index(frame_number);
+    params_cpu = brickmap_params_ring_cpu_slot(params_ring_cpu, frame_number);
+    params_gpu = brickmap_params_ring_gpu_slot(params_ring_gpu, Brickmap_Params, frame_number);
+    blit_params_cpu = brickmap_params_ring_cpu_slot(blit_params_ring_cpu, frame_number);
+    blit_params_gpu = brickmap_params_ring_gpu_slot(blit_params_ring_gpu, Brickmap_Blit_Params, frame_number);
     if params_ring_last_slot >= 0 && slot != params_ring_last_slot {
         params_cpu.* = params_ring_cpu.*[params_ring_last_slot];
         blit_params_cpu.* = blit_params_ring_cpu.*[params_ring_last_slot];
@@ -857,6 +898,7 @@ tick :: () {
                 debug_bake_bricks_touched = 0;
             }
 
+            encode_start := seconds_since_init();
             result=, classify_cmd := gpu_start_command_recording(main_queue);
             assert(result == .SUCCESS);
             result = gpu_set_pipeline(classify_cmd, compute_classify_pipeline);
@@ -866,8 +908,11 @@ tick :: () {
             if classify_dispatch_x > 0 {
                 gpu_dispatch_buffers(classify_cmd, .[params_gpu], .[classify_dispatch_x, 1, 1]);
             }
+            note_perf_sample(*cpu_classify_encode_last_ms, *cpu_classify_encode_avg_ms, cast(float) ((seconds_since_init() - encode_start) * 1000.0));
             gpu_submit(classify_cmd);
+            wait_start := seconds_since_init();
             gpu_queue_wait_idle(main_queue);
+            note_perf_sample(*cpu_classify_wait_last_ms, *cpu_classify_wait_avg_ms, cast(float) ((seconds_since_init() - wait_start) * 1000.0));
 
             gpu_next_atlas_after := cast(s32) params_cpu.atlas_alloc_next;
             if gpu_next_atlas_after > BRICKMAP_MAX_BRICKS {
@@ -891,6 +936,7 @@ tick :: () {
     }
 
     if pending_dirty_count > 0 {
+        encode_start := seconds_since_init();
         result=, compute_cmd := gpu_start_command_recording(main_queue);
         assert(result == .SUCCESS);
         result = gpu_set_pipeline(compute_cmd, compute_bake_pipeline);
@@ -908,9 +954,12 @@ tick :: () {
             }
             gpu_barrier(compute_cmd, .COMPUTE_SHADER, .PIXEL_SHADER);
         }
+        note_perf_sample(*cpu_bake_encode_last_ms, *cpu_bake_encode_avg_ms, cast(float) ((seconds_since_init() - encode_start) * 1000.0));
         gpu_submit(compute_cmd);
         if debug_strict_compute_sync {
+            wait_start := seconds_since_init();
             gpu_queue_wait_idle(main_queue);
+            note_perf_sample(*cpu_bake_wait_last_ms, *cpu_bake_wait_avg_ms, cast(float) ((seconds_since_init() - wait_start) * 1000.0));
         }
 
         if log_updates {
@@ -925,6 +974,7 @@ tick :: () {
     }
 
     if !debug_render_direct_swapchain {
+        encode_start := seconds_since_init();
         result=, offscreen_cmd := gpu_start_command_recording(main_queue);
         assert(result == .SUCCESS);
         {
@@ -937,19 +987,23 @@ tick :: () {
                         clear_color._float = .[0.03, 0.035, 0.05, 1.0],
                     }
                 ]
-            });
+            }, .COLOR_ATTACHMENT_WRITE, .SHADER_READ);
 
             gpu_set_depth_stencil_state(offscreen_cmd, .{depth_test = .ALWAYS, depth_mode = .NONE});
             gpu_set_pipeline(offscreen_cmd, graphics_pipeline);
             draw_result := gpu_draw_instanced(offscreen_cmd, 0, params_gpu, 3, 1);
             assert(draw_result == .SUCCESS, tprint("Brickmap offscreen draw failed: %", draw_result));
         }
+        note_perf_sample(*cpu_offscreen_encode_last_ms, *cpu_offscreen_encode_avg_ms, cast(float) ((seconds_since_init() - encode_start) * 1000.0));
         gpu_submit(offscreen_cmd);
         if debug_strict_compute_sync {
+            wait_start := seconds_since_init();
             gpu_queue_wait_idle(main_queue);
+            note_perf_sample(*cpu_offscreen_wait_last_ms, *cpu_offscreen_wait_avg_ms, cast(float) ((seconds_since_init() - wait_start) * 1000.0));
         }
     }
 
+    encode_start := seconds_since_init();
     result=, cmd_buff := gpu_start_command_recording(main_queue);
     assert(result == .SUCCESS);
 
@@ -963,7 +1017,7 @@ tick :: () {
                     clear_color._float = .[0.03, 0.035, 0.05, 1.0],
                 }
             ]
-        });
+        }, .COLOR_ATTACHMENT_WRITE, .COLOR_ATTACHMENT_WRITE);
 
         gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
         gpu_set_pipeline(cmd_buff, graphics_pipeline);
@@ -984,7 +1038,7 @@ tick :: () {
                     clear_color._float = .[0.03, 0.035, 0.05, 1.0],
                 }
             ]
-        });
+        }, .COLOR_ATTACHMENT_WRITE, .COLOR_ATTACHMENT_WRITE);
 
         gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
         gpu_set_pipeline(cmd_buff, blit_pipeline);
@@ -1002,6 +1056,7 @@ tick :: () {
         log_validation_frame();
     }
 
+    note_perf_sample(*cpu_present_encode_last_ms, *cpu_present_encode_avg_ms, cast(float) ((seconds_since_init() - encode_start) * 1000.0));
     submit_and_present_with_ui(cmd_buff);
 } @on_tick
 
@@ -1032,14 +1087,16 @@ blit_sampler_handle :: () -> Gpu_Sampler {
 log_bindless_indices_once :: () {
     if bindless_index_logged_once return;
     bindless_index_logged_once = true;
-    log("BRICKMAP_BINDLESS atlas_tex=% atlas_albedo=% atlas_lin=% atlas_point=% blit_tex=% blit_sampler=%",
+    log("BRICKMAP_BINDLESS atlas_tex=% atlas_albedo=% atlas_normal=% atlas_lin=% atlas_point=% blit_tex=% blit_sampler=%",
         params_cpu.atlas_texture_index,
         params_cpu.atlas_albedo_texture_index,
+        params_cpu.atlas_normal_texture_index,
         params_cpu.atlas_sampler_linear_index,
         params_cpu.atlas_sampler_point_index,
         blit_params_cpu.source_texture_index,
         blit_params_cpu.source_sampler_index);
     if params_cpu.atlas_texture_index > 15 || params_cpu.atlas_albedo_texture_index > 15 ||
+       params_cpu.atlas_normal_texture_index > 15 ||
        params_cpu.atlas_sampler_linear_index > 15 || params_cpu.atlas_sampler_point_index > 15 ||
        blit_params_cpu.source_texture_index > 15 || blit_params_cpu.source_sampler_index > 15 {
         log_error("BRICKMAP_BINDLESS exceeds transpiler bindless clamp (15). This can cause wrong resource sampling.");
@@ -1064,7 +1121,10 @@ ensure_render_target :: (win_w: s32, win_h: s32) -> bool {
         return true;
     }
 
+    // The previous offscreen target may still be referenced by in-flight render/blit work.
+    // Recreate it only after the queue is idle to avoid freeing a live Metal texture.
     if render_view != 0 {
+        gpu_wait_idle();
         gpu_free_texture_view(render_view);
         render_view = 0;
     }
@@ -2199,4 +2259,30 @@ brickmap_camera_angles_from_forward :: (forward: Vector3) -> (yaw: float, pitch:
     n := forward;
     normalize(*n, fallback = .{0.0, 0.0, -1.0});
     return atan2(n.x, -n.z), asin(clamp(n.y, -1.0, 1.0));
+}
+
+note_perf_sample :: (last_ms: *float, avg_ms: *float, sample_ms: float) {
+    last_ms.* = sample_ms;
+    if avg_ms.* <= 0.0 {
+        avg_ms.* = sample_ms;
+    } else {
+        avg_ms.* = lerp(avg_ms.*, sample_ms, 0.08);
+    }
+}
+
+brickmap_params_ring_index :: (frame_number: s64 = -1) -> s64 {
+    if frame_number < 0 frame_number = cast(s64) gpu_submission_frame_index();
+    idx := frame_number % BRICKMAP_PARAM_RING_SLOTS;
+    if idx < 0 idx += BRICKMAP_PARAM_RING_SLOTS;
+    return idx;
+}
+
+brickmap_params_ring_cpu_slot :: (ring: *[BRICKMAP_PARAM_RING_SLOTS] $T, frame_number: s64 = -1) -> *T #expand {
+    idx := brickmap_params_ring_index(frame_number);
+    return cast(*T) ring + idx;
+}
+
+brickmap_params_ring_gpu_slot :: (ring_base_gpu: Gpu_Ptr, $T: Type, frame_number: s64 = -1) -> Gpu_Ptr #expand {
+    idx := brickmap_params_ring_index(frame_number);
+    return ring_base_gpu + (idx * size_of(T)).(Gpu_Ptr);
 }

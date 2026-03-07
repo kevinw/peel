@@ -1,5 +1,5 @@
 // We don’t ship the Dear ImGui source with the compiler. Download a Dear ImGui release and update this path if you want to re-generate the bindings.
-IMGUI_PATH :: "src/imgui-1.92.6";
+IMGUI_PATH :: "src/imgui";
 PLATFORM_NAME :: #run to_lower_copy(sprint("%", OS)); // win, macos, linux
 
 DECLARATIONS_TO_OMIT :: string.[
@@ -302,13 +302,17 @@ FOOTER_UNIX :: #string END
 #scope_export
 #if OS == .MACOS {
     #import "Metal";
-    ImplMetal_Init           :: (device: *MTLDevice) -> bool #foreign ImGui "Jai_ImGui_ImplMetal_Init";
-    ImplMetal_Shutdown       :: () -> void #foreign ImGui "Jai_ImGui_ImplMetal_Shutdown";
-    ImplMetal_NewFrame       :: (render_pass_desc: *MTLRenderPassDescriptor) -> void #foreign ImGui "Jai_ImGui_ImplMetal_NewFrame";
-    ImplMetal_RenderDrawData :: (draw_data: *ImDrawData, command_buffer: *MTLCommandBuffer, command_encoder: *MTLRenderCommandEncoder) -> void #foreign ImGui "Jai_ImGui_ImplMetal_RenderDrawData";
-    ImplOSX_Init             :: (view: *void) -> bool #foreign ImGui "Jai_ImGui_ImplOSX_Init";
-    ImplOSX_Shutdown         :: () -> void #foreign ImGui "Jai_ImGui_ImplOSX_Shutdown";
-    ImplOSX_NewFrame         :: (view: *void) -> void #foreign ImGui "Jai_ImGui_ImplOSX_NewFrame";
+    ImplMetal_Init            :: (device: *MTLDevice) -> bool #foreign ImGui "Jai_ImGui_ImplMetal_Init";
+    ImplMetal_Shutdown        :: () -> void #foreign ImGui "Jai_ImGui_ImplMetal_Shutdown";
+    ImplMetal_NewFrame        :: (render_pass_desc: *MTLRenderPassDescriptor) -> void #foreign ImGui "Jai_ImGui_ImplMetal_NewFrame";
+    ImplMetal4_NewFrame       :: (render_pass_desc: *MTL4RenderPassDescriptor) -> void #foreign ImGui "Jai_ImGui_ImplMetal4_NewFrame";
+    ImplMetal_RenderDrawData  :: (draw_data: *ImDrawData, command_buffer: *MTLCommandBuffer, command_encoder: *MTLRenderCommandEncoder) -> void #foreign ImGui "Jai_ImGui_ImplMetal_RenderDrawData";
+    ImplMetal4_RenderDrawData :: (draw_data: *ImDrawData, command_buffer: *MTL4CommandBuffer, command_encoder: *MTL4RenderCommandEncoder) -> void #foreign ImGui "Jai_ImGui_ImplMetal4_RenderDrawData";
+    ImplMetal4_ConfigureFrameSynchronization :: (shared_event: *MTLSharedEvent, max_frames_in_flight: int) -> void #foreign ImGui "Jai_ImGui_ImplMetal4_ConfigureFrameSynchronization";
+    ImplMetal4_NotifyFrameSubmitted          :: (command_queue: *MTL4CommandQueue) -> void #foreign ImGui "Jai_ImGui_ImplMetal4_NotifyFrameSubmitted";
+    ImplOSX_Init              :: (view: *void) -> bool #foreign ImGui "Jai_ImGui_ImplOSX_Init";
+    ImplOSX_Shutdown          :: () -> void #foreign ImGui "Jai_ImGui_ImplOSX_Shutdown";
+    ImplOSX_NewFrame          :: (view: *void) -> void #foreign ImGui "Jai_ImGui_ImplOSX_NewFrame";
 }
 
 #scope_file

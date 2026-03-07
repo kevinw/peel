@@ -64,3 +64,7 @@ dist/ui_gallery.dylib
 dist/texture3d
 dist/texture3d.dylib
 dist/ui_gallery
+dist/caustics_pool
+dist/caustics_pool.dylib
+dist/signal_field
+dist/signal_field.dylib

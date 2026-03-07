@@ -6,8 +6,8 @@
 
 
 
-IMGUI_VERSION :: "1.92.6";
-IMGUI_VERSION_NUM :: 19261;
+IMGUI_VERSION :: "1.92.7 WIP";
+IMGUI_VERSION_NUM :: 19264;
 
 ImTextureID_Invalid :: cast(ImTextureID) 0;
 
@@ -1046,6 +1046,7 @@ CollapsingHeader :: (label: *u8, flags: TreeNodeFlags = .None) -> bool #foreign 
 CollapsingHeader :: (label: *u8, p_visible: *bool, flags: TreeNodeFlags = .None) -> bool #foreign ImGui "_ZN5ImGui16CollapsingHeaderEPKcPbi";
 SetNextItemOpen :: (is_open: bool, cond: Cond = .None) -> void #foreign ImGui "_ZN5ImGui15SetNextItemOpenEbi";
 SetNextItemStorageID :: (storage_id: ID) -> void #foreign ImGui "_ZN5ImGui20SetNextItemStorageIDEj";
+TreeNodeGetOpen :: (storage_id: ID) -> bool #foreign ImGui "_ZN5ImGui15TreeNodeGetOpenEj";
 
 // Widgets: Selectables
 // - A selectable highlights when hovered, and can display another color when selected.
@@ -1511,10 +1512,6 @@ Image :: (tex_ref: ImTextureRef, image_size: ImVec2, uv0: ImVec2, uv1: ImVec2, t
 GetContentRegionMax :: () -> ImVec2 #foreign ImGui "_ZN5ImGui19GetContentRegionMaxEv";
 GetWindowContentRegionMin :: () -> ImVec2 #foreign ImGui "_ZN5ImGui25GetWindowContentRegionMinEv";
 GetWindowContentRegionMax :: () -> ImVec2 #foreign ImGui "_ZN5ImGui25GetWindowContentRegionMaxEv";
-
-// OBSOLETED in 1.90.0 (from September 2023)
-Combo :: (label: *u8, current_item: *s32, old_callback: #type (user_data: *void, idx: s32, out_text: **u8) -> bool #c_call, user_data: *void, items_count: s32, popup_max_height_in_items: s32 = -1) -> bool #foreign ImGui "_ZN5ImGui5ComboEPKcPiPFbPviPS1_ES3_ii";
-ListBox :: (label: *u8, current_item: *s32, old_callback: #type (user_data: *void, idx: s32, out_text: **u8) -> bool #c_call, user_data: *void, items_count: s32, height_in_items: s32 = -1) -> bool #foreign ImGui "_ZN5ImGui7ListBoxEPKcPiPFbPviPS1_ES3_ii";
 
 // Flags for ImGui::Begin()
 // (Those are per-window flags. There are shared flags in ImGuiIO: io.ConfigWindowsResizeFromEdges and io.ConfigWindowsMoveFromTitleBarOnly)
@@ -2319,10 +2316,11 @@ StyleVar :: enum u32 {
     TreeLinesRounding           :: 34;
     ButtonTextAlign             :: 35;
     SelectableTextAlign         :: 36;
-    SeparatorTextBorderSize     :: 37;
-    SeparatorTextAlign          :: 38;
-    SeparatorTextPadding        :: 39;
-    COUNT                       :: 40;
+    SeparatorSize               :: 37;
+    SeparatorTextBorderSize     :: 38;
+    SeparatorTextAlign          :: 39;
+    SeparatorTextPadding        :: 40;
+    COUNT                       :: 41;
 
     ImGuiStyleVar_Alpha                       :: Alpha;
     ImGuiStyleVar_DisabledAlpha               :: DisabledAlpha;
@@ -2361,6 +2359,7 @@ StyleVar :: enum u32 {
     ImGuiStyleVar_TreeLinesRounding           :: TreeLinesRounding;
     ImGuiStyleVar_ButtonTextAlign             :: ButtonTextAlign;
     ImGuiStyleVar_SelectableTextAlign         :: SelectableTextAlign;
+    ImGuiStyleVar_SeparatorSize               :: SeparatorSize;
     ImGuiStyleVar_SeparatorTextBorderSize     :: SeparatorTextBorderSize;
     ImGuiStyleVar_SeparatorTextAlign          :: SeparatorTextAlign;
     ImGuiStyleVar_SeparatorTextPadding        :: SeparatorTextPadding;
@@ -2859,6 +2858,7 @@ Style :: struct {
     ColorButtonPosition:              Dir; // Side of the color button in the ColorEdit4 widget (left/right). Defaults to ImGuiDir_Right.
     ButtonTextAlign:                  ImVec2; // Alignment of button text when button is larger than text. Defaults to (0.5f, 0.5f) (centered).
     SelectableTextAlign:              ImVec2; // Alignment of selectable text. Defaults to (0.0f, 0.0f) (top-left aligned). It's generally important to keep this left-aligned if you want to lay multiple items on a same line.
+    SeparatorSize:                    float; // Thickness of border in Separator()
     SeparatorTextBorderSize:          float; // Thickness of border in SeparatorText()
     SeparatorTextAlign:               ImVec2; // Alignment of text within the separator. Defaults to (0.0f, 0.5f) (left aligned, center).
     SeparatorTextPadding:             ImVec2; // Horizontal offset of text from each edge of the separator + spacing on other axis. Generally small values. .y is recommended to be == FramePadding.y.
@@ -2880,7 +2880,7 @@ Style :: struct {
     HoverFlagsForTooltipMouse:        HoveredFlags; // Default flags when using IsItemHovered(ImGuiHoveredFlags_ForTooltip) or BeginItemTooltip()/SetItemTooltip() while using mouse.
     HoverFlagsForTooltipNav:          HoveredFlags; // Default flags when using IsItemHovered(ImGuiHoveredFlags_ForTooltip) or BeginItemTooltip()/SetItemTooltip() while using keyboard/gamepad.
 
-    _MainScale:                       float; // FIXME-WIP: Reference scale, as applied by ScaleAllSizes().
+    _MainScale:                       float; // FIXME-WIP: Reference scale, as applied by ScaleAllSizes(). PLEASE DO NOT USE THIS FOR NOW.
     _NextFrameFontSizeBase:           float; // FIXME: Temporary hack until we finish remaining work.
 
     // Functions
@@ -3209,6 +3209,7 @@ ListClipper :: struct {
     Ctx:              *ImGuiContext; // Parent UI context
     DisplayStart:     s32; // First item to display, updated by each call to Step()
     DisplayEnd:       s32; // End of items to display (exclusive)
+    UserIndex:        s32; // Helper storage for user convenience/code. Optional, and otherwise unused if you don't use it.
     ItemsCount:       s32; // [Internal] Number of items
     ItemsHeight:      float; // [Internal] Height of item after a first step and item submission can calculate it
     StartPosY:        float64; // [Internal] Cursor position at the time of Begin() or after table frozen rows are all processed
@@ -3811,7 +3812,7 @@ ImFontConfig :: struct {
 // (Note: some language parsers may fail to convert the bitfield members, in this case maybe drop store a single u32 or we can rework this)
 ImFontGlyph :: struct {
     __bitfield: u32;
-    /* 
+    /*
         Colored: u32; /* 1 bits */ // Flag to indicate glyph is colored and should generally ignore tinting (make it usable with no shift on little-endian as this is used in loops)
         Visible: u32; /* 1 bits */ // Flag to indicate glyph has no visible pixels (e.g. space). Allow early out when rendering.
         SourceIdx: u32; /* 4 bits */ // Index of source in parent font
@@ -4060,7 +4061,7 @@ ImFontBaked :: struct {
     Ascent:             float; // 4+4   // out // Ascent: distance from top to bottom of e.g. 'A' [0..FontSize] (unscaled)
     Descent:            float; // 4+4   // out // Ascent: distance from top to bottom of e.g. 'A' [0..FontSize] (unscaled)
     __bitfield:         u32;
-    /* 
+    /*
         MetricsTotalSurface: u32; /* 26 bits */ // 3  // out // Total surface in pixels to get an idea of the font rasterization/texture cost (not exact, we approximate the cost of padding between glyphs)
         WantDestroy: u32; /* 1 bits */ // 0  //     // Queued for destroy
         LoadNoFallback: u32; /* 1 bits */ // 0  //     // Disable loading fallback in lower-level calls.
@@ -4278,13 +4279,25 @@ ImFontAtlasCustomRect :: ImFontAtlasRect;
 #scope_export
 #if OS == .MACOS {
     #import "Metal";
-    ImplMetal_Init           :: (device: *MTLDevice) -> bool #foreign ImGui "Jai_ImGui_ImplMetal_Init";
-    ImplMetal_Shutdown       :: () -> void #foreign ImGui "Jai_ImGui_ImplMetal_Shutdown";
-    ImplMetal_NewFrame       :: (render_pass_desc: *MTLRenderPassDescriptor) -> void #foreign ImGui "Jai_ImGui_ImplMetal_NewFrame";
-    ImplMetal_RenderDrawData :: (draw_data: *ImDrawData, command_buffer: *MTLCommandBuffer, command_encoder: *MTLRenderCommandEncoder) -> void #foreign ImGui "Jai_ImGui_ImplMetal_RenderDrawData";
-    ImplOSX_Init             :: (view: *void) -> bool #foreign ImGui "Jai_ImGui_ImplOSX_Init";
-    ImplOSX_Shutdown         :: () -> void #foreign ImGui "Jai_ImGui_ImplOSX_Shutdown";
-    ImplOSX_NewFrame         :: (view: *void) -> void #foreign ImGui "Jai_ImGui_ImplOSX_NewFrame";
+
+    // Common
+    ImplMetal_Init            :: (device: *MTLDevice) -> bool #foreign ImGui "Jai_ImGui_ImplMetal_Init";
+    ImplMetal_Shutdown        :: () -> void #foreign ImGui "Jai_ImGui_ImplMetal_Shutdown";
+
+    // Metal
+    ImplMetal_NewFrame        :: (render_pass_desc: *MTLRenderPassDescriptor) -> void #foreign ImGui "Jai_ImGui_ImplMetal_NewFrame";
+    ImplMetal_RenderDrawData  :: (draw_data: *ImDrawData, command_buffer: *MTLCommandBuffer, command_encoder: *MTLRenderCommandEncoder) -> void #foreign ImGui "Jai_ImGui_ImplMetal_RenderDrawData";
+
+    // Metal 4
+    ImplMetal4_NewFrame       :: (render_pass_desc: *MTL4RenderPassDescriptor) -> void #foreign ImGui "Jai_ImGui_ImplMetal4_NewFrame";
+    ImplMetal4_RenderDrawData :: (draw_data: *ImDrawData, command_buffer: *MTL4CommandBuffer, command_encoder: *MTL4RenderCommandEncoder) -> void #foreign ImGui "Jai_ImGui_ImplMetal4_RenderDrawData";
+    ImplMetal4_ConfigureFrameSynchronization :: (shared_event: *MTLSharedEvent, max_frames_in_flight: int) -> void #foreign ImGui "Jai_ImGui_ImplMetal4_ConfigureFrameSynchronization";
+    ImplMetal4_NotifyFrameSubmitted          :: (command_queue: *MTL4CommandQueue) -> void #foreign ImGui "Jai_ImGui_ImplMetal4_NotifyFrameSubmitted";
+
+    // OSX backend
+    ImplOSX_Init              :: (view: *void) -> bool #foreign ImGui "Jai_ImGui_ImplOSX_Init";
+    ImplOSX_Shutdown          :: () -> void #foreign ImGui "Jai_ImGui_ImplOSX_Shutdown";
+    ImplOSX_NewFrame          :: (view: *void) -> void #foreign ImGui "Jai_ImGui_ImplOSX_NewFrame";
 }
 
 #scope_file

@@ -1,5 +1,6 @@
 # TODO
 
+- fix Bindings_Generator for MTL4, consider making functions #no_context
 - a "noisy" mode for sgpu where all non-success results are logged
 - sgpu Metal debug: track residency dirty state and assert/bark on resource use without `gpu_commit_residency()`, using `MTLResidencySet.containsAllocation(...)` checks on bound allocations
 - fix jai build.jai - -dll (parallel builds need to build only dylibs)

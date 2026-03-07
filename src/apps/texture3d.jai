@@ -1,4 +1,4 @@
-TEXTURE3D_SIZE :: 72;
+TEXTURE3D_SIZE :: 128;
 TEXTURE3D_VOXEL_COUNT :: TEXTURE3D_SIZE * TEXTURE3D_SIZE * TEXTURE3D_SIZE;
 
 Texture3D_Params :: struct {
@@ -22,6 +22,7 @@ gpu_arena: Gpu_Arena;
 
 texture3d_params_cpu: *Texture3D_Params;
 texture3d_params_gpu: Gpu_Ptr;
+show_texture: bool = true;
 
 volume_texture: Gpu_Texture;
 volume_texture_view: Gpu_Texture_View;
@@ -89,6 +90,7 @@ texture3d_ui :: () {
     SetNextWindowSize(.{380.0, 220.0}, .FirstUseEver);
     if Begin("Texture3D", *texture3d_ui_open, flags = .NoCollapse) {
         Text("3D texture fog raymarch (Metal)");
+        Checkbox("Show Texture", *show_texture);
         Text("Volume: %^3 R32_SFLOAT", TEXTURE3D_SIZE);
         if Button("Rebuild Volume") volume_needs_init = true;
         Checkbox("Animate Volume", *texture3d_animate_volume);
@@ -131,20 +133,22 @@ tick :: () {
         volume_needs_init = false;
     }
 
-    gpu_begin_scoped_render_pass(cmd_buff, .{
-        color_targets = .[
-            .{
-                view = swapchain_image,
-                load_op = .CLEAR,
-                store_op = .STORE,
-                clear_color._float = .[0.06, 0.08, 0.12, 1.0],
-            }
-        ]
-    });
-    gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
-    gpu_set_pipeline(cmd_buff, graphics_pipeline);
-    draw_result := gpu_draw_instanced(cmd_buff, 0, texture3d_params_gpu, 3, 1);
-    assert(draw_result == .SUCCESS, tprint("texture3d draw failed: %", draw_result));
+    if show_texture {
+        gpu_begin_scoped_render_pass(cmd_buff, .{
+            color_targets = .[
+                .{
+                    view = swapchain_image,
+                    load_op = .CLEAR,
+                    store_op = .STORE,
+                    clear_color._float = .[0.06, 0.08, 0.12, 1.0],
+                }
+            ]
+        }, .COLOR_ATTACHMENT_WRITE, .COLOR_ATTACHMENT_WRITE);
+        gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
+        gpu_set_pipeline(cmd_buff, graphics_pipeline);
+        draw_result := gpu_draw_instanced(cmd_buff, 0, texture3d_params_gpu, 3, 1);
+        assert(draw_result == .SUCCESS, tprint("texture3d draw failed: %", draw_result));
+    }
 
     submit_and_present_with_ui(cmd_buff);
 } @on_tick

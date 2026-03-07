@@ -18,7 +18,6 @@ frame_count: int;
 last_window_size: V2(u32);
 window: *void; // TODO
 sgpu_debug_status: string;
-ui_timeline_value: u64 = 0;
 shader_reload_ctx: SHR.Shader_Hot_Reload;
 max_frames: int = 0;
 reload_on_frame: int = 0;
@@ -105,9 +104,12 @@ sgpu_frame_ring_gpu_slot :: (ring_base_gpu: Gpu_Ptr, $T: Type, frame_number: s64
     return ring_base_gpu + (idx * size_of(T)).(Gpu_Ptr);
 }
 
-gpu_begin_scoped_render_pass :: (cmd_buf: Gpu_Command_Buffer, desc: Gpu_Render_Pass_Desc) #expand {
+gpu_begin_scoped_render_pass :: (cmd_buf: Gpu_Command_Buffer, desc: Gpu_Render_Pass_Desc,
+    transition_before: Pass_Access = .NONE, transition_after: Pass_Access = .NONE) #expand {
     gpu_begin_render_pass(cmd_buf, desc);
-    `defer gpu_end_render_pass(cmd_buf);
+    `defer ifx transition_before != .NONE || transition_after != .NONE
+        then gpu_end_render_pass_with_transition(cmd_buf, transition_before, transition_after)
+        else gpu_end_render_pass(cmd_buf);
 }
 
 sgpu_set_debug_status :: (status: string) {
@@ -126,23 +128,14 @@ submit_and_present_with_ui :: (cmd_buff: Gpu_Command_Buffer) {
         return;
     }
 
-    //
-    // interleave metal and metal4 here. todo: we can go back to a more normal
-    // "flow" once we make a Metal4 imgui backend.
-    //
-    app_done_value := ui_timeline_value + 1;
-    ui_done_value  := ui_timeline_value + 2;
-    ui_semaphore   := ui_get_sync_semaphore();
-    assert(ui_semaphore != 0, "UI sync semaphore not initialized.");
+    ui_frame_value := gpu_submission_frame_index() + 1;
+    gpu_end_render_pass_with_transition(cmd_buff, .COLOR_ATTACHMENT_WRITE, .COLOR_ATTACHMENT_WRITE);
 
-    gpu_submit_swapchain_no_present(cmd_buff, signals=.[.{ui_semaphore, app_done_value}]);
-
-    ui_render(app_done_value, ui_done_value, *current_ui_render_frame, skip_render=app_mini_mode_active);
+    ui_render(cmd_buff, *current_ui_render_frame, ui_frame_value, skip_render=app_mini_mode_active);
     current_ui_render_frame = {};
 
-    gpu_present_current_swapchain(waits=.[.{ui_semaphore, ui_done_value}]);
-
-    ui_timeline_value = ui_done_value;
+    gpu_submit_and_present(cmd_buff);
+    ui_on_frame_submitted(ui_frame_value);
 }
 
 app_swapchain_acquire :: () -> Gpu_Result, Gpu_Texture_View {

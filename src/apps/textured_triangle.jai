@@ -108,7 +108,7 @@ tick :: () {
     draw_result := gpu_draw_instanced_direct(cmd_buff, draw_data.pixel_gpu, draw_data.num_vertices, draw_data.num_instances);
     assert(draw_result == .SUCCESS, tprint("Textured triangle draw failed: %", draw_result));
 
-    {
+    if app_ui_enabled {
         using ImGui;
         if Begin("Textured Triangle") {
             Text("Hello, triangle!");
