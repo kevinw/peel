@@ -325,6 +325,10 @@ create_window_and_init_sgpu :: () {
 
 host_quit :: (quit_ctx: Quit_Ctx) {
     #if !RELEASE { // let OS do cleanup for us in release mode.
+
+        main_queue := gpu_get_queue(.MAIN, 0); // TODO: we probably want to wait for other queues too, once we're using them.
+        gpu_queue_wait_idle(main_queue);
+
         #if OS == .MACOS {
             init_all_objective_c_selector_structs();
         }

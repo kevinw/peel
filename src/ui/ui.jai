@@ -1,6 +1,7 @@
 #load "./inspect.jai";
 
 current_ui_render_frame: UI_Render_Frame_Info;
+ui_frame_sync_semaphore: Gpu_Semaphore;
 fonts: struct {
     main: *ImFont;
     mono: *ImFont;
@@ -28,10 +29,9 @@ ui_init :: () {
         view := NSWindow.contentView(ns_window);
         ImGui.ImplOSX_Init(view);
         ImGui.ImplMetal_Init(ui_device);
-        ui_command_queue = ui_device.newCommandQueue(ui_device);
-        assert(ui_command_queue != null, "ui_init: failed to create UI command queue.");
-        ui_sync_semaphore = gpu_create_semaphore(0);
-        assert(ui_sync_semaphore != 0, "ui_init: failed to create UI sync semaphore.");
+        ui_frame_sync_semaphore = gpu_create_semaphore(0);
+        assert(ui_frame_sync_semaphore != 0, "ui_init: failed to create ImGui Metal4 frame sync semaphore.");
+        ImGui.ImplMetal4_ConfigureFrameSynchronization(gpu_get_native_shared_event(ui_frame_sync_semaphore), SGPU_FRAMES_IN_FLIGHT);
     } else {
         assert(false, "TODO: ui_init for platform %", OS);
     }
@@ -40,21 +40,20 @@ ui_init :: () {
     fonts.mono = load_ui_monospace_font(GetIO(), fonts.MAIN_SIZE);
 } @on_dll_init
 
-ui_get_sync_semaphore :: () -> Gpu_Semaphore {
-    return ui_sync_semaphore;
-}
-
 ui_get_monospace_font :: () -> *ImGui.ImFont {
     return fonts.mono;
 }
 
 // Per frame UI info to be passed from ui_render_pre to ui_render
 UI_Render_Frame_Info :: struct {
+    ready: bool;
+}
 
-    #if OS == .MACOS {
-        pass: *MTLRenderPassDescriptor;
+ui_cancel_pending_frame :: (using ui_render_frame_info: *UI_Render_Frame_Info) {
+    if ready {
+        EndFrame();
+        ready = false;
     }
-
 }
 
 ui_render_pre :: () -> UI_Render_Frame_Info {
@@ -63,27 +62,8 @@ ui_render_pre :: () -> UI_Render_Frame_Info {
     ns_window := cast(*NSWindow)window;
     view := NSWindow.contentView(ns_window);
     ImGui.ImplOSX_NewFrame(view);
-    pass := objc_new(MTLRenderPassDescriptor);
-    color_attachments := pass.colorAttachments(pass);
-    {
-        drawable_texture := gpu_get_native_texture(gpu_current_swapchain_view());
-        assert(drawable_texture != null);
-        using color_attachment := color_attachments.objectAtIndexedSubscript(color_attachments, 0);
-        setTexture    (color_attachment, drawable_texture);
-        setLoadAction (color_attachment, .Load);
-        setStoreAction(color_attachment, .Store);
-    }
-
-    // Keep boids color output intact and overlay UI in a second pass.
-    {
-        color_attachments := pass.colorAttachments(pass);
-        using color_attachment := color_attachments.objectAtIndexedSubscript(color_attachments, 0);
-        setLoadAction (color_attachment, .Load);
-        setStoreAction(color_attachment, .Store);
-    }
-    ImGui.ImplMetal_NewFrame(pass);
-    frame_info.pass = pass;
     NewFrame();
+    frame_info.ready = true;
 } else {
     assert(false, "TODO: ui render setup for this platform");
     NewFrame();
@@ -91,41 +71,61 @@ ui_render_pre :: () -> UI_Render_Frame_Info {
     return frame_info;
 }
 
-ui_render :: (wait_value: u64, signal_value: u64, ui_render_frame_info: *UI_Render_Frame_Info, skip_render := false) {
-    if ui_render_frame_info.pass == null {
+ui_render :: (cmd_buff: Gpu_Command_Buffer, ui_render_frame_info: *UI_Render_Frame_Info, frame_value: u64, skip_render := false) {
+    if !ui_render_frame_info.ready {
         return;
     }
 
-    ShowDemoWindow(null);
-    call_event_functions(.ui);
-    Render();
-
     #if OS == .MACOS {
-        // encode gpu commands
-        command_buffer := ui_command_queue.commandBuffer(ui_command_queue);
-        assert(command_buffer != null);
+        drawable_texture := gpu_get_native_texture(gpu_current_swapchain_view());
+        assert(drawable_texture != null);
 
-        sync_event := gpu_get_native_shared_event(ui_sync_semaphore);
-        assert(sync_event != null);
-        command_buffer.encodeWaitForEvent(command_buffer, sync_event, wait_value);
-
-        render_encoder := command_buffer.renderCommandEncoderWithDescriptor(command_buffer, ui_render_frame_info.pass);
+        pass := objc_new(MTL4RenderPassDescriptor);
+        defer release(pass);
+        color_attachments := MTL4RenderPassDescriptor.colorAttachments(pass);
         {
-            render_encoder.pushDebugGroup(render_encoder, to_temp_nsstring("ImGui render"));
-            defer render_encoder.popDebugGroup(render_encoder);
-            draw_data := GetDrawData();
-            if !skip_render {
-                ImplMetal_RenderDrawData(draw_data, command_buffer, render_encoder);
-            }
-            render_encoder.endEncoding(render_encoder);
+            using color_attachment := color_attachments.objectAtIndexedSubscript(color_attachments, 0);
+            setTexture(color_attachment, drawable_texture);
+            setLoadAction(color_attachment, .Load);
+            setStoreAction(color_attachment, .Store);
         }
+        ImGui.ImplMetal4_NewFrame(pass);
 
-        command_buffer.encodeSignalEvent(command_buffer, sync_event, signal_value);
-        command_buffer.commit(command_buffer);
+        ShowDemoWindow(null);
+        call_event_functions(.ui);
+        Render();
 
-        if ui_render_frame_info.pass {
-            release(ui_render_frame_info.pass);
-            ui_render_frame_info.pass = null;
+        if !skip_render {
+            native_cmd_buff := gpu_get_native_command_buffer(cmd_buff);
+            assert(native_cmd_buff != null, "ui_render: failed to get native Metal4 command buffer.");
+
+            gpu_begin_scoped_render_pass(cmd_buff, .{
+                color_targets = .[
+                    .{
+                        view = gpu_current_swapchain_view(),
+                        load_op = .LOAD,
+                        store_op = .STORE,
+                    }
+                ]
+            });
+
+            render_encoder := gpu_get_native_render_encoder(cmd_buff);
+            assert(render_encoder != null, "ui_render: failed to get sgpu Metal4 render encoder.");
+            MTL4CommandEncoder.pushDebugGroup(render_encoder, to_temp_nsstring("ImGui render"));
+            defer MTL4CommandEncoder.popDebugGroup(render_encoder);
+
+            ImplMetal4_RenderDrawData(GetDrawData(), native_cmd_buff, render_encoder);
+        }
+    }
+
+    ui_render_frame_info.ready = false;
+}
+
+ui_on_frame_submitted :: (frame_value: u64) {
+    #if OS == .MACOS {
+        if ui_frame_sync_semaphore != 0 {
+            main_queue := gpu_get_queue(.MAIN, 0);
+            gpu_signal_semaphore(main_queue, ui_frame_sync_semaphore, frame_value);
         }
     }
 }
@@ -136,12 +136,11 @@ dummy_on_ui :: () { } @on_ui
 
 using ImGui :: #import "ImGui";
 using,only(file_exists) _ :: #import "File_Utilities";
+Env_Vars :: #import "Env_Vars";
 
 #if OS == .MACOS {
     #import "Metal";
     ui_device: *MTLDevice;
-    ui_command_queue: *MTLCommandQueue;
-    ui_sync_semaphore: Gpu_Semaphore;
 }
 
 load_ui_font :: (io: *ImGui.IO, font_size_px: float) -> *ImGui.ImFont {

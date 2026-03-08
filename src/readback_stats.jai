@@ -173,7 +173,7 @@ per_frame_debug :: (readback_stats: *Readback_Stats, frame_num: s64, swapchain_i
     if readback_stats.snapshot_mode && frame_num >= readback_stats.snapshot_target_frame {
         check_frame_buffer();
         readback_stats.snapshot_mode = false;
-        readback_stats_dump_snapshot(readback_stats, swapchain_image, frame_num, tprint("%_snapshot", APP_NAME), APP_NAME);
+        readback_stats_dump_snapshot(readback_stats, swapchain_image, frame_num, tprint("%_snapshot", APP_STEM), APP_STEM);
     }
 
     if readback_stats_should_sample(readback_stats, frame_num) {

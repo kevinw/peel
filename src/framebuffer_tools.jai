@@ -178,7 +178,7 @@ fb_dump_swapchain_thumbnail_jpeg :: (view: Gpu_Texture_View, output_path: string
 
     success := write_ok != 0;
     if !success {
-        log_error("fb_dump_swapchain_thumbnail_jpeg: failed to write JPEG file");
+        log_error("fb_dump_swapchain_thumbnail_jpeg: failed to write JPEG file to '%'", output_path);
     } else {
         log("PEEL_SNAPSHOT wrote thumbnail (%x%) to %", thumb_width, thumb_height, output_path);
     }

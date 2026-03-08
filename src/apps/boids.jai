@@ -46,13 +46,8 @@ on_dll_init :: () {
     };
 
     compute_pipeline = gpu_create_compute_pipeline(compute_source);
-    assert(compute_pipeline != 0, "Compute pipeline creation failed.");
-
-    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, boids_vertex_main, boids_frag_main);
-    assert(graphics_ok, "Pipeline creation failed.");
-
-    compute_ok  := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_pipeline, compute_source, .METAL, boids_step_compute);
-    assert(compute_ok, "Compute pipeline creation failed.");
+    SHR.gfx_pipeline    (*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, boids_vertex_main, boids_frag_main);
+    SHR.compute_pipeline(*shader_reload_ctx, *compute_pipeline, compute_source, .METAL, boids_step_compute);
 
     gpu_arena = gpu_make_arena(1024 * 1024, label = "boids arena");
 
@@ -72,7 +67,7 @@ on_dll_init :: () {
     boid_tints_cpu = tints;
     boid_tints_gpu = tints_gpu;
 
-    palette := Vector4.[
+    palette :: Vector4.[
         .{0.949, 0.380, 0.384, 1.0}, // coral
         .{0.992, 0.682, 0.353, 1.0}, // apricot
         .{0.996, 0.902, 0.482, 1.0}, // butter
@@ -138,8 +133,9 @@ on_dll_init :: () {
 tick :: () {
     result, swapchain_image := app_swapchain_acquire();
     assert(result == .SUCCESS);
-    if !swapchain_image return;
-
+    if !swapchain_image {
+        return;
+    }
     build_ui();
 
     mx, my, mouse_ok := get_mouse_pointer_position(true);
@@ -178,10 +174,8 @@ tick :: () {
             }
         ]
     });
-
     gpu_set_depth_stencil_state(cmd_buff, { depth_test = .ALWAYS, depth_mode = .NONE, });
     gpu_set_pipeline(cmd_buff, graphics_pipeline);
-
     using draw_data;
     gpu_draw_indexed_instanced(cmd_buff, vertex_params_gpu, pixel_gpu, index_gpu, num_vertices, num_instances);
     submit_and_present_with_ui(cmd_buff);

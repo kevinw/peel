@@ -84,8 +84,8 @@ main :: () {
             }
         }
     }
-    
-    
+
+
     env_max_frames, did_parse := try_parse_env_int("PEEL_MAX_FRAMES");
     if did_parse {
         if max_frames == 0
@@ -94,7 +94,7 @@ main :: () {
             max_frames = min(env_max_frames, max_frames);
     } else {
     }
-    
+
 
     #if !SINGLE_BINARY {
         // Decide which app DLL to load.
@@ -125,7 +125,7 @@ main :: () {
 
         app := Single_Binary_App.{};
     }
-    
+
     init_ctx: Init_Ctx;
     init_ctx.max_frames = max_frames;
 
@@ -146,12 +146,16 @@ main :: () {
         }
     }
 
+    //
+    // The main host loop
+    //
     while true {
         ctx: App_Update_Ctx;
         app.on_host_message(.{type = .Update, update_ctx = *ctx});
 
-        if ctx.app_return_flags & .Quit
+        if ctx.app_return_flags & .Quit {
             break;
+        }
 
         else if !did_render_first_frame {
             did_render_first_frame = true;
