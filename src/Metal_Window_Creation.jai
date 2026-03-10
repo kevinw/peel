@@ -147,7 +147,7 @@
         NSWindow.orderFront(window, null);
     }
 
-    create_metal_window :: (width: int, height: int, window_name: string, window_x := -1, window_y := -1) -> *NSWindow {
+    create_metal_window :: (width: int, height: int, window_name: string, window_x := -1, window_y := -1, window_delegate_hack_callback: ()) -> *NSWindow {
         init_macos_app_for_sgpu();
 
         // On macOS window geometry is in points, while we want pixel-sized inputs.
@@ -164,7 +164,11 @@
         NSWindow.setReleasedWhenClosed(window, NO);
         NSWindow.setTitle(window, window_name);
 
+        // HACK: create a delegate, so the class lives in Objective C's runtime.
+        // then install our special focus/occlusion methods on it via the callback.
         wd := context._macos_create_window_delegate();
+        window_delegate_hack_callback();
+
         NSWindow.setDelegate(window, wd);
         NSWindow.setCollectionBehavior(window, NSWindowCollectionBehaviorFullScreenPrimary | NSWindowCollectionBehaviorManaged);
         set_nswindow_background_black(window);
@@ -193,6 +197,7 @@
         // Keep a hard activation pass here for terminal-launched + heavy-startup apps.
         ensure_macos_window_frontmost(window);
         sgpu_macos_activation_pumped = true;
+        mini_mode_note_window_occluded(window_is_occluded(window));
 
         return window;
     }
@@ -232,6 +237,15 @@
 
         y := ifx right_handed then fb.origin.y + fb.size.height else fb.origin.y;
         return cast(s32) fb.origin.x, cast(s32) y, cast(s32) fb.size.width, cast(s32) fb.size.height;
+    }
+
+    window_is_occluded :: (window: *NSWindow) -> bool {
+        if !window return false;
+        get_occlusion_state: (*void, Selector) -> NSUInteger #c_call;
+        get_occlusion_state = xx objc_msgSend;
+        NSWindowOcclusionStateVisible :: cast(NSUInteger) 1 << 1;
+        occlusion_state := get_occlusion_state(window, selector("occlusionState"));
+        return (occlusion_state & NSWindowOcclusionStateVisible) == 0;
     }
 }
 

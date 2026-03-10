@@ -1,7 +1,13 @@
 //
-// App enters a "mini mode" when it loses focus, which makes it smaller and
-// moves it to the corner of the screen, for live reload during development.
+// App enters a "mini mode" when it becomes occluded, which makes it smaller
+// and moves it to the corner of the screen, for live reload during development.
 //
+
+MINI_MODE_ENABLE_ON :: enum {
+    Unfocus;
+    Occluded;
+}
+MINI_MODE_ENABLE_ON_DEFAULT :: MINI_MODE_ENABLE_ON.Occluded;
 
 MINI_MODE_ENABLED :: !RELEASE;
 MINI_MODE_WIDTH_PX  :: 1152;
@@ -12,6 +18,9 @@ MINI_MODE_UNFOCUS_STREAK_FRAMES :: 1;
 app_window_focus_initialized := false;
 app_window_has_focus := false;
 app_window_unfocused_streak: int = 0;
+app_window_occlusion_initialized := false;
+app_window_is_occluded := false;
+app_window_was_occluded := false;
 app_mini_mode_active := false;
 
 handle_focus_transition_after_input_update :: () {
@@ -23,6 +32,7 @@ handle_focus_transition_after_input_update :: () {
         if app_mini_mode_active exit_mini_mode_window();
         app_window_unfocused_streak = 0;
         app_window_has_focus = Input.input_application_has_focus;
+        app_window_was_occluded = app_window_is_occluded;
         return;
     }
 
@@ -37,20 +47,38 @@ handle_focus_transition_after_input_update :: () {
 
     if focus_now {
         app_window_unfocused_streak = 0;
-        if app_window_has_focus return;
         app_window_has_focus = true;
-        exit_mini_mode_window();
+        if app_mini_mode_active exit_mini_mode_window();
         return;
     }
 
-
-    if !app_window_has_focus return;
-
-    app_window_unfocused_streak += 1;
-    if app_window_unfocused_streak < MINI_MODE_UNFOCUS_STREAK_FRAMES return;
-
     app_window_has_focus = false;
+
+    if MINI_MODE_ENABLE_ON_DEFAULT != .Occluded return;
+    if !app_window_occlusion_initialized return;
+    if !app_window_is_occluded {
+        app_window_was_occluded = false;
+        return;
+    }
+    if app_window_was_occluded return;
+
+    app_window_was_occluded = true;
     enter_mini_mode_window();
+}
+
+mini_mode_note_window_occluded :: (occluded: bool) {
+    #if OS != .MACOS return;
+    #if !MINI_MODE_ENABLED return;
+
+    if !app_window_occlusion_initialized {
+        app_window_occlusion_initialized = true;
+        app_window_is_occluded = occluded;
+        app_window_was_occluded = occluded;
+        return;
+    }
+
+    app_window_is_occluded = occluded;
+    if !occluded app_window_was_occluded = false;
 }
 
 

@@ -235,8 +235,7 @@ ui_wants_keyboard :: () -> bool {
 
 create_window_and_init_sgpu :: () {
     #if OS == .MACOS {
-        window = create_metal_window(2500, 2000, "");
-        install_macos_window_focus_hooks();
+        window = create_metal_window(2500, 2000, "", window_delegate_hack_callback=install_macos_window_focus_hooks);
         ensure_macos_window_frontmost(window);
     } else {
         window = create_window(2500, 2000, "hello peel");
@@ -254,6 +253,10 @@ create_window_and_init_sgpu :: () {
         app_window_focus_initialized = false;
         app_window_has_focus = false;
         app_window_unfocused_streak = 0;
+        app_window_occlusion_initialized = false;
+        app_window_is_occluded = false;
+        app_window_was_occluded = false;
+        mini_mode_note_window_occluded(window_is_occluded(cast(*NSWindow) window));
     }
 }
 
@@ -493,14 +496,27 @@ Window_Type :: WT.Window_Type;
                 Input.input_application_has_focus = false;
             }
         } @selector(windowDidResignKey:)
+
+        windowDidChangeOcclusionState :: (using self: *Window_Delegate_Focus_Hooks, _sel: Selector, notification: *NSNotification) #c_call {
+            push_context {
+                _ = self;
+                ns_window := cast(*NSWindow) notification.object(notification);
+                if ns_window == window {
+                    is_occluded := window_is_occluded(ns_window);
+                    mini_mode_note_window_occluded(is_occluded);
+                }
+            }
+        } @selector(windowDidChangeOcclusionState:)
     }
 
     install_macos_window_focus_hooks :: () {
         if macos_window_focus_hooks_installed return;
         wd_class := objc_getClass("Window_Delegate");
         if !wd_class return;
-        objc_add_instance_method(wd_class, Window_Delegate_Focus_Hooks.windowDidBecomeKey, "windowDidBecomeKey:");
-        objc_add_instance_method(wd_class, Window_Delegate_Focus_Hooks.windowDidResignKey, "windowDidResignKey:");
+        using Window_Delegate_Focus_Hooks;
+        objc_add_instance_method(wd_class, windowDidBecomeKey, "windowDidBecomeKey:");
+        objc_add_instance_method(wd_class, windowDidResignKey, "windowDidResignKey:");
+        objc_add_instance_method(wd_class, windowDidChangeOcclusionState, "windowDidChangeOcclusionState:");
         macos_window_focus_hooks_installed = true;
     }
 
