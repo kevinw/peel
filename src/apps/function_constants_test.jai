@@ -74,8 +74,8 @@ do_ui :: () {
 } @on_ui
 
 on_dll_init :: () {
-    graphics_source, shader_meta :: #run get_transpiled(.METAL, vert, frag);
-    log("SHADER META:\n%\n", FormatStruct.{value=shader_meta});
+    shader :: #run get_transpiled_shader(.METAL, vert, frag);
+    log("SHADER META:\n%\n", FormatStruct.{value=shader.meta});
     raster_desc: Gpu_Raster_Desc = .{
         cull = .NONE,
         color_targets = .[
@@ -89,15 +89,15 @@ on_dll_init :: () {
     params_gpu = sgpu_frame_ring_gpu_slot(params_ring_gpu, Function_Constants_Test_Params);
     params_cpu.* = .{};
     
-    default_constants :: #insert #run make_constants_code_string(shader_meta);
+    default_constants :: #insert #run make_constants_code_string(shader.meta);
     alternate_constants := default_constants;
     alternate_constants.use_alternate_color = true;
 
     default_values := scoped_function_constant_values(*default_constants);
     alternate_values := scoped_function_constant_values(*alternate_constants);
 
-    graphics_pipeline_default   = gpu_create_graphics_pipeline_with_function_constants(cast([]u8)graphics_source, raster_desc, shader_meta, null, default_values);
-    graphics_pipeline_alternate = gpu_create_graphics_pipeline_with_function_constants(cast([]u8)graphics_source, raster_desc, shader_meta, null, alternate_values);
+    graphics_pipeline_default   = gpu_create_graphics_pipeline_with_function_constants(cast([]u8)shader.source, raster_desc, shader.meta, null, default_values);
+    graphics_pipeline_alternate = gpu_create_graphics_pipeline_with_function_constants(cast([]u8)shader.source, raster_desc, shader.meta, null, alternate_values);
 
     gpu_commit_residency();
 } @on_dll_init
