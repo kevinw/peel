@@ -1,0 +1,63 @@
+
+
+AB_Buffer :: struct($T: Type) {
+    a_cpu: *T;
+    b_cpu: *T;
+    a_gpu: Gpu_Ptr;
+    b_gpu: Gpu_Ptr;
+    src_is_a: bool;
+}
+
+ab_buffer_src_cpu :: (buffer: *AB_Buffer($T)) -> *T #expand {
+    if buffer.src_is_a return buffer.a_cpu;
+    return buffer.b_cpu;
+}
+
+ab_buffer_dst_cpu :: (buffer: *AB_Buffer($T)) -> *T #expand {
+    if buffer.src_is_a return buffer.b_cpu;
+    return buffer.a_cpu;
+}
+
+ab_buffer_src_gpu :: (buffer: *AB_Buffer($T)) -> Gpu_Ptr #expand {
+    if buffer.src_is_a return buffer.a_gpu;
+    return buffer.b_gpu;
+}
+
+ab_buffer_dst_gpu :: (buffer: *AB_Buffer($T)) -> Gpu_Ptr #expand {
+    if buffer.src_is_a return buffer.b_gpu;
+    return buffer.a_gpu;
+}
+
+ab_buffer_advance :: (buffer: *AB_Buffer($T)) #expand {
+    buffer.src_is_a = !buffer.src_is_a;
+}
+
+sgpu_frame_ring_index :: (frame_number: s64 = -1) -> s64 {
+    if frame_number < 0 frame_number = cast(s64) gpu_submission_frame_index();
+    idx := frame_number % SGPU_FRAMES_IN_FLIGHT;
+    if idx < 0 idx += SGPU_FRAMES_IN_FLIGHT;
+    return idx;
+}
+
+sgpu_arena_alloc_frame_ring :: (arena: *Gpu_Arena, $T: Type, min_alignment: s64 = 16) -> (*[SGPU_FRAMES_IN_FLIGHT] T, Gpu_Ptr) {
+    cpu_ring, gpu_ring := gpu_arena_alloc(arena, [SGPU_FRAMES_IN_FLIGHT] T, min_alignment);
+    return cpu_ring, gpu_ring;
+}
+
+sgpu_frame_ring_cpu_slot :: (ring: *[SGPU_FRAMES_IN_FLIGHT] $T, frame_number: s64 = -1) -> *T #expand {
+    idx := sgpu_frame_ring_index(frame_number);
+    return cast(*T) ring + idx;
+}
+
+sgpu_frame_ring_gpu_slot :: (ring_base_gpu: Gpu_Ptr, $T: Type, frame_number: s64 = -1) -> Gpu_Ptr #expand {
+    idx := sgpu_frame_ring_index(frame_number);
+    return ring_base_gpu + (idx * size_of(T)).(Gpu_Ptr);
+}
+
+gpu_begin_scoped_render_pass :: (cmd_buf: Gpu_Command_Buffer, desc: Gpu_Render_Pass_Desc,
+    transition_before: Pass_Access = .NONE, transition_after: Pass_Access = .NONE) #expand {
+    gpu_begin_render_pass(cmd_buf, desc);
+    `defer ifx transition_before != .NONE || transition_after != .NONE
+        then gpu_end_render_pass_with_transition(cmd_buf, transition_before, transition_after)
+        else gpu_end_render_pass(cmd_buf);
+}

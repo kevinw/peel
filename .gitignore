@@ -68,3 +68,6 @@ dist/caustics_pool
 dist/caustics_pool.dylib
 dist/signal_field
 dist/signal_field.dylib
+dist/brick_redux
+dist/brick_redux.dylib
+dist/function_constants_test

@@ -9,23 +9,26 @@ APP_STEM :: #run String.path_strip_extension(String.path_filename(APP_NAME));
 app_needs_recompile: string;
 app_quit_requested := false;
 did_init := false;
+
 delta_time_multiplier: float = 1.0;
 dt: float; // delta time for gameplay (modifiable by delta_time_multiplier)
 editor_dt: float; // delta time for editor
 last_time: float64;
 time: float64;
 frame_count: int;
+
 last_window_size: V2(u32);
 window: *void; // TODO
 sgpu_debug_status: string;
+
 shader_reload_ctx: SHR.Shader_Hot_Reload;
-max_frames: int = 0;
-reload_on_frame: int = 0;
+max_frames: int;
+reload_on_frame: int;
 pending_objc_reinit_after_reload := false;
-perf_capture_cpu_ms_sum: float64 = 0;
-perf_capture_gpu_ms_sum: float64 = 0;
-perf_capture_count: s64 = 0;
-perf_capture_gpu_count: s64 = 0;
+perf_capture_cpu_ms_sum: float64;
+perf_capture_gpu_ms_sum: float64;
+perf_capture_count: s64;
+perf_capture_gpu_count: s64;
 perf_capture_reported := false;
 app_ui_enabled := true;
 
@@ -48,69 +51,6 @@ PERF_CAPTURE_MIN_FPS :: 10.0;
     readback_stats: Readback_Stats;
 }
 
-using,except(Viewport) _ :: #import "sgpu"()(SLANG_COMPILER=false);
-
-AB_Buffer :: struct($T: Type) {
-    a_cpu: *T;
-    b_cpu: *T;
-    a_gpu: Gpu_Ptr;
-    b_gpu: Gpu_Ptr;
-    src_is_a: bool;
-}
-
-ab_buffer_src_cpu :: (buffer: *AB_Buffer($T)) -> *T #expand {
-    if buffer.src_is_a return buffer.a_cpu;
-    return buffer.b_cpu;
-}
-
-ab_buffer_dst_cpu :: (buffer: *AB_Buffer($T)) -> *T #expand {
-    if buffer.src_is_a return buffer.b_cpu;
-    return buffer.a_cpu;
-}
-
-ab_buffer_src_gpu :: (buffer: *AB_Buffer($T)) -> Gpu_Ptr #expand {
-    if buffer.src_is_a return buffer.a_gpu;
-    return buffer.b_gpu;
-}
-
-ab_buffer_dst_gpu :: (buffer: *AB_Buffer($T)) -> Gpu_Ptr #expand {
-    if buffer.src_is_a return buffer.b_gpu;
-    return buffer.a_gpu;
-}
-
-ab_buffer_advance :: (buffer: *AB_Buffer($T)) #expand {
-    buffer.src_is_a = !buffer.src_is_a;
-}
-
-sgpu_frame_ring_index :: (frame_number: s64 = -1) -> s64 {
-    if frame_number < 0 frame_number = cast(s64) gpu_submission_frame_index();
-    idx := frame_number % SGPU_FRAMES_IN_FLIGHT;
-    if idx < 0 idx += SGPU_FRAMES_IN_FLIGHT;
-    return idx;
-}
-
-sgpu_arena_alloc_frame_ring :: (arena: *Gpu_Arena, $T: Type, min_alignment: s64 = 16) -> (*[SGPU_FRAMES_IN_FLIGHT] T, Gpu_Ptr) {
-    cpu_ring, gpu_ring := gpu_arena_alloc(arena, [SGPU_FRAMES_IN_FLIGHT] T, min_alignment);
-    return cpu_ring, gpu_ring;
-}
-
-sgpu_frame_ring_cpu_slot :: (ring: *[SGPU_FRAMES_IN_FLIGHT] $T, frame_number: s64 = -1) -> *T #expand {
-    idx := sgpu_frame_ring_index(frame_number);
-    return cast(*T) ring + idx;
-}
-
-sgpu_frame_ring_gpu_slot :: (ring_base_gpu: Gpu_Ptr, $T: Type, frame_number: s64 = -1) -> Gpu_Ptr #expand {
-    idx := sgpu_frame_ring_index(frame_number);
-    return ring_base_gpu + (idx * size_of(T)).(Gpu_Ptr);
-}
-
-gpu_begin_scoped_render_pass :: (cmd_buf: Gpu_Command_Buffer, desc: Gpu_Render_Pass_Desc,
-    transition_before: Pass_Access = .NONE, transition_after: Pass_Access = .NONE) #expand {
-    gpu_begin_render_pass(cmd_buf, desc);
-    `defer ifx transition_before != .NONE || transition_after != .NONE
-        then gpu_end_render_pass_with_transition(cmd_buf, transition_before, transition_after)
-        else gpu_end_render_pass(cmd_buf);
-}
 
 sgpu_set_debug_status :: (status: string) {
     if sgpu_debug_status == status return;
@@ -121,10 +61,10 @@ sgpu_set_debug_status :: (status: string) {
     if status.count != 0 sgpu_debug_status = copy_string(status);
 }
 
-submit_and_present_with_ui :: (cmd_buff: Gpu_Command_Buffer) {
+submit_and_present_with_ui :: (cmd_buff: Gpu_Command_Buffer, waits: [] Gpu_Timeline_Pair = .[]) {
     if !app_should_render_ui() {
         current_ui_render_frame = {};
-        gpu_submit_and_present(cmd_buff);
+        gpu_submit_and_present(cmd_buff, waits = waits);
         return;
     }
 
@@ -134,7 +74,7 @@ submit_and_present_with_ui :: (cmd_buff: Gpu_Command_Buffer) {
     ui_render(cmd_buff, *current_ui_render_frame, ui_frame_value, skip_render=app_mini_mode_active);
     current_ui_render_frame = {};
 
-    gpu_submit_and_present(cmd_buff);
+    gpu_submit_and_present(cmd_buff, waits = waits);
     ui_on_frame_submitted(ui_frame_value);
 }
 
@@ -172,6 +112,7 @@ app_update :: (update_ctx: *App_Update_Ctx) {
 
     time = seconds_since_init();
     dt = cast(float)(time - last_time);
+    editor_dt = dt;
     last_time = time;
     cpu_frame_ms := dt * 1000.0;
     gpu_frame_ms := gpu_last_frame_gpu_ms();
@@ -194,14 +135,7 @@ app_update :: (update_ctx: *App_Update_Ctx) {
     }
 
     frame_count += 1;
-    if frame_count >= PERF_CAPTURE_START_FRAME && frame_count <= PERF_CAPTURE_END_FRAME {
-        perf_capture_cpu_ms_sum += cpu_frame_ms;
-        perf_capture_count += 1;
-        if gpu_frame_ms >= 0.0 {
-            perf_capture_gpu_ms_sum += gpu_frame_ms;
-            perf_capture_gpu_count += 1;
-        }
-    }
+    perf_capture(cpu_frame_ms, gpu_frame_ms);
 
     Input.update_window_events();
     handle_focus_transition_after_input_update();
@@ -409,7 +343,6 @@ host_init :: (init_ctx: Init_Ctx) -> bool {
         use_background_thread = false,
     );
 
-
     call_event_functions(.dll_init);
 
     return true;
@@ -579,6 +512,18 @@ Window_Type :: WT.Window_Type;
     }
 }
 
+perf_capture :: (cpu_frame_ms: float, gpu_frame_ms: float) {
+    if frame_count >= PERF_CAPTURE_START_FRAME && frame_count <= PERF_CAPTURE_END_FRAME {
+        perf_capture_cpu_ms_sum += cpu_frame_ms;
+        perf_capture_count += 1;
+        if gpu_frame_ms >= 0.0 {
+            perf_capture_gpu_ms_sum += gpu_frame_ms;
+            perf_capture_gpu_count += 1;
+        }
+    }
+}
+
+using,except(Viewport) _ :: #import "sgpu"()(SLANG_COMPILER=false);
 #load "App_Common.jai";
 #load "ui/ui.jai";
 #scope_file
@@ -590,3 +535,4 @@ Window_Type :: WT.Window_Type;
 String :: #import "String";
 Env_Vars :: #import "Env_Vars";
 SHR :: #import,file "shader_hot_reload.jai";
+#load "GPU_Tools.jai";

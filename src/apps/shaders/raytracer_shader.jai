@@ -1,17 +1,28 @@
 Raytracer_Vertex_In :: struct {
-    vertex_id: u32; @semantic_SV_VertexID
+    vertex_id: u32; @SV_VertexID
 }
 
 Raytracer_Vertex_Out :: struct {
-    position: Vector4; @semantic_SV_Position
-    uv: Vector2; @semantic_TEXCOORD0
+    position: Vector4; @SV_Position
+    uv: Vector2; @TEXCOORD0
 }
 
 Raytracer_Params :: struct {
-    resolution: Vector2;
-    mouse_uv: Vector2;
     camera_pos: Vector3;
     time: float;
+
+    cam_forward: Vector3;
+    aspect: float;
+
+    cam_right: Vector3;
+    pad_1: float;
+
+    cam_up: Vector3;
+    pad_2: float;
+
+    inv_viewport: Vector2;
+    pad_3: Vector2;
+
     cube0_center_refl: Vector4;
     cube0_half_pad: Vector4;
     cube0_color_pad: Vector4;
@@ -30,6 +41,93 @@ raytracer_rotate_quat :: (v: Vector3, q: Vector4) -> Vector3 {
 
 raytracer_inverse_rotate_quat :: (v: Vector3, q: Vector4) -> Vector3 {
     return raytracer_rotate_quat(v, .{-q.x, -q.y, -q.z, q.w});
+}
+
+raytracer_make_camera_ray :: (p: Vector2, params: *Raytracer_Params) -> Vector3 {
+    rd := params.cam_forward + params.cam_right * p.x * FOV_FACTOR + params.cam_up * p.y * FOV_FACTOR;
+    rd /= max(sqrt(dot(rd, rd)), 0.00001);
+    return rd;
+}
+
+raytracer_checker_at :: (x: float, z: float) -> Vector3 {
+    cx := cast(int) floor(x);
+    cz := cast(int) floor(z);
+    checker := (cx + cz) & 1;
+    if checker == 0 return .{0.88, 0.88, 0.90};
+    return .{0.18, 0.18, 0.20};
+}
+
+raytracer_floor_hit :: (ro: Vector3, rd: Vector3, hit_pos: *Vector3) -> float {
+    if abs(rd.y) <= 0.0001 return -1.0;
+    t_floor := (-1.0 - ro.y) / rd.y;
+    if t_floor <= 0.001 return -1.0;
+    hit_pos.* = ro + rd * t_floor;
+    return t_floor;
+}
+
+raytracer_checker_aniso :: (
+    ro: Vector3,
+    center_p: Vector2,
+    center_hit: Vector3,
+    params: *Raytracer_Params,
+) -> Vector3 {
+    mean_checker := Vector3.{0.53, 0.53, 0.55};
+    dp_x := Vector2.{2.0 * params.aspect * params.inv_viewport.x, 0.0};
+    dp_y := Vector2.{0.0, 2.0 * params.inv_viewport.y};
+
+    hit_x, hit_y: Vector3;
+    rd_x := raytracer_make_camera_ray(center_p + dp_x, params);
+    rd_y := raytracer_make_camera_ray(center_p + dp_y, params);
+    t_x := raytracer_floor_hit(ro, rd_x, *hit_x);
+    t_y := raytracer_floor_hit(ro, rd_y, *hit_y);
+    if t_x < 0.0 || t_y < 0.0 return raytracer_checker_at(center_hit.x, center_hit.z);
+
+    dx_x := hit_x.x - center_hit.x;
+    dx_z := hit_x.z - center_hit.z;
+    dy_x := hit_y.x - center_hit.x;
+    dy_z := hit_y.z - center_hit.z;
+    dx_len_sq := dx_x * dx_x + dx_z * dx_z;
+    dy_len_sq := dy_x * dy_x + dy_z * dy_z;
+
+    major_x := dx_x;
+    major_z := dx_z;
+    minor_x := dy_x;
+    minor_z := dy_z;
+    if dy_len_sq > dx_len_sq {
+        major_x = dy_x;
+        major_z = dy_z;
+        minor_x = dx_x;
+        minor_z = dx_z;
+    }
+
+    major_len := sqrt(major_x * major_x + major_z * major_z);
+    minor_len := sqrt(minor_x * minor_x + minor_z * minor_z);
+    // Near the horizon the floor footprint explodes, so fade to the checker average.
+    if major_len > 12.0 return mean_checker;
+    ratio := major_len / max(minor_len, 0.0001);
+
+    taps := 1;
+    if ratio > 16.0 {
+        taps = 8;
+    } else if ratio > 8.0 {
+        taps = 6;
+    } else if ratio > 4.0 {
+        taps = 4;
+    } else if ratio > 2.0 {
+        taps = 2;
+    }
+
+    accum := Vector3.{0.0, 0.0, 0.0};
+    for i: 0..taps-1 {
+        u := (cast(float) i + 0.5) / cast(float) taps - 0.5;
+        sample_x := center_hit.x + major_x * u;
+        sample_z := center_hit.z + major_z * u;
+        accum += raytracer_checker_at(sample_x, sample_z);
+    }
+
+    filtered := accum / cast(float) taps;
+    fade := clamp((major_len - 4.0) / 8.0, 0.0, 1.0);
+    return filtered + (mean_checker - filtered) * fade;
 }
 
 raytracer_hit_obb :: (
@@ -104,27 +202,16 @@ raytracer_vertex_main :: (using in: Raytracer_Vertex_In) -> Raytracer_Vertex_Out
     return out;
 } @vertex_shader
 
-raytracer_fragment_main :: (using in: Raytracer_Vertex_Out, params: *Raytracer_Params) -> struct { out_color: Vector4; } {
+raytracer_fragment_main :: (using in: Raytracer_Vertex_Out, using params: *Raytracer_Params) -> struct { out_color: Vector4; } {
     // Camera ray setup.
     p := Vector2.{uv.x * 2.0 - 1.0, uv.y * 2.0 - 1.0};
-    aspect := params.resolution.x / max(params.resolution.y, 1.0);
-    p.x *= aspect;
+    p.x *= params.aspect;
 
-    yaw := (params.mouse_uv.x - 0.5) * 0.9;
-    pitch := (-0.5 + params.mouse_uv.y) * 1.1;
-    pitch = clamp(pitch, -1.2, 1.2);
-    cos_pitch := cos(pitch);
     ro := params.camera_pos;
-    forward := Vector3.{sin(yaw) * cos_pitch, sin(pitch), -cos(yaw) * cos_pitch};
-    forward /= max(sqrt(dot(forward, forward)), 0.00001);
-    right := cross(forward, Vector3.{0.0, 1.0, 0.0});
-    right /= max(sqrt(dot(right, right)), 0.00001);
-    up := cross(right, forward);
-    up /= max(sqrt(dot(up, up)), 0.00001);
-    rd := forward + right * p.x * 0.85 + up * p.y * 0.85;
-    rd /= max(sqrt(dot(rd, rd)), 0.00001);
+    rd := raytracer_make_camera_ray(p, params);
+
     // Small camera-relative avatar sphere. Offset mostly behind camera so it appears in reflections.
-    avatar_center := params.camera_pos + right * 0.28 + up * 0.16 - forward * 0.22;
+    avatar_center := params.camera_pos + cam_right * 0.28 + cam_up * 0.16 - cam_forward * 0.22;
     avatar_radius := 0.31;
     avatar_color := Vector3.{0.92, 0.96, 1.00};
 
@@ -147,11 +234,7 @@ raytracer_fragment_main :: (using in: Raytracer_Vertex_Out, params: *Raytracer_P
                 hit_found = true;
                 hit_pos = ro + rd * t_floor;
                 hit_nrm = .{0.0, 1.0, 0.0};
-                cx := cast(int) floor(hit_pos.x);
-                cz := cast(int) floor(hit_pos.z);
-                checker := (cx + cz) & 1;
-                if checker == 0 hit_albedo = .{0.88, 0.88, 0.90};
-                else hit_albedo = .{0.18, 0.18, 0.20};
+                hit_albedo = raytracer_checker_aniso(ro, p, hit_pos, params);
                 hit_refl = 0.06;
             }
         }

@@ -4,6 +4,10 @@
     "command": "jai ~/src/peel/build.jai - src/apps/boids.jai -run -dll"
   },
   {
+    "label": "brick_redux",
+    "command": "jai ~/src/peel/build.jai - src/apps/brick_redux.jai -run -dll"
+  },
+  {
     "label": "brickmap",
     "command": "jai ~/src/peel/build.jai - src/apps/brickmap.jai -run -dll"
   },
@@ -18,6 +22,10 @@
   {
     "label": "flux",
     "command": "jai ~/src/peel/build.jai - src/apps/flux.jai -run -dll"
+  },
+  {
+    "label": "function_constants_test",
+    "command": "jai ~/src/peel/build.jai - src/apps/function_constants_test.jai -run"
   },
   {
     "label": "gizmos_test",

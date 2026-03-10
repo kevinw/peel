@@ -1,11 +1,5 @@
 WRITE_SHADER_OUTPUT :: true;
 
-#load "../SGPU_App_Common.jai";
-
-#import "Jai-Shader-Transpiler";
-SHR :: #import,file "../shader_hot_reload.jai";
-#load "shaders/raytracer_shader.jai";
-
 graphics_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 raytracer_params_cpu: *Raytracer_Params;
@@ -18,16 +12,16 @@ raytracer_object_reflectivity: [2]float = .[0.24, 0.32];
 raytracer_edit_objects := true;
 raytracer_left_was_down := false;
 
+PITCH_MAX :: PI / 2.1;
+FOV_FACTOR :: 0.85;
+
 raytracer_camera: Editor_Camera = .{
     position = .{0.0, 0.75, 1.95},
-    yaw = 0.0,
-    pitch = 0.0,
     move_speed = 5.0,
     boost_multiplier = 2.0,
     mouse_sensitivity = 0.006,
-    move_planar = true,
-    pitch_min = -0.55,
-    pitch_max = 0.55,
+    pitch_min = -PITCH_MAX,
+    pitch_max = PITCH_MAX,
 };
 
 on_dll_init :: () {
@@ -45,13 +39,7 @@ on_dll_init :: () {
 
     gpu_arena = gpu_make_arena(64 * 1024, label = "raytracer arena");
     raytracer_params_cpu, raytracer_params_gpu = gpu_arena_alloc(*gpu_arena, Raytracer_Params);
-    raytracer_params_cpu.mouse_uv = raytracer_uv_from_angles(raytracer_camera.yaw, raytracer_camera.pitch);
-    raytracer_params_cpu.* = .{
-        resolution = .{1280.0, 720.0},
-        mouse_uv = raytracer_uv_from_angles(raytracer_camera.yaw, raytracer_camera.pitch),
-        camera_pos = raytracer_camera.position,
-        time = 0.0,
-    };
+    raytracer_params_cpu.* = .{};
     raytracer_objects.allocator = context.allocator;
     array_add(*raytracer_objects, .{
         name = "Cube A",
@@ -97,7 +85,7 @@ app_ui :: () {
             Text("Mode: 1=Translate 2=Rotate 3=Scale");
             Text("Space: 4=World 5=Local");
             Text("Selected: %", raytracer_manip_ctx.selected_index);
-            Text("Manip % / %", raytracer_mode_name(raytracer_manip_ctx.mode), raytracer_space_name(raytracer_manip_ctx.space));
+            Text("Manip % / %", raytracer_manip_ctx.mode, raytracer_manip_ctx.space);
         }
     }
     End();
@@ -111,7 +99,11 @@ tick :: () {
     _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
     mx, my, mouse_ok := get_mouse_pointer_position(true);
     if dims_ok && win_w > 0 && win_h > 0 {
-        raytracer_params_cpu.resolution = .{cast(float) win_w, cast(float) win_h};
+        raytracer_params_cpu.aspect = cast(float) win_w / cast(float) win_h;
+        raytracer_params_cpu.inv_viewport = .{
+            1.0 / cast(float) win_w,
+            1.0 / cast(float) win_h,
+        };
     }
     app_ui();
     for Input.events_this_frame {
@@ -136,9 +128,14 @@ tick :: () {
         allow_move = !io.WantTextInput,
         allow_look = mouse_ok && dims_ok && win_w > 0 && win_h > 0 && right_down && !io.WantCaptureMouse);
 
-    raytracer_params_cpu.mouse_uv = raytracer_uv_from_angles(raytracer_camera.yaw, raytracer_camera.pitch);
+    cam_forward, cam_right, cam_up: Vector3;
+    editor_camera_basis(*raytracer_camera, *cam_forward, *cam_right, *cam_up);
+
     raytracer_params_cpu.camera_pos = raytracer_camera.position;
     raytracer_params_cpu.time = cast(float) frame_count * (1.0 / 60.0);
+    raytracer_params_cpu.cam_forward = cam_forward;
+    raytracer_params_cpu.cam_right = cam_right;
+    raytracer_params_cpu.cam_up = cam_up;
     raytracer_sync_objects_to_params();
 
     main_queue := gpu_get_queue(.MAIN, 0);
@@ -161,17 +158,16 @@ tick :: () {
     draw_result := gpu_draw_instanced(cmd_buff, 0, raytracer_params_gpu, 3, 1);
     assert(draw_result == .SUCCESS, tprint("Raytracer draw failed: %", draw_result));
 
+
     if raytracer_edit_objects && dims_ok && win_w > 0 && win_h > 0 {
         viewport := Vector2.{cast(float) win_w, cast(float) win_h};
         // Must match shader ray setup: rd = forward + right * p.x * 0.85 + up * p.y * 0.85
         // => tan(fov_y / 2) == 0.85
-        fov_y := 2.0 * atan(0.85);
+        fov_y := 2.0 * atan(FOV_FACTOR);
         view := editor_camera_make_view(*raytracer_camera);
         proj := make_projection_matrix(fov_y, viewport.x / max(viewport.y, 1.0), 0.05, 100.0);
         Gizmo_Render.gizmo_render_set_view_projection(*raytracer_gizmo_render_ctx, proj * view);
 
-        cam_forward, cam_right, cam_up: Vector3;
-        editor_camera_basis(*raytracer_camera, *cam_forward, *cam_right, *cam_up);
         frame := Manip_Frame_Input.{
             viewport = viewport,
             camera_pos = raytracer_camera.position,
@@ -206,15 +202,6 @@ ImGui :: #import "ImGui";
 Gizmo :: #import "Gizmo";
 Gizmo_Render :: #import "Gizmo_Render";
 
-raytracer_uv_from_angles :: (yaw: float, pitch: float) -> Vector2 {
-    uv_x := yaw / 0.9 + 0.5;
-    uv_y := pitch / 1.1 + 0.5;
-    return .{
-        uv_x,
-        clamp(uv_y, 0.0, 1.0),
-    };
-}
-
 raytracer_sync_objects_to_params :: () {
     if raytracer_objects.count < 2 return;
     a := raytracer_objects[0];
@@ -230,15 +217,7 @@ raytracer_sync_objects_to_params :: () {
     raytracer_params_cpu.cube1_rotation = .{b.rotation.x, b.rotation.y, b.rotation.z, b.rotation.w};
 }
 
-raytracer_mode_name :: (mode: Manip_Mode) -> string {
-    if mode == .TRANSLATE return "Translate";
-    if mode == .ROTATE return "Rotate";
-    if mode == .SCALE return "Scale";
-    return "Unknown";
-}
-
-raytracer_space_name :: (space: Manip_Space) -> string {
-    if space == .WORLD return "World";
-    if space == .LOCAL return "Local";
-    return "Unknown";
-}
+#load "../SGPU_App_Common.jai";
+#import "Jai-Shader-Transpiler";
+SHR :: #import,file "../shader_hot_reload.jai";
+#load "shaders/raytracer_shader.jai";

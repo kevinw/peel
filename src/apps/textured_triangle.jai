@@ -11,7 +11,7 @@ Draw_Data :: struct {
 graphics_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
-pixel_params_cpu: *Textured_Triangle_Pixel_Params;
+pixel_params: Gpu_Buffer(Textured_Triangle_Pixel_Params);
 
 noise_texture: Gpu_Texture;
 noise_texture_view: Gpu_Texture_View;
@@ -56,26 +56,22 @@ on_dll_init :: () {
         format = .B8G8R8A8_UNORM,
         usage = .SAMPLED | .TRANSFER_DST,
     });
-    assert(texture_result == .SUCCESS, tprint("Textured triangle texture creation failed: %", texture_result));
-    assert(noise_texture != 0, "Textured triangle texture creation returned null handle.");
     noise_texture_view = gpu_texture_view(noise_texture);
-    assert(noise_texture_view != 0, "Textured triangle texture-view creation failed.");
     noise_sampler = gpu_create_sampler({ compare_op = .NEVER });
-    assert(noise_sampler != 0, "Textured triangle sampler creation failed.");
 
     noise_pixels, _ := gpu_arena_alloc(*gpu_arena, [NOISE_BYTE_COUNT] u8);
     noise_fill_rgba8(noise_pixels);
     gpu_copy_to_texture(noise_texture, noise_pixels);
 
-    pixel_params_cpu, pixel_gpu := gpu_malloc(Textured_Triangle_Pixel_Params);
-    pixel_params_cpu.* = .{
+    pixel_params = gpu_alloc(Textured_Triangle_Pixel_Params);
+    pixel_params.cpu.* = .{
         texture_index = cast(u32) noise_texture_view - 1,
         sampler_index = cast(u32) noise_sampler - 1,
         debug_mode = debug_mode,
         _pad = 0,
     };
     draw_data = .{
-        pixel_gpu = pixel_gpu,
+        pixel_gpu = pixel_params.gpu,
         num_vertices = 3,
         num_instances = 1,
     };
