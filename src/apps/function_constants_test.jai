@@ -12,11 +12,10 @@ Function_Constants_Test_Params :: struct {
 }
 
 Function_Constants_Test_VS_Out :: struct {
-    position: Vector4; @semantic_SV_Position
+    position: Vector4; @SV_Position
 }
 
 use_alternate_color: bool = false; @function_constant
-const_color: Vector3 = .{1, 0, 0}; @function_constant
 
 vert :: (using in: struct { vertex_id: u32; @Vertex_ID }) -> Function_Constants_Test_VS_Out @vertex_shader {
     positions : [3] Vector2 = .[
@@ -40,8 +39,7 @@ frag :: (using input: Function_Constants_Test_VS_Out, using params: *Function_Co
     }
 
     if input.position.x >= split_x discard();
-    //return .{test_color.x, test_color.y, test_color.z, 1.0};
-    return .{const_color.x, const_color.y, const_color.z, 1.0};
+    return .{test_color.x, test_color.y, test_color.z, 1.0};
 } @fragment_shader
 
 graphics_pipeline_default: Gpu_Pipeline;
@@ -76,7 +74,8 @@ do_ui :: () {
 } @on_ui
 
 on_dll_init :: () {
-    graphics_source, shader_meta := get_transpiled(.METAL, vert, frag);
+    graphics_source, shader_meta :: #run get_transpiled(.METAL, vert, frag);
+    log("SHADER META:\n%\n", FormatStruct.{value=shader_meta});
     raster_desc: Gpu_Raster_Desc = .{
         cull = .NONE,
         color_targets = .[
@@ -89,8 +88,8 @@ on_dll_init :: () {
     params_cpu = sgpu_frame_ring_cpu_slot(params_ring_cpu);
     params_gpu = sgpu_frame_ring_gpu_slot(params_ring_gpu, Function_Constants_Test_Params);
     params_cpu.* = .{};
-
-    default_constants := transpiled_pair_metal_vert_frag_graphics_function_constants.{};
+    
+    default_constants :: #insert #run make_constants_code_string(shader_meta);
     alternate_constants := default_constants;
     alternate_constants.use_alternate_color = true;
 
@@ -156,23 +155,37 @@ build_function_constant_values :: (constants: *$T) -> *MTLFunctionConstantValues
     assert(values != null, "Failed to allocate MTLFunctionConstantValues.");
 
     ti_struct := type_info(T);
-    base := cast(*void)constants;
     for ti_struct.members {
         member, offset_in_bytes := get_field(ti_struct, it.name);
+        if offset_in_bytes < 0 {
+            log_error("build_function_constant_values: member '%s' has negative offset_in_bytes: %", it.name, offset_in_bytes);
+            continue;
+        }
         member_ti := member.type;
 
-        field_ptr := base + offset_in_bytes;
-        log("member.name: % %", member, offset_in_bytes);
+        log("member.name: % %", member.name, offset_in_bytes);
         metal_data_type: MTLDataType;
 
         if member_ti.type == {
             case .BOOL;
                 metal_data_type = .Bool;
+            case .STRUCT;
+                struct_name := member_ti.(*Type_Info_Struct).name; // TODO: don't string match for Vector types
+                if struct_name == {
+                case "Vector2"; metal_data_type = .Float2;
+                case "Vector3"; metal_data_type = .Float3;
+                case "Vector4"; metal_data_type = .Float4;
+                case;
+                    log_error("TODO: implement more general build_function_constant_values for struct '%'", struct_name);
+                }
             case;
                 log_error("TODO: implement build_function_constant_values for type %", member_ti.type);
                 continue;
         }
 
+        log("MTLFunctionConstantValues set member '%', byte offset %, index %", it.name, offset_in_bytes, it_index);
+        
+        field_ptr := (cast(*void)constants) + offset_in_bytes;
         MTLFunctionConstantValues.setConstantValue(values, cast(*void) field_ptr, metal_data_type, cast(NSUInteger)it_index);
     }
 
