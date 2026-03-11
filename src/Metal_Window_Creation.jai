@@ -13,7 +13,8 @@
         _ = self; _ = _cmd;
         if !event return;
 
-        push_context {
+        ctx: #Context;
+        push_context ctx {
             if ImGui.GetCurrentContext() != null {
                 io := ImGui.GetIO();
                 if io.WantTextInput {

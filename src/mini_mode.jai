@@ -7,12 +7,11 @@ MINI_MODE_ENABLE_ON :: enum {
     Unfocus;
     Occluded;
 }
-MINI_MODE_ENABLE_ON_DEFAULT :: MINI_MODE_ENABLE_ON.Occluded;
 
-MINI_MODE_ENABLED :: !RELEASE;
-MINI_MODE_WIDTH_PX  :: 1152;
-MINI_MODE_HEIGHT_PX :: 648;
-MINI_MODE_MARGIN_PX :: 16;
+MINI_MODE_ENABLE_ON_DEFAULT     :: MINI_MODE_ENABLE_ON.Occluded;
+MINI_MODE_ENABLED               :: !RELEASE;
+MINI_MODE_MAX_SIZE_PX           :: 1300;
+MINI_MODE_MARGIN_PX             :: 16;
 MINI_MODE_UNFOCUS_STREAK_FRAMES :: 1;
 
 app_window_focus_initialized := false;
@@ -100,11 +99,10 @@ mini_mode_note_window_occluded :: (occluded: bool) {
         if !screen return;
 
         pixels_to_points_factor := cast(CGFloat) 1 / NSScreen.backingScaleFactor(screen);
-        mini_w := cast(CGFloat) MINI_MODE_WIDTH_PX * pixels_to_points_factor;
-        mini_h := cast(CGFloat) MINI_MODE_HEIGHT_PX * pixels_to_points_factor;
+        mini_size := mini_mode_size_for_saved_window(saved_window.frame.size, pixels_to_points_factor);
         margin := cast(CGFloat) MINI_MODE_MARGIN_PX * pixels_to_points_factor;
 
-        NSWindow.setContentSize(ns_window, .{ mini_w, mini_h });
+        NSWindow.setContentSize(ns_window, mini_size);
 
         screen_frame := NSScreen.frame(screen);
         frame := NSWindow.frame(ns_window);
@@ -112,13 +110,25 @@ mini_mode_note_window_occluded :: (occluded: bool) {
         target_y := screen_frame.origin.y + screen_frame.size.height - frame.size.height - margin;
         NSWindow.setFrameOrigin(ns_window, .{ target_x, target_y });
 
-        NSWindow.setLevel(ns_window, cast(NSWindowLevel) kCGFloatingWindowLevel);
         NSWindow.setStyleMask(ns_window, NSWindowStyleMaskBorderless);
-        NSWindow.orderFront(ns_window, null);
+
+        frame_countdown = 15;
         app_mini_mode_active = true;
     }
 
+    mini_mode_tick :: () {
+        if frame_countdown <= 0 return;
+
+        frame_countdown -= 1;
+        if frame_countdown == 0 {
+            ns_window := cast(*NSWindow) window;
+            NSWindow.setLevel(ns_window, cast(NSWindowLevel) kCGFloatingWindowLevel);
+            NSWindow.orderFront(ns_window, null);
+        }
+    } @on_tick
+
     exit_mini_mode_window :: () {
+        frame_countdown = 0;
         #if !MINI_MODE_ENABLED return;
         if !window return;
         if !app_mini_mode_active return;
@@ -160,6 +170,25 @@ mini_mode_allowed_now :: () -> bool {
 
 
 #if OS == .MACOS {
+    mini_mode_size_for_saved_window :: (window_size: NSSize, pixels_to_points_factor: CGFloat) -> NSSize {
+        max_w := cast(CGFloat) MINI_MODE_MAX_SIZE_PX * pixels_to_points_factor;
+        max_h := cast(CGFloat) MINI_MODE_MAX_SIZE_PX * pixels_to_points_factor;
+
+        source_w := window_size.width;
+        source_h := window_size.height;
+        if source_w <= 0 || source_h <= 0 {
+            return .{ max_w, max_h };
+        }
+
+        scale := min(max_w / source_w, max_h / source_h);
+        scale = min(scale, cast(CGFloat) 1.0);
+
+        return .{
+            source_w * scale,
+            source_h * scale,
+        };
+    }
+
     window_screen :: (window: *NSWindow) -> *NSScreen {
         if !window return null;
         get_screen: (*void, Selector) -> *NSScreen #c_call;
@@ -174,3 +203,5 @@ mini_mode_allowed_now :: () -> bool {
 
     }
 }
+
+frame_countdown := 0;

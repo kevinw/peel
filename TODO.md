@@ -12,3 +12,13 @@
 
 - https://syllogi-graphikon.vercel.app/posts/metal-single-pass-downsampler/
 - https://blog.maximeheckel.com/posts/shades-of-halftone/
+
+## other things to try
+- decompile samus or mario player controllers and make a custom one w/ llm
+- open PBR impl https://github.com/adobe/openpbr-bsdf
+- macos code injection https://mariozechner.at/posts/2024-07-20-macos-code-injection-fun/
+- variable rate shading https://www.youtube.com/watch?v=mvCoqCic3nE
+- analytic fog rendering https://matejlou.blog/2025/02/11/analytic-fog-rendering-with-volumetric-primitives/
+- cone tracing https://x.com/SebAaltonen/status/2030644802925027537?s=20
+- in shader debugging tools https://github.com/electronicarts/ShaderToHuman
+- try new Metal display HUD https://x.com/Dispatch_Graph/status/2028631974068527258?s=20

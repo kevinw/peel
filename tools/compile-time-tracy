@@ -1,0 +1,1 @@
+jai ~/jai/modules/Default_Metaprogram.jai +tracy -modules -no_cwd - ~/src/peel/build.jai - src/apps/raymarch.jai
