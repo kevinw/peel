@@ -53,9 +53,40 @@ raytracer_safe_normalize :: (v: Vector3) -> Vector3 {
     return v / max(sqrt(dot(v, v)), 0.00001);
 }
 
-raytracer_checker_at :: (x: float, z: float) -> Vector3 {
-    cx := cast(int) floor(x);
-    cz := cast(int) floor(z);
+raytracer_hash2 :: (x: float, y: float) -> float {
+    h := x * cast(float) 127.1 + y * cast(float) 311.7;
+    return frac(sin(h) * cast(float) 43758.5453);
+}
+
+raytracer_noise2 :: (p: Vector2) -> float {
+    cell := Vector2.{floor(p.x), floor(p.y)};
+    local := Vector2.{frac(p.x), frac(p.y)};
+    smooth := local * local * (Vector2.{3.0, 3.0} - local * 2.0);
+
+    n00 := raytracer_hash2(cell.x, cell.y);
+    n10 := raytracer_hash2(cell.x + 1.0, cell.y);
+    n01 := raytracer_hash2(cell.x, cell.y + 1.0);
+    n11 := raytracer_hash2(cell.x + 1.0, cell.y + 1.0);
+    nx0 := n00 + (n10 - n00) * smooth.x;
+    nx1 := n01 + (n11 - n01) * smooth.x;
+    return nx0 + (nx1 - nx0) * smooth.y;
+}
+
+raytracer_floor_uv :: (x: float, z: float, time: float) -> Vector2 {
+    base := Vector2.{x, z};
+    flow_t := time * 0.10;
+    noise_p := base * 0.42;
+    warp_x := raytracer_noise2(noise_p + .{flow_t, -flow_t * 0.7});
+    warp_y := raytracer_noise2(noise_p + .{3.7 - flow_t * 0.5, 8.1 + flow_t});
+    swell := raytracer_noise2(base * 0.18 + .{5.4 + flow_t * 0.35, 1.9 - flow_t * 0.25});
+    offset := Vector2.{warp_x - 0.5, warp_y - 0.5} * (0.22 + swell * 0.16);
+    return base + offset;
+}
+
+raytracer_checker_at :: (x: float, z: float, time: float) -> Vector3 {
+    warped := raytracer_floor_uv(x, z, time);
+    cx := cast(int) floor(warped.x);
+    cz := cast(int) floor(warped.y);
     checker := (cx + cz) & 1;
     if checker == 0 return .{0.88, 0.88, 0.90};
     return .{0.18, 0.18, 0.20};
@@ -84,7 +115,7 @@ raytracer_checker_aniso :: (
     rd_y := raytracer_make_camera_ray(center_p + dp_y, params);
     t_x := raytracer_floor_hit(ro, rd_x, *hit_x);
     t_y := raytracer_floor_hit(ro, rd_y, *hit_y);
-    if t_x < 0.0 || t_y < 0.0 return raytracer_checker_at(center_hit.x, center_hit.z);
+    if t_x < 0.0 || t_y < 0.0 return raytracer_checker_at(center_hit.x, center_hit.z, params.time);
 
     dx_x := hit_x.x - center_hit.x;
     dx_z := hit_x.z - center_hit.z;
@@ -126,7 +157,7 @@ raytracer_checker_aniso :: (
         u := (cast(float) i + 0.5) / cast(float) taps - 0.5;
         sample_x := center_hit.x + major_x * u;
         sample_z := center_hit.z + major_z * u;
-        accum += raytracer_checker_at(sample_x, sample_z);
+        accum += raytracer_checker_at(sample_x, sample_z, params.time);
     }
 
     filtered := accum / cast(float) taps;
