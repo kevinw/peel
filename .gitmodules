@@ -4,3 +4,6 @@
 [submodule "modules/Jai-Shader-Transpiler"]
 	path = modules/Jai-Shader-Transpiler
 	url = git@github.com:kevinw/Jai-Shader-Transpiler.git
+[submodule "modules/ImGui/src/imgui"]
+	path = modules/ImGui/src/imgui
+	url = git@github.com:kevinw/imgui.git
