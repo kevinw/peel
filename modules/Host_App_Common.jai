@@ -51,9 +51,43 @@ Quit_Ctx :: struct {
   keep_window_device_and_sdl: bool;
 }
 
+Host_Runtime_Ptrs :: struct {
+  window: *void;
+  gfx_device: *void;
+  #if OS == .MACOS {
+    services: MacOS_Runtime_Services;
+  }
+}
+
+MacOS_Runtime_Dimensions :: struct {
+  x: s32;
+  y: s32;
+  width: s32;
+  height: s32;
+  success: bool;
+}
+
+MacOS_Runtime_Mouse_Position :: struct {
+  x: int;
+  y: int;
+  success: bool;
+}
+
+MacOS_Runtime_Services :: struct {
+  set_window_title:           *void;
+  get_dimensions:             *void;
+  get_mouse_pointer_position: *void;
+  window_is_occluded:         *void;
+  window_has_focus:           *void;
+  take_quit_requested:        *void;
+  set_custom_cursor_handling: *void;
+  ensure_window_frontmost:    *void;
+}
+
 Init_Ctx :: struct {
   keep_window_device_and_sdl: bool;
   max_frames: int;
+  runtime: Host_Runtime_Ptrs;
 }
 
 App_Return_Message :: struct {

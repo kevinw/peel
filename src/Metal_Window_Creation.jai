@@ -104,6 +104,38 @@
         set_layer(view, selector("setLayer:"), layer);
     }
 
+    make_metal_content_view :: (use_peel_input_view := true) -> *NSView {
+        view_class: ObjC.Class;
+        if use_peel_input_view {
+            view_class = ensure_peel_input_view_class();
+        } else {
+            view_class = objc_getClass("NSView");
+        }
+        assert(view_class != null, "NSView class not found for content view creation.");
+
+        view := cast(*NSView) objc_init(objc_alloc(view_class));
+        NSView.setWantsLayer(view, YES);
+        autorelease(view);
+
+        metal_layer_class := objc_getClass("CAMetalLayer");
+        assert(metal_layer_class != null, "CAMetalLayer class not found.");
+        metal_layer := objc_init(objc_alloc(metal_layer_class));
+        assert(metal_layer != null, "Failed to create CAMetalLayer.");
+        autorelease(metal_layer);
+        set_metal_layer_background_black(metal_layer);
+        set_nsview_layer(view, cast(*CALayer) metal_layer);
+
+        return view;
+    }
+
+    #scope_export
+    replace_metal_window_content_view :: (window: *NSWindow, use_peel_input_view := true) {
+        if !window return;
+        view := make_metal_content_view(use_peel_input_view);
+        NSWindow.setContentView(window, view);
+        NSWindow.makeFirstResponder(window, view);
+    }
+
     set_nswindow_background_black :: (window: *NSWindow) {
         if !window return;
 
@@ -219,21 +251,7 @@
         NSWindow.setCollectionBehavior(window, NSWindowCollectionBehaviorFullScreenPrimary | NSWindowCollectionBehaviorManaged);
         set_nswindow_background_black(window);
 
-        input_view_class := ensure_peel_input_view_class();
-        view := cast(*NSView) objc_init(objc_alloc(input_view_class));
-        NSView.setWantsLayer(view, YES);
-        autorelease(view);
-
-        metal_layer_class := objc_getClass("CAMetalLayer");
-        assert(metal_layer_class != null, "CAMetalLayer class not found.");
-        metal_layer := objc_init(objc_alloc(metal_layer_class));
-        assert(metal_layer != null, "Failed to create CAMetalLayer.");
-        autorelease(metal_layer);
-        set_metal_layer_background_black(metal_layer);
-        set_nsview_layer(view, cast(*CALayer) metal_layer);
-
-        NSWindow.setContentView(window, view);
-        NSWindow.makeFirstResponder(window, view);
+        replace_metal_window_content_view(window, true);
         NSWindow.makeKeyAndOrderFront(window, null);
 
         if window_x == -1 && window_y == -1 {

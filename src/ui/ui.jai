@@ -22,6 +22,9 @@ ui_init :: () {
     ImGui.CreateContext();
     io := GetIO();
 
+    style := ImGui.GetStyle();
+    style.WindowRounding = 5.0;
+
     #if OS == .MACOS {
         ui_device = gpu_get_native_device();
         assert(ui_device != null, "ui_init: failed to get sgpu native Metal device.");
@@ -41,6 +44,34 @@ ui_init :: () {
     fonts.main = load_ui_font(GetIO(), fonts.MAIN_SIZE);
     fonts.mono = load_ui_monospace_font(GetIO(), fonts.MAIN_SIZE);
 } @on_dll_init
+
+ui_shutdown :: () {
+    using ImGui;
+
+    ui_cancel_pending_frame(*current_ui_render_frame);
+
+    if GetCurrentContext() == null {
+        ui_frame_sync_semaphore = 0;
+        #if OS == .MACOS {
+            ui_device = null;
+        }
+        fonts = .{};
+        return;
+    }
+
+    #if OS == .MACOS {
+        ImplMetal_Shutdown();
+        ImplOSX_Shutdown();
+        if ui_frame_sync_semaphore != 0 {
+            gpu_destroy_semaphore(ui_frame_sync_semaphore);
+            ui_frame_sync_semaphore = 0;
+        }
+        ui_device = null;
+    }
+
+    DestroyContext();
+    fonts = .{};
+} @on_unload
 
 ui_get_monospace_font :: () -> *ImGui.ImFont {
     return fonts.mono;

@@ -20,3 +20,15 @@ APP_FILES :: string.[
 active_app_filename :: () -> string {
     return APP_FILES[0];
 }
+
+app_stem_for_source_file :: (source_file: string) -> string {
+    return String.path_strip_extension(String.path_filename(source_file));
+}
+
+app_dll_basename_for_source_file :: (source_file: string) -> string {
+    return app_stem_for_source_file(source_file);
+}
+
+#scope_file
+
+String :: #import "String";

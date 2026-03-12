@@ -14,6 +14,9 @@ Note: this host doesn't even open a window, or initialize a graphics API.
 */
 
 #load "app_list.jai";
+#if OS == .MACOS && !SINGLE_BINARY {
+    #load "Peel_MacOS_Runtime.jai";
+}
 
 main :: () {
     start := seconds_since_init();
@@ -101,7 +104,7 @@ main :: () {
         if !library_filename {
             first_app_jai := active_app_filename();
             log("Warning: because no --app was specified, using the first app in APP_LIST: %", first_app_jai);
-            library_filename = tprint("%.%", String.path_filename(first_app_jai), DLL_EXTENSION);
+            library_filename = tprint("%.%", app_dll_basename_for_source_file(first_app_jai), DLL_EXTENSION);
         }
 
         if !library_filename {
@@ -128,6 +131,13 @@ main :: () {
 
     init_ctx: Init_Ctx;
     init_ctx.max_frames = max_frames;
+    #if !SINGLE_BINARY {
+    host_max_frames = max_frames;
+    }
+    #if OS == .MACOS && !SINGLE_BINARY {
+        host_runtime = host_macos_runtime_init(2500, 2000, "");
+        init_ctx.runtime = host_runtime;
+    }
 
     init_res := app.on_host_message({type = .Init, init_ctx = init_ctx});
     if !init_res.success {
@@ -170,7 +180,6 @@ main :: () {
     }
 
     if library_filename {
-        free(library_filename);
         library_filename = "";
     }
 }
@@ -197,6 +206,8 @@ our_logger :: (message: string, data: *void, info: Log_Info) {
 }
 
 #if !SINGLE_BINARY {
+host_runtime: Host_Runtime_Ptrs;
+host_max_frames: int;
 
 #if OS == {
     case .MACOS;   DLL_EXTENSION :: "dylib";
@@ -238,22 +249,28 @@ find_newest_app_dll :: () -> string {
 handle_app_live_reload :: (app: *App, ctx: *App_Update_Ctx, library_filename: *string, verbose := false) {
     if ctx.app_return_flags & .Recompile
         recompile_ourselves();
-    if ctx.app_return_flags & .Load_App
+    if ctx.app_return_flags & .Load_App {
         library_filename.* = sprint("%.%", ctx.app_return_data.load_app, DLL_EXTENSION);
+    }
     if app_library_changed(app) || ctx.app_return_flags & .Reload || ctx.app_return_flags & .Load_App {
         new_app := app_library_load(library_filename.*, verbose);
+        next_init_ctx: Init_Ctx;
+        next_init_ctx.max_frames = host_max_frames;
+        if ctx.app_return_flags & .Load_App && app.is_valid {
+            next_init_ctx.keep_window_device_and_sdl = true;
+            #if OS == .MACOS {
+                next_init_ctx.runtime = host_runtime;
+            } else {
+                next_init_ctx.runtime = gather_runtime_ptrs_for_app(app);
+            }
+        }
         if app.is_valid {
             if !(ctx.app_return_flags & .Load_App) {
                 // When we're just reloading, copy over the globals.
                 app_library_copy(app, *new_app);
                 reload_pointer_check_after_copy(app, *new_app);
             } else {
-                // When loading a different DLL, we need to copy over the Device and Window globals.
-                // This is so that the new app can use the same device and window as the old app.
-                app_library_copy(app, *new_app, "Device", "Window");
-
-                // When loading a different DLL, we tell the other one we're quitting. SDL gets unloaded, etc.
-                app.on_host_message(.{type = .Quit, quit_ctx = .{keep_window_device_and_sdl = true}});
+                app.on_host_message(.{type = .Quit});
             }
             app.on_host_message(.{type = .Unload});
             app_library_unload(app, verbose);
@@ -261,13 +278,32 @@ handle_app_live_reload :: (app: *App, ctx: *App_Update_Ctx, library_filename: *s
         if new_app.is_valid {
             app.* = new_app;
             if ctx.app_return_flags & .Load_App && ctx.app_return_data.load_app {
-                app.on_host_message(.{type = .Init, init_ctx = .{keep_window_device_and_sdl = true}});
+                app.on_host_message(.{type = .Init, init_ctx = next_init_ctx});
                 ctx.app_return_data.load_app = "";
             } else {
                 app.on_host_message(.{type = .Reload});
             }
         }
     }
+}
+
+gather_runtime_ptrs_for_app :: (app: *App) -> Host_Runtime_Ptrs {
+    runtime: Host_Runtime_Ptrs;
+    ok: bool;
+
+    runtime.window, ok = app_library_get_global_pointer(app, "window");
+    if !ok {
+        log_error("Host: failed to find runtime global 'window' when switching apps.");
+    }
+
+    #if OS == .MACOS {
+        runtime.gfx_device, ok = app_library_get_global_pointer(app, "mtl_device");
+        if !ok {
+            log_error("Host: failed to find runtime global 'mtl_device' when switching apps.");
+        }
+    }
+
+    return runtime;
 }
 
 #import "app_loader";

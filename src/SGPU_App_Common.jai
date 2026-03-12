@@ -24,13 +24,16 @@ sgpu_debug_status: string;
 shader_reload_ctx: SHR.Shader_Hot_Reload;
 max_frames: int;
 reload_on_frame: int;
-pending_objc_reinit_after_reload := false;
 perf_capture_cpu_ms_sum: float64;
 perf_capture_gpu_ms_sum: float64;
 perf_capture_count: s64;
 perf_capture_gpu_count: s64;
 perf_capture_reported := false;
 app_ui_enabled := true;
+app_browser_open := false;
+app_browser_requested_app: string;
+startup_load_app_target: string;
+startup_load_app_frame: int;
 
 snapshot: struct {
     enabled := false;
@@ -38,10 +41,6 @@ snapshot: struct {
     after_pending := false;
     after_done := false;
     after_min_frame: s64 = 0;
-}
-
-#if OS == .MACOS {
-    macos_window_focus_hooks_installed := false;
 }
 
 PERF_CAPTURE_START_FRAME :: 5;
@@ -95,17 +94,6 @@ app_update :: (update_ctx: *App_Update_Ctx) {
     auto_release_temp();
 
     #if OS == .MACOS {
-        if pending_objc_reinit_after_reload {
-            init_all_objective_c_selector_structs();
-            install_macos_window_focus_hooks();
-            if NSApp {
-                NSApplication.setDelegate(NSApp, context._macos_create_app_delegate());
-            }
-            if window {
-                NSWindow.setDelegate(window, context._macos_create_window_delegate());
-            }
-            pending_objc_reinit_after_reload = false;
-        }
         pool := objc_new(NSAutoreleasePool);
         defer release(pool);
     }
@@ -139,9 +127,22 @@ app_update :: (update_ctx: *App_Update_Ctx) {
 
     Input.update_window_events();
     handle_focus_transition_after_input_update();
-    for Input.get_window_resizes() {
-        if it.window == window {
-            gpu_swapchain_resize();
+    #if OS == .MACOS {
+        _, _, current_w, current_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
+        if dims_ok {
+            current_size := V2(u32).{xx current_w, xx current_h};
+            if current_size.x != last_window_size.x || current_size.y != last_window_size.y {
+                last_window_size = current_size;
+                if frame_count > 1 {
+                    gpu_swapchain_resize();
+                }
+            }
+        }
+    } else {
+        for Input.get_window_resizes() {
+            if it.window == window {
+                gpu_swapchain_resize();
+            }
         }
     }
 
@@ -152,9 +153,20 @@ app_update :: (update_ctx: *App_Update_Ctx) {
             case .QUIT;
                 app_quit_requested = true;
             case .KEYBOARD;
+                #if !SINGLE_BINARY {
+                    if key_code == .ESCAPE && key_pressed {
+                        app_ui_enabled = true;
+                        app_browser_open = !app_browser_open;
+                        continue;
+                    }
+                }
+
                 if key_code == .F1 && key_pressed {
                     app_ui_enabled = !app_ui_enabled;
-                    if !app_ui_enabled ui_cancel_pending_frame(*current_ui_render_frame);
+                    if !app_ui_enabled {
+                        app_browser_open = false;
+                        ui_cancel_pending_frame(*current_ui_render_frame);
+                    }
                     continue;
                 }
 
@@ -163,6 +175,24 @@ app_update :: (update_ctx: *App_Update_Ctx) {
                 if key_code == #char "R" && key_pressed {
                     update_ctx.app_return_flags |= .Reload;
                 }
+        }
+    }
+
+    #if OS == .MACOS && !SINGLE_BINARY {
+        if peel_take_quit_requested() {
+            app_quit_requested = true;
+        }
+    }
+
+    if app_should_render_ui() {
+        using,only(GetCurrentContext, GetIO) ImGui_Text_Input :: #import "ImGui";
+        if GetCurrentContext() != null {
+            io := GetIO();
+            for Input.events_this_frame {
+                if it.type == .TEXT_INPUT {
+                    io.AddInputCharacter(io, it.utf32);
+                }
+            }
         }
     }
 
@@ -215,6 +245,20 @@ app_update :: (update_ctx: *App_Update_Ctx) {
         }
     }
 
+    if app_browser_requested_app.count != 0 {
+        update_ctx.app_return_flags |= .Load_App;
+        update_ctx.app_return_data.load_app = app_dll_basename_for_source_file(app_browser_requested_app);
+        app_browser_requested_app = "";
+        app_browser_open = false;
+    }
+
+    if startup_load_app_target.count != 0 && frame_count >= startup_load_app_frame {
+        log("PEEL_LOAD_APP_AFTER_STARTUP requesting app '%' at frame %.", startup_load_app_target, frame_count);
+        update_ctx.app_return_flags |= .Load_App;
+        update_ctx.app_return_data.load_app = startup_load_app_target;
+        startup_load_app_target = "";
+    }
+
     if max_frames > 0 && frame_count > max_frames {
         perf_capture_finish_and_check();
         log("Hit max frame count (%), exiting.", max_frames);
@@ -235,8 +279,14 @@ ui_wants_keyboard :: () -> bool {
 
 create_window_and_init_sgpu :: () {
     #if OS == .MACOS {
-        window = create_metal_window(2500, 2000, "", window_delegate_hack_callback=install_macos_window_focus_hooks);
-        ensure_macos_window_frontmost(window);
+        #if SINGLE_BINARY {
+            window = create_metal_window(2500, 2000, "", window_delegate_hack_callback=single_binary_macos_window_delegate_init);
+            ensure_macos_window_frontmost(window);
+        } else {
+            assert(window != null, "host_init: expected host-owned macOS window.");
+            assert(mtl_device != null, "host_init: expected host-owned Metal device.");
+            ensure_macos_window_frontmost(cast(*NSWindow) window);
+        }
     } else {
         window = create_window(2500, 2000, "hello peel");
     }
@@ -248,7 +298,7 @@ create_window_and_init_sgpu :: () {
     #if OS == .MACOS {
         // HACK to make sure the window appears before we begin gpu stuff, which may cause it not to raise.
         // there's probably a better fix for this!
-        ensure_macos_window_frontmost(window);
+        ensure_macos_window_frontmost(cast(*NSWindow) window);
         Input.update_window_events();
         app_window_focus_initialized = false;
         app_window_has_focus = false;
@@ -257,6 +307,12 @@ create_window_and_init_sgpu :: () {
         app_window_is_occluded = false;
         app_window_was_occluded = false;
         mini_mode_note_window_occluded(window_is_occluded(cast(*NSWindow) window));
+        _, _, initial_w, initial_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
+        if dims_ok {
+            last_window_size = .{xx initial_w, xx initial_h};
+        } else {
+            last_window_size = .{};
+        }
     }
 }
 
@@ -274,6 +330,12 @@ host_quit :: (quit_ctx: Quit_Ctx) {
         if sgpu_debug_status.count != 0 {
             free(sgpu_debug_status);
             sgpu_debug_status = "";
+        }
+
+        if !quit_ctx.keep_window_device_and_sdl {
+            #if OS != .MACOS {
+            window = null;
+            }
         }
     }
 }
@@ -305,6 +367,10 @@ host_init :: (init_ctx: Init_Ctx) -> bool {
     perf_capture_gpu_count = 0;
     perf_capture_reported = false;
     app_ui_enabled = true;
+    app_browser_open = false;
+    app_browser_requested_app = "";
+    startup_load_app_target = "";
+    startup_load_app_frame = 0;
     snapshot = {};
     env_reload_snapshot_mode, did_parse_reload_snapshot_mode := Env_Vars.try_parse_env_int("PEEL_SHADER_RELOAD_SNAPSHOT");
     if did_parse_reload_snapshot_mode {
@@ -314,6 +380,31 @@ host_init :: (init_ctx: Init_Ctx) -> bool {
     env_disable_ui, did_parse_disable_ui := Env_Vars.try_parse_env_int("PEEL_DISABLE_UI");
     if did_parse_disable_ui {
         app_ui_enabled = env_disable_ui <= 0;
+    }
+
+    #if !SINGLE_BINARY {
+        using,only(getenv) POSIX_Getenv :: #import "POSIX";
+        startup_load_app_c := POSIX_Getenv.getenv("PEEL_LOAD_APP_AFTER_STARTUP");
+        if startup_load_app_c != null {
+            requested_app := to_string(startup_load_app_c);
+            if requested_app != APP_STEM {
+                startup_load_app_target = copy_string(requested_app);
+                startup_load_app_frame = 5;
+                log("PEEL_LOAD_APP_AFTER_STARTUP armed for '%' at frame %.", startup_load_app_target, startup_load_app_frame);
+            }
+        }
+    }
+
+    if init_ctx.runtime.window != null {
+        window = init_ctx.runtime.window;
+    }
+    #if OS == .MACOS {
+        if init_ctx.runtime.gfx_device != null {
+            mtl_device = cast(*MTLDevice) init_ctx.runtime.gfx_device;
+        }
+        #if !SINGLE_BINARY {
+        macos_runtime_services_init(init_ctx.runtime.services);
+        }
     }
     #if OS == {
         case .WINDOWS;
@@ -336,7 +427,9 @@ host_init :: (init_ctx: Init_Ctx) -> bool {
         }
     }
 
-    wait_for_initial_focus_before_dll_init();
+    if !init_ctx.keep_window_device_and_sdl {
+        wait_for_initial_focus_before_dll_init();
+    }
 
     SHR.shader_hot_reload_init_auto(*shader_reload_ctx,
         app_source_file = APP_NAME,
@@ -360,6 +453,10 @@ app_should_render_ui :: () -> bool {
     return app_ui_enabled;
 }
 
+#if OS == .MACOS && SINGLE_BINARY {
+single_binary_macos_window_delegate_init :: () { }
+}
+
 wait_for_initial_focus_before_dll_init :: () {
     #if OS != .MACOS return;
     if !window return;
@@ -370,7 +467,7 @@ wait_for_initial_focus_before_dll_init :: () {
     attempts := STARTUP_FOCUS_WAIT_MAX_MS / STARTUP_FOCUS_WAIT_STEP_MS;
     for i: 0..attempts-1 {
         Input.update_window_events();
-        if Input.input_application_has_focus {
+        if window_has_focus(cast(*NSWindow) window) {
             app_window_focus_initialized = true;
             app_window_has_focus = true;
             app_window_unfocused_streak = 0;
@@ -436,7 +533,13 @@ Window_Type :: WT.Window_Type;
         init_metal();
         init_objective_c_tools();
     }
-    set_window_title :: NSWindow.setTitle;
+    #if SINGLE_BINARY {
+        set_window_title :: NSWindow.setTitle;
+        window_has_focus :: (window: *NSWindow) -> bool {
+            if !window || !NSApp return false;
+            return NSApplication.keyWindow(NSApp) == window || NSApplication.mainWindow(NSApp) == window;
+        }
+    }
 
     backend_metal_window_did_resize :: (window: *NSWindow, width: s32, height: s32) {
         _ = width;
@@ -459,72 +562,10 @@ Window_Type :: WT.Window_Type;
     #if LIVE_RELOAD_ENABLED {
     #scope_export
     reload_stdlib :: () {
-        pending_objc_reinit_after_reload = true;
-        macos_window_focus_hooks_installed = false;
     } @on_reload
 
     dll_unload :: () {
-        // This is a hack to get live reloading working with Jai's Input module's NSApplication and NSWindow delegates.
-        if window NSWindow.setDelegate(window, null);
-        NSApplication.setDelegate(NSApp, null);
-        macos_window_focus_hooks_installed = false;
-
-        remove_old_objc_class("App_Delegate");
-        remove_old_objc_class("Window_Delegate");
     } @on_unload
-    }
-
-
-    #scope_file
-    Window_Delegate_Focus_Hooks :: struct {
-        using #as nsobject: NSObject;
-
-        windowDidBecomeKey :: (using self: *Window_Delegate_Focus_Hooks, _sel: Selector, notification: *NSNotification) #c_call {
-            _ = self;
-            _ = notification;
-            Input.input_application_has_focus = true;
-        } @selector(windowDidBecomeKey:)
-
-        windowDidResignKey :: (using self: *Window_Delegate_Focus_Hooks, _sel: Selector, notification: *NSNotification) #c_call {
-            _ = self;
-            _ = notification;
-            if NSApp {
-                key_window := NSApplication.keyWindow(NSApp);
-                main_window := NSApplication.mainWindow(NSApp);
-                Input.input_application_has_focus = key_window != null || main_window != null;
-            } else {
-                Input.input_application_has_focus = false;
-            }
-        } @selector(windowDidResignKey:)
-
-        windowDidChangeOcclusionState :: (using self: *Window_Delegate_Focus_Hooks, _sel: Selector, notification: *NSNotification) #c_call {
-            push_context {
-                _ = self;
-                ns_window := cast(*NSWindow) notification.object(notification);
-                if ns_window == window {
-                    is_occluded := window_is_occluded(ns_window);
-                    mini_mode_note_window_occluded(is_occluded);
-                }
-            }
-        } @selector(windowDidChangeOcclusionState:)
-    }
-
-    install_macos_window_focus_hooks :: () {
-        if macos_window_focus_hooks_installed return;
-        wd_class := objc_getClass("Window_Delegate");
-        if !wd_class return;
-        using Window_Delegate_Focus_Hooks;
-        objc_add_instance_method(wd_class, windowDidBecomeKey, "windowDidBecomeKey:");
-        objc_add_instance_method(wd_class, windowDidResignKey, "windowDidResignKey:");
-        objc_add_instance_method(wd_class, windowDidChangeOcclusionState, "windowDidChangeOcclusionState:");
-        macos_window_focus_hooks_installed = true;
-    }
-
-    remove_old_objc_class :: (name: *u8) {
-        old_class := objc_getClass(name);
-        if old_class {
-            objc_disposeClassPair(old_class);
-        }
     }
 }
 
@@ -547,8 +588,15 @@ using,except(Viewport) _ :: #import "sgpu"()(SLANG_COMPILER=false);
 #load "readback_stats.jai";
 #load "mini_mode.jai";
 #if OS != .MACOS #import "Window_Creation";
-#if OS == .MACOS #load "Metal_Window_Creation.jai";
+#if OS == .MACOS {
+    #if SINGLE_BINARY {
+        #load "Metal_Window_Creation.jai";
+    } else {
+        #load "Peel_MacOS_Runtime.jai";
+    }
+}
 String :: #import "String";
 Env_Vars :: #import "Env_Vars";
 SHR :: #import,file "shader_hot_reload.jai";
 #load "GPU_Tools.jai";
+#if !SINGLE_BINARY #load "app_list.jai";

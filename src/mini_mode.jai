@@ -27,15 +27,17 @@ handle_focus_transition_after_input_update :: () {
     #if !MINI_MODE_ENABLED return;
     if !window return;
 
+    mini_mode_note_window_occluded(window_is_occluded(cast(*NSWindow) window));
+
     if !mini_mode_allowed_now() {
         if app_mini_mode_active exit_mini_mode_window();
         app_window_unfocused_streak = 0;
-        app_window_has_focus = Input.input_application_has_focus;
+        app_window_has_focus = window_has_focus(cast(*NSWindow) window);
         app_window_was_occluded = app_window_is_occluded;
         return;
     }
 
-    focus_now := Input.input_application_has_focus;
+    focus_now := window_has_focus(cast(*NSWindow) window);
 
     if !app_window_focus_initialized {
         app_window_focus_initialized = true;

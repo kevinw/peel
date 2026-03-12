@@ -501,6 +501,9 @@ build_host :: (script_opts: Build_Script_Opts, include_app_plugins: bool = false
 
     array_add(*local_build_strings, ..build_strings);
     array_add(*local_build_strings, tprint("HOST_OUTPUT_EXECUTABLE_NAME :: \"%\";", script_opts.output_exe));
+    #if OS == .MACOS {
+        array_add(*local_build_strings, "PEEL_MACOS_RUNTIME_OWNER :: true;");
+    }
     if !script_opts.dll {
         array_add(*local_build_strings, tprint("APP_NAME :: \"%\";", script_opts.output_exe));
     }
@@ -524,6 +527,9 @@ build_app :: (script_opts: Build_Script_Opts, app_filename: string) -> bool {
 
     build_strings: [..]string;
     array_add(*build_strings, sprint("APP_NAME :: \"%\";", app_filename));
+    #if OS == .MACOS {
+        array_add(*build_strings, "PEEL_MACOS_RUNTIME_OWNER :: false;");
+    }
     add_app_plugins(*plugins, script_opts, build_strings=*build_strings);
 
     app_output_executable_name := String.path_strip_extension(String.path_filename(app_filename));

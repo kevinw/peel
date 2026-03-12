@@ -53,15 +53,10 @@ app_library_load :: (library_filename: string, verbose := true) -> (app: App) {
 // This is where we bitwise copy globals from a DLL to another when reloading.
 app_library_copy :: (src: *App, dst: *App, only_names: ..string) -> (ok: bool) {
     for src_global: src.get_globals() {
+        if only_names.count > 0 && !array_find(only_names, src_global.name) {
+            continue;
+        }
         for dst_global: dst.get_globals() {
-            // Filter only to "only_names" given, if we got them.
-            /*
-            TODO
-            if only_names.count > 0 && !array_find(only_names, src_global.name) {
-                continue;
-            }
-            */
-
             // If the names and module names match, copy the data.
             if src_global.name_hash == dst_global.name_hash && src_global.module_name_hash == dst_global.module_name_hash {
                 memcpy(dst_global.data, src_global.data, src_global.size);
@@ -98,6 +93,16 @@ app_library_changed :: (app: *App) -> bool {
     modtime, size := file_modtime_and_size(app.filepath);
     diff := compare_apollo_times(modtime, app.last_modification);
     return diff == 1;
+}
+
+app_library_get_global_pointer :: (app: *App, global_name: string) -> *void, bool {
+    for it: app.get_globals() {
+        if it.name != global_name continue;
+        assert(it.size == size_of(*void), "Global '%' is size %, expected pointer-sized %.", global_name, it.size, size_of(*void));
+        return (cast(**void) it.data).*, true;
+    }
+
+    return null, false;
 }
 
 #scope_file
