@@ -8,3 +8,7 @@
 	path = modules/ImGui/src/imgui
 	url = git@github.com:kevinw/imgui.git
 	branch = master
+	branch = master
+[submodule "modules/tracy"]
+	path = modules/tracy
+	url = git@github.com:kevinw/jai-tracy.git
