@@ -7,3 +7,4 @@
 [submodule "modules/ImGui/src/imgui"]
 	path = modules/ImGui/src/imgui
 	url = git@github.com:kevinw/imgui.git
+	branch = master
