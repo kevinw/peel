@@ -27,6 +27,8 @@ ui_init :: () {
         assert(ui_device != null, "ui_init: failed to get sgpu native Metal device.");
         ns_window := cast(*NSWindow)window;
         view := NSWindow.contentView(ns_window);
+        // Let the custom Peel NSView yield cursor ownership to ImGui while UI is active.
+        peel_set_custom_cursor_handling(true);
         ImGui.ImplOSX_Init(view);
         ImGui.ImplMetal_Init(ui_device);
         ui_frame_sync_semaphore = gpu_create_semaphore(0);

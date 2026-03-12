@@ -3,6 +3,8 @@
     sgpu_macos_application_initialized := false;
     sgpu_macos_activation_pumped := false;
     peel_input_view_class: ObjC.Class;
+    peel_input_view_superclass: ObjC.Class;
+    peel_custom_cursor_handling := false;
 
     peel_input_view_accepts_first_responder :: (self: *NSView, _cmd: Selector) -> BOOL #c_call {
         _ = self; _ = _cmd;
@@ -30,6 +32,29 @@
         }
     }
 
+    peel_input_view_reset_cursor_rects :: (self: *NSView, _cmd: Selector) #c_call {
+        // When ImGui owns the cursor, suppress AppKit's default cursor rect pass so it
+        // doesn't reassert the arrow cursor over transient ImGui resize hotspots.
+        if peel_custom_cursor_handling return;
+
+        super_call := ObjC.objc_super.{receiver = self, class = peel_input_view_superclass};
+        reset_cursor_rects: (*ObjC.objc_super, Selector) -> void #c_call;
+        reset_cursor_rects = xx ObjC.objc_msgSendSuper;
+        reset_cursor_rects(*super_call, _cmd);
+    }
+
+    peel_input_view_cursor_update :: (self: *NSView, _cmd: Selector, event: *NSEvent) #c_call {
+        // AppKit may also refresh the cursor through cursorUpdate:, so gate that path
+        // behind the same ownership flag as resetCursorRects.
+        if peel_custom_cursor_handling return;
+
+        _ = event;
+        super_call := ObjC.objc_super.{receiver = self, class = peel_input_view_superclass};
+        cursor_update: (*ObjC.objc_super, Selector, *NSEvent) -> void #c_call;
+        cursor_update = xx ObjC.objc_msgSendSuper;
+        cursor_update(*super_call, _cmd, event);
+    }
+
     ensure_peel_input_view_class :: () -> ObjC.Class {
         if peel_input_view_class return peel_input_view_class;
 
@@ -41,16 +66,36 @@
 
         super := ObjC.objc_getClass("NSView");
         assert(super != null, "NSView class not found.");
+        peel_input_view_superclass = super;
 
         cls := ObjC.objc_allocateClassPair(super, "PeelInputViewV2", 0);
         assert(cls != null, "Failed to allocate PeelInputView class.");
 
         ObjC.objc_add_instance_method(cls, peel_input_view_accepts_first_responder, "acceptsFirstResponder");
         ObjC.objc_add_instance_method(cls, peel_input_view_key_down, "keyDown:");
+        ObjC.objc_add_instance_method(cls, peel_input_view_reset_cursor_rects, "resetCursorRects");
+        ObjC.objc_add_instance_method(cls, peel_input_view_cursor_update, "cursorUpdate:");
         ObjC.objc_finalize_class(cls);
 
         peel_input_view_class = cls;
         return cls;
+    }
+
+    #scope_export
+    peel_set_custom_cursor_handling :: (enabled: bool) {
+        if peel_custom_cursor_handling == enabled return;
+        peel_custom_cursor_handling = enabled;
+
+        if !window return;
+        ns_window := cast(*NSWindow) window;
+        view := NSWindow.contentView(ns_window);
+        if !view return;
+
+        // Force AppKit to rebuild cursor ownership immediately after toggling so we
+        // don't keep stale cursor rect state around for a frame.
+        invalidate_cursor_rects: (*void, Selector, *NSView) -> void #c_call;
+        invalidate_cursor_rects = xx objc_msgSend;
+        invalidate_cursor_rects(ns_window, selector("invalidateCursorRectsForView:"), view);
     }
 
     set_nsview_layer :: (view: *NSView, layer: *CALayer) {
