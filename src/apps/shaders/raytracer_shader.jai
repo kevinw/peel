@@ -49,6 +49,10 @@ raytracer_make_camera_ray :: (p: Vector2, params: *Raytracer_Params) -> Vector3 
     return rd;
 }
 
+raytracer_safe_normalize :: (v: Vector3) -> Vector3 {
+    return v / max(sqrt(dot(v, v)), 0.00001);
+}
+
 raytracer_checker_at :: (x: float, z: float) -> Vector3 {
     cx := cast(int) floor(x);
     cz := cast(int) floor(z);
@@ -187,6 +191,83 @@ raytracer_hit_obb :: (
     return true;
 }
 
+raytracer_hit_sphere :: (
+    ro: Vector3,
+    rd: Vector3,
+    center: Vector3,
+    radius: float,
+    best_t: *float,
+    hit_pos: *Vector3,
+    hit_nrm: *Vector3,
+) -> bool {
+    oc := ro - center;
+    b := dot(oc, rd);
+    c := dot(oc, oc) - radius * radius;
+    h := b * b - c;
+    if h < 0.0 return false;
+
+    q := sqrt(h);
+    t0 := -b - q;
+    t1 := -b + q;
+    t := t0;
+    if t < 0.001 t = t1;
+    if t < 0.001 || t >= best_t.* return false;
+
+    best_t.* = t;
+    hit_pos.* = ro + rd * t;
+    hit_nrm.* = raytracer_safe_normalize(hit_pos.* - center);
+    return true;
+}
+
+raytracer_sky_color :: (rd: Vector3, sun_dir: Vector3) -> Vector3 {
+    sky_t := clamp(0.5 * (rd.y + 1.0), 0.0, 1.0);
+    horizon := clamp(1.0 - abs(rd.y), 0.0, 1.0);
+    base_a := Vector3.{0.75, 0.86, 1.00};
+    base_b := Vector3.{0.10, 0.12, 0.18};
+    sky := base_a + (base_b - base_a) * sky_t;
+    sun_dot := clamp(dot(rd, sun_dir), 0.0, 1.0);
+    sun_glow := pow(sun_dot, 24.0) * 0.32 + pow(sun_dot, 320.0) * 5.5;
+    warm_horizon := Vector3.{1.00, 0.70, 0.38} * horizon * 0.08;
+    return sky + warm_horizon + Vector3.{1.00, 0.92, 0.78} * sun_glow;
+}
+
+raytracer_shadow_visibility :: (
+    ro: Vector3,
+    sun_dir: Vector3,
+    params: *Raytracer_Params,
+    avatar_center: Vector3,
+    avatar_radius: float,
+) -> float {
+    shadow_t := cast(float) 100000.0;
+    shadow_pos, shadow_nrm: Vector3;
+
+    wobble := sin(params.time * 0.85) * 0.35;
+    spheres := Vector4.[
+        .{-1.90, -0.35, -4.9, 0.65},
+        .{-0.55, -0.15 + wobble * 0.25, -3.9, 0.85},
+        .{0.95, -0.20, -4.5, 0.80},
+        .{2.35, -0.45, -5.6, 0.55},
+    ];
+
+    for s: spheres {
+        center := Vector3.{s.x, s.y, s.z};
+        if raytracer_hit_sphere(ro, sun_dir, center, s.w, *shadow_t, *shadow_pos, *shadow_nrm) return 0.0;
+    }
+
+    cube_center_refl := Vector4.[params.cube0_center_refl, params.cube1_center_refl];
+    cube_half_pad := Vector4.[params.cube0_half_pad, params.cube1_half_pad];
+    cube_rotation := Vector4.[params.cube0_rotation, params.cube1_rotation];
+    for i: 0..1 {
+        he := cube_half_pad[i].xyz;
+        if he.x <= 0.0 || he.y <= 0.0 || he.z <= 0.0 continue;
+        center := cube_center_refl[i].xyz;
+        if raytracer_hit_obb(ro, sun_dir, center, he, cube_rotation[i], *shadow_t, *shadow_pos, *shadow_nrm) return 0.0;
+    }
+
+    if raytracer_hit_sphere(ro, sun_dir, avatar_center, avatar_radius, *shadow_t, *shadow_pos, *shadow_nrm) return 0.0;
+    return 1.0;
+}
+
 raytracer_vertex_main :: (using in: Raytracer_Vertex_In) -> Raytracer_Vertex_Out {
     using out: Raytracer_Vertex_Out;
     if vertex_id == 0 {
@@ -214,6 +295,8 @@ raytracer_fragment_main :: (using in: Raytracer_Vertex_Out, using params: *Raytr
     avatar_center := params.camera_pos + cam_right * 0.28 + cam_up * 0.16 - cam_forward * 0.22;
     avatar_radius := 0.31;
     avatar_color := Vector3.{0.92, 0.96, 1.00};
+    sun_dir := raytracer_safe_normalize(Vector3.{0.42, 0.88, 0.20});
+    sun_color := Vector3.{1.00, 0.94, 0.84};
 
     accum := Vector3.{0.0, 0.0, 0.0};
     throughput := Vector3.{1.0, 1.0, 1.0};
@@ -252,28 +335,14 @@ raytracer_fragment_main :: (using in: Raytracer_Vertex_Out, using params: *Raytr
             .{0.95, 0.88, 0.25},
             .{0.92, 0.92, 0.96},
         ];
-        sphere_refl := float.[0.45, 0.65, 0.55, 0.88];
+        sphere_refl := float.[0.36, 0.52, 0.44, 0.76];
 
         for s, i: spheres {
             center := Vector3.{s.x, s.y, s.z};
-            oc := ro - center;
-            b := dot(oc, rd);
-            c := dot(oc, oc) - s.w * s.w;
-            h := b * b - c;
-            if h < 0.0 continue;
-            q := sqrt(h);
-            t0 := -b - q;
-            t1 := -b + q;
-            t := t0;
-            if t < 0.001 t = t1;
-            if t < 0.001 continue;
-            if t >= best_t continue;
+            hit_sphere := raytracer_hit_sphere(ro, rd, center, s.w, *best_t, *hit_pos, *hit_nrm);
+            if !hit_sphere continue;
 
-            best_t = t;
             hit_found = true;
-            hit_pos = ro + rd * t;
-            hit_nrm = hit_pos - center;
-            hit_nrm /= max(sqrt(dot(hit_nrm, hit_nrm)), 0.00001);
             hit_albedo = sphere_colors[i];
             hit_refl = sphere_refl[i];
         }
@@ -295,46 +364,29 @@ raytracer_fragment_main :: (using in: Raytracer_Vertex_Out, using params: *Raytr
             hit_refl = cube_center_refl[i].w;
         }
 
-        oc_avatar := ro - avatar_center;
-        b_avatar := dot(oc_avatar, rd);
-        c_avatar := dot(oc_avatar, oc_avatar) - avatar_radius * avatar_radius;
-        h_avatar := b_avatar * b_avatar - c_avatar;
-        if h_avatar >= 0.0 {
-            q_avatar := sqrt(h_avatar);
-            t0_avatar := -b_avatar - q_avatar;
-            t1_avatar := -b_avatar + q_avatar;
-            t_avatar := t0_avatar;
-            if t_avatar < 0.001 t_avatar = t1_avatar;
-            if t_avatar > 0.001 && t_avatar < best_t {
-                best_t = t_avatar;
-                hit_found = true;
-                hit_pos = ro + rd * t_avatar;
-                hit_nrm = hit_pos - avatar_center;
-                hit_nrm /= max(sqrt(dot(hit_nrm, hit_nrm)), 0.00001);
-                hit_albedo = avatar_color;
-                hit_refl = 0.96;
-            }
+        if raytracer_hit_sphere(ro, rd, avatar_center, avatar_radius, *best_t, *hit_pos, *hit_nrm) {
+            hit_found = true;
+            hit_albedo = avatar_color;
+            hit_refl = 0.84;
         }
 
         if !hit_found {
-            sky_t := clamp(0.5 * (rd.y + 1.0), 0.0, 1.0);
-            sky_a := Vector3.{0.72, 0.84, 1.00};
-            sky_b := Vector3.{0.08, 0.11, 0.16};
-            sky := sky_a + (sky_b - sky_a) * sky_t;
-            accum += throughput * sky;
+            accum += throughput * raytracer_sky_color(rd, sun_dir);
             break;
         }
 
-        sun_dir := Vector3.{0.55, 0.92, 0.35};
-        sun_dir /= max(sqrt(dot(sun_dir, sun_dir)), 0.00001);
+        shadow_origin := hit_pos + hit_nrm * 0.01;
+        shadow_vis := raytracer_shadow_visibility(shadow_origin, sun_dir, params, avatar_center, avatar_radius);
         ndl := max(dot(hit_nrm, sun_dir), 0.0);
-        diffuse := hit_albedo * (0.10 + 0.90 * ndl);
+        ambient := hit_albedo * 0.12;
+        bounce_fill := hit_albedo * (0.10 + 0.14 * max(hit_nrm.y, 0.0));
+        sun_diffuse := hit_albedo * ndl * shadow_vis * 1.25;
         h := sun_dir - rd;
-        h /= max(sqrt(dot(h, h)), 0.00001);
-        spec := pow(max(dot(hit_nrm, h), 0.0), 70.0);
+        h = raytracer_safe_normalize(h);
+        spec := pow(max(dot(hit_nrm, h), 0.0), 70.0) * shadow_vis;
         spec_base := Vector3.{0.04, 0.04, 0.04};
         spec_tint := spec_base + (hit_albedo - spec_base) * hit_refl;
-        lit := diffuse + spec_tint * spec;
+        lit := ambient + bounce_fill + sun_color * (sun_diffuse + spec_tint * spec * 1.1);
 
         accum += throughput * lit * (1.0 - hit_refl);
         throughput *= hit_albedo + (Vector3.{1.0, 1.0, 1.0} - hit_albedo) * hit_refl;
@@ -344,11 +396,7 @@ raytracer_fragment_main :: (using in: Raytracer_Vertex_Out, using params: *Raytr
         rd /= max(sqrt(dot(rd, rd)), 0.00001);
 
         if bounce == 3 {
-            sky_t := clamp(0.5 * (rd.y + 1.0), 0.0, 1.0);
-            sky_a := Vector3.{0.72, 0.84, 1.00};
-            sky_b := Vector3.{0.08, 0.11, 0.16};
-            sky := sky_a + (sky_b - sky_a) * sky_t;
-            accum += throughput * sky;
+            accum += throughput * raytracer_sky_color(rd, sun_dir);
         }
     }
 

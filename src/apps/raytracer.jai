@@ -8,7 +8,7 @@ raytracer_gizmo_ctx: Gizmo.Gizmo_Context;
 raytracer_gizmo_render_ctx: Gizmo_Render.Gizmo_Render_Context;
 raytracer_manip_ctx: Manip_Context;
 raytracer_objects: [..]Manip_Object;
-raytracer_object_reflectivity: [2]float = .[0.24, 0.32];
+raytracer_object_reflectivity: [2]float = .[0.18, 0.24];
 raytracer_edit_objects := true;
 raytracer_left_was_down := false;
 
