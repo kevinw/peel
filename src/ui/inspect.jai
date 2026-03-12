@@ -21,7 +21,9 @@ inspect_globals :: () {
             TableSetupColumn("", .WidthFixed);
             TableSetupColumn("", .WidthStretch, 3.0);
 
+            auto_release_temp();
             globals: [..]Global_Entry;
+            globals.allocator = temp;
             #if GLOBALS_RELOAD_PLUGIN_INCLUDED get_all_globals(*globals);
 
             for globals {
