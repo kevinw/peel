@@ -1,4 +1,3 @@
-
 FB_Framebuffer_Stats :: struct {
     width: u32;
     height: u32;
@@ -95,13 +94,13 @@ fb_validate_swapchain_readback_non_black :: (view: Gpu_Texture_View, backend_lab
         return false;
     }
 
-    Sample_Point :: struct { x, y: float; }
-    sample_points: [5] Sample_Point;
-    sample_points[0] = .{0.5, 0.5};
-    sample_points[1] = .{0.25, 0.25};
-    sample_points[2] = .{0.75, 0.25};
-    sample_points[3] = .{0.25, 0.75};
-    sample_points[4] = .{0.75, 0.75};
+    sample_points :: Vector2.[
+        {0.5, 0.5},
+        {0.25, 0.25},
+        {0.75, 0.25},
+        {0.25, 0.75},
+        {0.75, 0.75},
+    ];
 
     non_black := 0;
     min_luma: float = 999.0;
