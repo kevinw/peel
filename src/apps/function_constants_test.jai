@@ -45,10 +45,8 @@ frag :: (using input: Function_Constants_Test_VS_Out, using params: *Function_Co
 graphics_pipeline_default: Gpu_Pipeline;
 graphics_pipeline_alternate: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
-params_ring_cpu: *[SGPU_FRAMES_IN_FLIGHT] Function_Constants_Test_Params;
-params_ring_gpu: Gpu_Ptr;
-params_cpu: *Function_Constants_Test_Params;
-params_gpu: Gpu_Ptr;
+params_ring: Gpu_Frame_Ring(Function_Constants_Test_Params);
+params: Gpu_Buffer(Function_Constants_Test_Params);
 
 color: Vector4 = .{1, 0, 0, 1};
 
@@ -84,11 +82,10 @@ on_dll_init :: () {
     };
 
     gpu_arena = gpu_make_arena(64 * 1024, label = "function constants test arena");
-    params_ring_cpu, params_ring_gpu = sgpu_arena_alloc_frame_ring(*gpu_arena, Function_Constants_Test_Params);
-    params_cpu = sgpu_frame_ring_cpu_slot(params_ring_cpu);
-    params_gpu = sgpu_frame_ring_gpu_slot(params_ring_gpu, Function_Constants_Test_Params);
-    params_cpu.* = .{};
-    
+    params_ring = sgpu_make_frame_ring(*gpu_arena, Function_Constants_Test_Params);
+    params = sgpu_frame_ring_slot(*params_ring);
+    params.cpu.* = .{};
+
     default_constants :: #insert #run make_constants_code_string(shader.meta);
     alternate_constants := default_constants;
     alternate_constants.use_alternate_color = true;
@@ -109,10 +106,9 @@ tick :: () {
 
     _, _, win_w, _, dims_ok := get_dimensions(cast(Window_Type) window, true);
     if dims_ok && win_w > 0 {
-        params_cpu = sgpu_frame_ring_cpu_slot(params_ring_cpu);
-        params_gpu = sgpu_frame_ring_gpu_slot(params_ring_gpu, Function_Constants_Test_Params);
-        params_cpu.viewport_width = cast(float) win_w;
-        params_cpu.test_color = .{color.x, color.y, color.z};
+        params = sgpu_frame_ring_slot(*params_ring);
+        params.cpu.viewport_width = cast(float) win_w;
+        params.cpu.test_color = .{color.x, color.y, color.z};
     }
 
     main_queue := gpu_get_queue(.MAIN, 0);
@@ -132,11 +128,11 @@ tick :: () {
     gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
 
     gpu_set_pipeline(cmd_buff, graphics_pipeline_default);
-    draw_result := gpu_draw_instanced(cmd_buff, 0, params_gpu, 3, 1);
+    draw_result := gpu_draw_instanced(cmd_buff, 0, params.gpu, 3, 1);
     assert(draw_result == .SUCCESS, tprint("Default function-constants draw failed: %", draw_result));
 
     gpu_set_pipeline(cmd_buff, graphics_pipeline_alternate);
-    draw_result = gpu_draw_instanced(cmd_buff, 0, params_gpu, 3, 1);
+    draw_result = gpu_draw_instanced(cmd_buff, 0, params.gpu, 3, 1);
     assert(draw_result == .SUCCESS, tprint("Alternate function-constants draw failed: %", draw_result));
 
     submit_and_present_with_ui(cmd_buff);
@@ -184,7 +180,7 @@ build_function_constant_values :: (constants: *$T) -> *MTLFunctionConstantValues
         }
 
         log("MTLFunctionConstantValues set member '%', byte offset %, index %", it.name, offset_in_bytes, it_index);
-        
+
         field_ptr := (cast(*void)constants) + offset_in_bytes;
         MTLFunctionConstantValues.setConstantValue(values, cast(*void) field_ptr, metal_data_type, cast(NSUInteger)it_index);
     }

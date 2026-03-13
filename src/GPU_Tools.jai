@@ -39,9 +39,27 @@ sgpu_frame_ring_index :: (frame_number: s64 = -1) -> s64 {
     return idx;
 }
 
+Gpu_Frame_Ring :: struct($T: Type, $N: s64 = SGPU_FRAMES_IN_FLIGHT) {
+    view: Gpu_View(T);
+}
+
+sgpu_make_frame_ring :: (arena: *Gpu_Arena, $T: Type, min_alignment: s64 = 16) -> Gpu_Frame_Ring(T) {
+    return .{
+        view = gpu_arena_alloc_view(arena, T, SGPU_FRAMES_IN_FLIGHT, min_alignment),
+    };
+}
+
 sgpu_arena_alloc_frame_ring :: (arena: *Gpu_Arena, $T: Type, min_alignment: s64 = 16) -> (*[SGPU_FRAMES_IN_FLIGHT] T, Gpu_Ptr) {
     cpu_ring, gpu_ring := gpu_arena_alloc(arena, [SGPU_FRAMES_IN_FLIGHT] T, min_alignment);
     return cpu_ring, gpu_ring;
+}
+
+sgpu_frame_ring_slot :: (ring: *Gpu_Frame_Ring($T), frame_number: s64 = -1) -> Gpu_Buffer(T) #expand {
+    idx := sgpu_frame_ring_index(frame_number);
+    return .{
+        cpu = ring.view.cpu.data + idx,
+        gpu = ring.view.gpu + (idx * size_of(T)).(Gpu_Ptr),
+    };
 }
 
 sgpu_frame_ring_cpu_slot :: (ring: *[SGPU_FRAMES_IN_FLIGHT] $T, frame_number: s64 = -1) -> *T #expand {
