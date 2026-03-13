@@ -20,11 +20,9 @@ String :: #import "String";
     }
 
     peel_host_input_view_key_down :: (self: *NSView, _cmd: Selector, event: *NSEvent) #c_call {
+        _ = self;
+        _ = _cmd;
         _ = event;
-        super_call := ObjC.objc_super.{receiver = self, class = peel_host_input_view_superclass};
-        key_down: (*ObjC.objc_super, Selector, *NSEvent) -> void #c_call;
-        key_down = xx ObjC.objc_msgSendSuper;
-        key_down(*super_call, _cmd, event);
     }
 
     peel_host_input_view_reset_cursor_rects :: (self: *NSView, _cmd: Selector) #c_call {

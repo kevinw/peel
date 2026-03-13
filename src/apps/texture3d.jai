@@ -1,20 +1,15 @@
+WRITE_SHADER_OUTPUT :: true;
+
+#load "../SGPU_App_Common.jai";
+
+SHR :: #import,file "../shader_hot_reload.jai";
+#import "Math";
+#import "ImGui";
+
+#load "shaders/texture3d_shader.jai";
+
 TEXTURE3D_SIZE :: 128;
 TEXTURE3D_VOXEL_COUNT :: TEXTURE3D_SIZE * TEXTURE3D_SIZE * TEXTURE3D_SIZE;
-
-Texture3D_Params :: struct {
-    texture_index: u32;
-    sampler_index: u32;
-    volume_size: u32;
-    flags: u32;
-
-    time: float;
-    density_scale: float;
-    absorption: float;
-    march_steps: float;
-
-    resolution: Vector2;
-    _pad0: Vector2;
-}
 
 graphics_pipeline: Gpu_Pipeline;
 compute_pipeline: Gpu_Pipeline;
@@ -33,8 +28,10 @@ texture3d_ui_open := true;
 texture3d_animate_volume := true;
 
 on_dll_init :: () {
-    compute_pipeline = gpu_create_compute_pipeline(cast([]u8) TEXTURE3D_COMPUTE_SOURCE);
-    assert(compute_pipeline != 0, "texture3d compute pipeline creation failed.");
+    compute_source := cast([]u8) get_transpiled(.METAL, texture3d_compute_main);
+    assert(compute_source.count > 0, "Transpilation failed for texture3d compute shader.");
+    graphics_source := cast([]u8) get_transpiled(.METAL, texture3d_vertex_main, texture3d_fragment_main);
+    assert(graphics_source.count > 0, "Transpilation failed for texture3d graphics shaders.");
 
     raster_desc: Gpu_Raster_Desc = .{
         cull = .NONE,
@@ -42,8 +39,11 @@ on_dll_init :: () {
             .{format = .B8G8R8A8_UNORM}
         ],
     };
-    graphics_pipeline = gpu_create_graphics_pipeline(cast([]u8) TEXTURE3D_GRAPHICS_SOURCE, raster_desc);
-    assert(graphics_pipeline != 0, "texture3d graphics pipeline creation failed.");
+
+    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, texture3d_vertex_main, texture3d_fragment_main);
+    assert(graphics_ok, "texture3d graphics pipeline creation failed.");
+    compute_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_pipeline, compute_source, .METAL, texture3d_compute_main);
+    assert(compute_ok, "texture3d compute pipeline creation failed.");
 
     texture_result, volume_texture= := gpu_create_texture(.{
         type = ._3D,
@@ -152,191 +152,3 @@ tick :: () {
 
     submit_and_present_with_ui(cmd_buff);
 } @on_tick
-
-#scope_file
-#load "../SGPU_App_Common.jai";
-ImGui :: #import "ImGui";
-#import "Math";
-
-TEXTURE3D_COMPUTE_SOURCE :: #string END
-#include <metal_stdlib>
-using namespace metal;
-
-struct Texture3D_Params {
-    uint texture_index;
-    uint sampler_index;
-    uint volume_size;
-    uint flags;
-    float time;
-    float density_scale;
-    float absorption;
-    float march_steps;
-    float2 resolution;
-    float2 _pad0;
-};
-
-static float hash31(uint3 p) {
-    uint n = p.x * 1597334677u ^ p.y * 3812015801u ^ p.z * 2798796415u;
-    n ^= (n >> 16);
-    n *= 2246822519u;
-    n ^= (n >> 13);
-    n *= 3266489917u;
-    n ^= (n >> 16);
-    return float(n & 0x00ffffffu) * (1.0 / 16777215.0);
-}
-
-static float noise3(float3 p) {
-    float3 i = floor(p);
-    float3 f = fract(p);
-    float3 u = f * f * (3.0 - 2.0 * f);
-    uint3 i0 = uint3(i);
-
-    float n000 = hash31(i0 + uint3(0,0,0));
-    float n100 = hash31(i0 + uint3(1,0,0));
-    float n010 = hash31(i0 + uint3(0,1,0));
-    float n110 = hash31(i0 + uint3(1,1,0));
-    float n001 = hash31(i0 + uint3(0,0,1));
-    float n101 = hash31(i0 + uint3(1,0,1));
-    float n011 = hash31(i0 + uint3(0,1,1));
-    float n111 = hash31(i0 + uint3(1,1,1));
-
-    float nx00 = mix(n000, n100, u.x);
-    float nx10 = mix(n010, n110, u.x);
-    float nx01 = mix(n001, n101, u.x);
-    float nx11 = mix(n011, n111, u.x);
-    float nxy0 = mix(nx00, nx10, u.y);
-    float nxy1 = mix(nx01, nx11, u.y);
-    return mix(nxy0, nxy1, u.z);
-}
-
-[[kernel]]
-void ComputeMain(constant Texture3D_Params* params [[buffer(0)]],
-                 array<texture3d<float, access::write>, 127> rw_textures [[texture(1)]],
-                 uint gid [[thread_position_in_grid]]) {
-    uint s = max(params->volume_size, 1u);
-    uint ss = s * s;
-    uint voxel_count = ss * s;
-    if (gid >= voxel_count) return;
-
-    uint z = gid / ss;
-    uint rem = gid - z * ss;
-    uint y = rem / s;
-    uint x = rem - y * s;
-    uint3 cell = uint3(x, y, z);
-
-    float3 p = (float3(cell) + 0.5) / float(s);
-    float t = params->time;
-
-    float f = 2.8;
-    float a = 0.6;
-    float n = 0.0;
-    for (uint octave = 0; octave < 4; octave++) {
-        float3 wobble = float3(0.0, t * 0.22, 0.0) + float3(13.0, 29.0, 7.0) * float(octave);
-        n += a * noise3(p * f + wobble);
-        f *= 2.0;
-        a *= 0.5;
-    }
-
-    float layers = 0.5 + 0.5 * sin((p.y * 11.0 + p.x * 4.0 + p.z * 3.0) + t * 0.7);
-    float band = smoothstep(0.15, 0.8, p.y);
-    float density = clamp((n * 0.85 + layers * 0.35) * band - 0.28, 0.0, 1.0);
-
-    uint texture_index = min(params->texture_index, 126u);
-    rw_textures[texture_index].write(density, cell);
-}
-END
-
-TEXTURE3D_GRAPHICS_SOURCE :: #string END
-#include <metal_stdlib>
-using namespace metal;
-
-struct Texture3D_Params {
-    uint texture_index;
-    uint sampler_index;
-    uint volume_size;
-    uint flags;
-    float time;
-    float density_scale;
-    float absorption;
-    float march_steps;
-    float2 resolution;
-    float2 _pad0;
-};
-
-struct VS_Out {
-    float4 position [[position]];
-    float2 uv;
-};
-
-vertex VS_Out VertexMain(uint vertex_id [[vertex_id]]) {
-    float2 positions[3] = {
-        float2(-1.0, -1.0),
-        float2( 3.0, -1.0),
-        float2(-1.0,  3.0)
-    };
-
-    VS_Out out;
-    out.position = float4(positions[vertex_id], 0.0, 1.0);
-    out.uv = positions[vertex_id] * 0.5 + 0.5;
-    return out;
-}
-
-static bool ray_box(float3 ro, float3 rd, float3 bmin, float3 bmax, thread float &t0, thread float &t1) {
-    float3 inv_rd = 1.0 / max(abs(rd), float3(1e-6)) * sign(rd);
-    float3 tmin = (bmin - ro) * inv_rd;
-    float3 tmax = (bmax - ro) * inv_rd;
-    float3 tn = min(tmin, tmax);
-    float3 tf = max(tmin, tmax);
-    t0 = max(max(tn.x, tn.y), tn.z);
-    t1 = min(min(tf.x, tf.y), tf.z);
-    return t1 > max(t0, 0.0);
-}
-
-fragment float4 FragmentMain(VS_Out in [[stage_in]],
-                             constant Texture3D_Params* params [[buffer(0)]],
-                             array<texture3d<float>, 127> volume_textures [[texture(1)]],
-                             array<sampler, 16> volume_samplers [[sampler(0)]]) {
-    float2 res = max(params->resolution, float2(1.0));
-    float2 uv = in.uv * 2.0 - 1.0;
-    uv.x *= res.x / res.y;
-
-    float t = params->time;
-    float3 target = float3(0.5, 0.52, 0.5);
-    float3 ro = target + float3(cos(t * 0.2) * 1.8, 0.45 + sin(t * 0.27) * 0.35, sin(t * 0.2) * 1.8);
-    float3 forward = normalize(target - ro);
-    float3 right = normalize(cross(float3(0.0, 1.0, 0.0), forward));
-    float3 up = cross(forward, right);
-    float3 rd = normalize(forward + uv.x * right * 0.9 + uv.y * up * 0.9);
-
-    float bg_mix = clamp(in.uv.y * 0.8 + 0.2, 0.0, 1.0);
-    float3 sky = mix(float3(0.07, 0.09, 0.12), float3(0.16, 0.2, 0.28), bg_mix);
-
-    float near_t, far_t;
-    if (!ray_box(ro, rd, float3(0.0), float3(1.0), near_t, far_t)) {
-        return float4(sky, 1.0);
-    }
-
-    uint texture_index = min(params->texture_index, 126u);
-    uint sampler_index = min(params->sampler_index, 15u);
-    texture3d<float> volume_tex = volume_textures[texture_index];
-    sampler samp = volume_samplers[sampler_index];
-
-    float t_cursor = max(near_t, 0.0);
-    float t_span = max(far_t - t_cursor, 1e-5);
-    uint steps = max(uint(params->march_steps), 8u);
-    float dt = t_span / float(steps);
-
-    float optical_depth = 0.0;
-    for (uint i = 0; i < steps; i++) {
-        float3 p = ro + rd * (t_cursor + dt * (float(i) + 0.5));
-        float d = volume_tex.sample(samp, p).x * params->density_scale;
-        optical_depth += max(d, 0.0) * dt;
-    }
-
-    float transmittance = exp(-optical_depth * params->absorption);
-    float fog = clamp(1.0 - transmittance, 0.0, 1.0);
-    float3 fog_color = mix(float3(0.82, 0.88, 0.95), float3(0.12, 0.18, 0.26), fog);
-    float3 out_color = mix(sky, fog_color, fog);
-    return float4(out_color, 1.0);
-}
-END

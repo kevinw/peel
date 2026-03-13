@@ -157,6 +157,7 @@ app_update :: (update_ctx: *App_Update_Ctx) {
                     if key_code == .ESCAPE && key_pressed {
                         app_ui_enabled = true;
                         app_browser_open = !app_browser_open;
+                        log("Toggling app browser with ESCAPE key: %", app_browser_open);
                         continue;
                     }
                 }
@@ -247,7 +248,7 @@ app_update :: (update_ctx: *App_Update_Ctx) {
 
     if app_browser_requested_app.count != 0 {
         update_ctx.app_return_flags |= .Load_App;
-        update_ctx.app_return_data.load_app = app_dll_basename_for_source_file(app_browser_requested_app);
+        update_ctx.app_return_data.load_app = String.path_strip_extension(String.path_filename(app_browser_requested_app));
         app_browser_requested_app = "";
         app_browser_open = false;
     }
@@ -599,4 +600,7 @@ String :: #import "String";
 Env_Vars :: #import "Env_Vars";
 SHR :: #import,file "shader_hot_reload.jai";
 #load "GPU_Tools.jai";
-#if !SINGLE_BINARY #load "app_list.jai";
+#if !SINGLE_BINARY {
+    #load "app_list.jai";
+    #load "ui/app_browser.jai";
+}

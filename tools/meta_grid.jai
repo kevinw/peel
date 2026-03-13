@@ -11,12 +11,12 @@ Meta_Grid_Opts :: struct {
     cell_w: s64 = 640;     @"?Cell width in pixels"
     cell_h: s64 = 360;     @"?Cell height in pixels"
     padding: s64 = 16;     @"?Padding around and between cells"
-    out_dir: string = ".build/screenshots";                @"?Capture output directory"
+    out_dir: string = APP_CAPTURE_DIR;                     @"?Capture output directory"
     out_grid: string = "screenshots/screenshot_grid.jpg"; @"?Composited grid image path"
 }
 
 run_command_checked :: (label: string, args: []string, working_directory := "", fail_on_error := true) -> bool {
-    result, stdout, stderr, timeout := Process.run_command(..args, working_directory = working_directory, capture_and_return_output = true, timeout_ms = 1000 * 60 * 20);
+    result, stdout, stderr, timeout := Process.run_command(..args, working_directory = working_directory, capture_and_return_output = false, timeout_ms = 1000 * 60 * 20);
     if timeout {
         log_error("% timed out after 20 minutes.\nCommand: %", label, String.join(..args, separator = " "));
         if fail_on_error exit(1);
@@ -216,8 +216,6 @@ compose_grid :: (capture_paths: []string, opts: Meta_Grid_Opts) {
             exit(1);
         }
         defer stbi_image_free(pixels);
-        #if DELETE_INTERMEDIATE_FILES File.file_delete(it);
-
         idx := cast(s64) it_index;
         col := idx % cols;
         row := idx / cols;
@@ -268,7 +266,7 @@ capture_and_save_grid :: () {
     for APP_FILES {
         app_name := app_output_name(it);
         exe_name := app_executable_name(it);
-        capture_dest := sprint("%/%_capture", opts.out_dir, app_name);
+        capture_dest := app_capture_path_for_source_file(it, opts.out_dir);
 
         if !opts.skip_capture {
             delete_old_snapshots_for_app(app_name);

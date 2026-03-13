@@ -75,3 +75,19 @@ When you have an if chain with 3+ elements like...
   } 
 ```
 And re: "switch if", remember that the c++ 'break' is implicit in Jai's switch statements, so you don't need to worry about fallthrough bugs. if you do need fallthrough, you can use #through; like above.
+Jai doesn't support closures, but if you have a small bit of code that you want to reuse in multiple places in a function, you can define a macro. Some backticked statements are supported like `return and `defer.
+my_outer_func :: () -> int {
+    foo := 0;
+    
+    my_inner_macro :: () #expand {
+        foo += 1;
+        log("foo now: %", foo);
+        if foo == 2 {
+          `return 100;
+        }
+    }
+    
+    my_inner_macro();
+    my_inner_macro();
+    my_inner_macro();
+}

@@ -151,20 +151,35 @@ fb_dump_swapchain_thumbnail_jpeg :: (view: Gpu_Texture_View, output_path: string
         return false;
     }
 
+    fit_scale_x := cast(float) thumb_width / cast(float) width;
+    fit_scale_y := cast(float) thumb_height / cast(float) height;
+    fit_scale := min(fit_scale_x, fit_scale_y);
+    fit_w := max(1, cast(u32) floor(cast(float) width * fit_scale));
+    fit_h := max(1, cast(u32) floor(cast(float) height * fit_scale));
+    if fit_w > thumb_width fit_w = thumb_width;
+    if fit_h > thumb_height fit_h = thumb_height;
+    offset_x := cast(s64) (thumb_width - fit_w) / 2;
+    offset_y := cast(s64) (thumb_height - fit_h) / 2;
+
     body_len := cast(s64) thumb_width * cast(s64) thumb_height * 3;
     body := NewArray(body_len, u8);
     defer array_free(body);
 
-    dst := body.data;
-    for y: 0..thumb_height-1 {
-        src_y := clamp(cast(s64) floor((cast(float) y + 0.5) * cast(float) height / cast(float) thumb_height), 0, cast(s64) height - 1);
-        for x: 0..thumb_width-1 {
-            src_x := clamp(cast(s64) floor((cast(float) x + 0.5) * cast(float) width / cast(float) thumb_width), 0, cast(s64) width - 1);
+    for i: 0..body_len-1 {
+        body[i] = ifx (i % 3) == 0 then cast(u8) 14 else ifx (i % 3) == 1 then cast(u8) 16 else cast(u8) 22;
+    }
+
+    for y: 0..fit_h-1 {
+        src_y := clamp(cast(s64) floor((cast(float) y + 0.5) * cast(float) height / cast(float) fit_h), 0, cast(s64) height - 1);
+        dst_y := offset_y + y;
+        for x: 0..fit_w-1 {
+            src_x := clamp(cast(s64) floor((cast(float) x + 0.5) * cast(float) width / cast(float) fit_w), 0, cast(s64) width - 1);
+            dst_x := offset_x + x;
             src := pixels.data + src_y * bytes_per_row + src_x * 4;
-            dst[0] = src[2];
-            dst[1] = src[1];
-            dst[2] = src[0];
-            dst += 3;
+            dst_i := (dst_y * cast(s64) thumb_width + dst_x) * 3;
+            body[dst_i + 0] = src[2];
+            body[dst_i + 1] = src[1];
+            body[dst_i + 2] = src[0];
         }
     }
 

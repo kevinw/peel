@@ -1,4 +1,5 @@
 PATH_TO_APP_FILES :: "src/apps";
+APP_CAPTURE_DIR :: ".build/screenshots";
 
 APP_FILES :: string.[
     "textured_triangle.jai",
@@ -27,6 +28,14 @@ app_stem_for_source_file :: (source_file: string) -> string {
 
 app_dll_basename_for_source_file :: (source_file: string) -> string {
     return app_stem_for_source_file(source_file);
+}
+
+app_capture_filename_for_source_file :: (source_file: string) -> string {
+    return sprint("%_capture.jpeg", app_stem_for_source_file(source_file));
+}
+
+app_capture_path_for_source_file :: (source_file: string, base_dir := APP_CAPTURE_DIR) -> string {
+    return String.path_join(base_dir, app_capture_filename_for_source_file(source_file));
 }
 
 #scope_file

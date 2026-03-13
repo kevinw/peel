@@ -78,7 +78,11 @@ on_compiler_message :: (_p: *Metaprogram_Plugin, compiler_message: *Message) {
                     case .DECLARATION;
                         handle_declaration(p, cast(*Code_Declaration) code_node.expression);
                     case .PROCEDURE_HEADER;
-                        handle_procedure_header(p, cast(*Code_Procedure_Header) code_node.expression);
+                        proc_header := cast(*Code_Procedure_Header) code_node.expression;
+                        if proc_header.procedure_flags & (.ELSEWHERE | .COMPILE_TIME_ONLY | .POLYMORPHIC | .MACRO) != 0 {
+                            continue;
+                        }
+                        handle_procedure_header(p, proc_header);
                 }
             }
 
@@ -120,10 +124,6 @@ handle_declaration :: (using p: *Globals_Reload_Metaprogram_Plugin, decl: *Code_
 }
 
 handle_procedure_header :: (using p: *Globals_Reload_Metaprogram_Plugin, proc_header: *Code_Procedure_Header) {
-    if proc_header.procedure_flags & (.ELSEWHERE | .COMPILE_TIME_ONLY | .POLYMORPHIC | .MACRO) != 0 {
-        return;
-    }
-
     track_proc := false;
     proc_flags: Proc_Flags = .None;
     keymap_name: string = "";

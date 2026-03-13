@@ -33,17 +33,10 @@ const repoRoot = path.resolve(__dirname, "..");
 const appsDir = path.join(repoRoot, "src", "apps");
 const tasksPath = path.join(repoRoot, ".zed", "tasks.json");
 
-function appUsesDll(appName) {
-  if (appName.endsWith("_test")) return false;
-  if (appName === "textured_triangle") return false;
-  return true;
-}
-
 function makeAppTask(appName) {
-  const dllArg = appUsesDll(appName) ? " -dll" : "";
   return {
     label: appName,
-    command: `jai ~/src/peel/build.jai - src/apps/${appName}.jai -run${dllArg}`,
+    command: `jai ~/src/peel/build.jai - src/apps/${appName}.jai -run -dll`,
   };
 }
 

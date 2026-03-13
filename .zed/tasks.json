@@ -25,11 +25,11 @@
   },
   {
     "label": "function_constants_test",
-    "command": "jai ~/src/peel/build.jai - src/apps/function_constants_test.jai -run"
+    "command": "jai ~/src/peel/build.jai - src/apps/function_constants_test.jai -run -dll"
   },
   {
     "label": "gizmos_test",
-    "command": "jai ~/src/peel/build.jai - src/apps/gizmos_test.jai -run"
+    "command": "jai ~/src/peel/build.jai - src/apps/gizmos_test.jai -run -dll"
   },
   {
     "label": "particles",
@@ -41,7 +41,7 @@
   },
   {
     "label": "physics_test",
-    "command": "jai ~/src/peel/build.jai - src/apps/physics_test.jai -run"
+    "command": "jai ~/src/peel/build.jai - src/apps/physics_test.jai -run -dll"
   },
   {
     "label": "raymarch",
@@ -69,7 +69,7 @@
   },
   {
     "label": "terrain_test",
-    "command": "jai ~/src/peel/build.jai - src/apps/terrain_test.jai -run"
+    "command": "jai ~/src/peel/build.jai - src/apps/terrain_test.jai -run -dll"
   },
   {
     "label": "tetris",
@@ -89,7 +89,7 @@
   },
   {
     "label": "textured_triangle",
-    "command": "jai ~/src/peel/build.jai - src/apps/textured_triangle.jai -run"
+    "command": "jai ~/src/peel/build.jai - src/apps/textured_triangle.jai -run -dll"
   },
   {
     "label": "ui_gallery",

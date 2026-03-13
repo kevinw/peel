@@ -116,7 +116,7 @@ PLATFORM_DIR :: #run get_platform_dir(OS); // win, macos, linux
         }
         defer script_opts.output_exe = "";
 
-        if !build_host(script_opts, include_app_plugins=!script_opts.dll, build_strings=host_build_strings) {
+        if !build_host(script_opts, include_app_plugins=!script_opts.dll, app_filename=app_to_build, build_strings=host_build_strings) {
             exit_with_error();
         }
 
@@ -451,6 +451,7 @@ add_common_plugins :: (plugins: *[..] *Metaprogram_Plugin, script_opts: Build_Sc
 
 add_app_plugins :: (plugins: *[..] *Metaprogram_Plugin,
     script_opts: Build_Script_Opts,
+    app_filename: string = "",
     shader_entry_ids_filter: string = "",
     shader_only := false, // true if we're doing a shader-only build
     build_strings: *[..]string,
@@ -484,18 +485,21 @@ add_app_plugins :: (plugins: *[..] *Metaprogram_Plugin,
         plugin := JSL.get_plugin();
         // plugin.output_shaders = true;
         // plugin.timings_enabled = true;
+        if app_filename.count != 0 {
+            plugin.manifest_app_name = String.path_strip_extension(String.path_filename(app_filename));
+        }
         plugin.shader_entry_ids_filter = shader_entry_ids_filter;
         array_add(plugins, plugin);
     }
 }
 
-build_host :: (script_opts: Build_Script_Opts, include_app_plugins: bool = false, build_strings: []string = .[]) -> bool {
+build_host :: (script_opts: Build_Script_Opts, include_app_plugins: bool = false, app_filename: string = "", build_strings: []string = .[]) -> bool {
     local_build_strings: [..]string;
 
     plugins: [..] *Metaprogram_Plugin;
     add_common_plugins(*plugins, script_opts);
     if include_app_plugins {
-        add_app_plugins(*plugins, script_opts, build_strings=*local_build_strings);
+        add_app_plugins(*plugins, script_opts, app_filename=app_filename, build_strings=*local_build_strings);
     }
     add_host_plugins(*plugins, script_opts);
 
@@ -530,7 +534,7 @@ build_app :: (script_opts: Build_Script_Opts, app_filename: string) -> bool {
     #if OS == .MACOS {
         array_add(*build_strings, "PEEL_MACOS_RUNTIME_OWNER :: false;");
     }
-    add_app_plugins(*plugins, script_opts, build_strings=*build_strings);
+    add_app_plugins(*plugins, script_opts, app_filename=app_filename, build_strings=*build_strings);
 
     app_output_executable_name := String.path_strip_extension(String.path_filename(app_filename));
 
@@ -548,7 +552,7 @@ build_shader_only :: (script_opts: Build_Script_Opts, app_filename: string) -> b
     add_common_plugins(*plugins, script_opts);
     build_strings: [..]string;
     array_add(*build_strings, sprint("APP_NAME :: \"%\";", app_filename));
-    add_app_plugins(*plugins, script_opts, shader_entry_ids_filter=script_opts.shader_entry_ids, shader_only=true, build_strings=*build_strings);
+    add_app_plugins(*plugins, script_opts, app_filename=app_filename, shader_entry_ids_filter=script_opts.shader_entry_ids, shader_only=true, build_strings=*build_strings);
 
     app_name := String.path_strip_extension(String.path_filename(app_filename));
     result := build_artifact(workspace_name = tprint("Build shaders %", app_name),
