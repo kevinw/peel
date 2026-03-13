@@ -2,6 +2,8 @@ READBACK_ENABLED :: !RELEASE;
 SGPU_FRAMES_IN_FLIGHT :: 3;
 LIVE_RELOAD_ENABLED :: !RELEASE;
 
+ImGui :: #import "ImGui";
+
 // APP_NAME is like src/apps/boids.jai
 // APP_STEM is like boids
 APP_STEM :: #run String.path_strip_extension(String.path_filename(APP_NAME));
@@ -32,6 +34,9 @@ perf_capture_reported := false;
 app_ui_enabled := true;
 app_browser_open := false;
 app_browser_requested_app: string;
+host_build_target: string;
+host_build_error: string;
+host_build_state: App_Update_Ctx.Host_Build_State;
 startup_load_app_target: string;
 startup_load_app_frame: int;
 
@@ -97,6 +102,8 @@ app_update :: (update_ctx: *App_Update_Ctx) {
         pool := objc_new(NSAutoreleasePool);
         defer release(pool);
     }
+
+    app_assign_host_build_status(update_ctx.host_build_state, update_ctx.host_build_target, update_ctx.host_build_error);
 
     time = seconds_since_init();
     dt = cast(float)(time - last_time);
@@ -247,10 +254,9 @@ app_update :: (update_ctx: *App_Update_Ctx) {
     }
 
     if app_browser_requested_app.count != 0 {
-        update_ctx.app_return_flags |= .Load_App;
-        update_ctx.app_return_data.load_app = String.path_strip_extension(String.path_filename(app_browser_requested_app));
+        update_ctx.app_return_flags |= .Build_And_Load_App;
+        update_ctx.app_return_data.build_app = app_browser_requested_app;
         app_browser_requested_app = "";
-        app_browser_open = false;
     }
 
     if startup_load_app_target.count != 0 && frame_count >= startup_load_app_frame {
@@ -370,6 +376,9 @@ host_init :: (init_ctx: Init_Ctx) -> bool {
     app_ui_enabled = true;
     app_browser_open = false;
     app_browser_requested_app = "";
+    host_build_target = "";
+    host_build_error = "";
+    host_build_state = .NONE;
     startup_load_app_target = "";
     startup_load_app_frame = 0;
     snapshot = {};
@@ -452,6 +461,24 @@ shader_reload_on_ui :: () { SHR.shader_hot_reload_imgui(*shader_reload_ctx, ui_g
 
 app_should_render_ui :: () -> bool {
     return app_ui_enabled;
+}
+
+app_assign_host_build_status :: (state: App_Update_Ctx.Host_Build_State, target: string, error: string) {
+    host_build_state = state;
+    assign_string(*host_build_target, target);
+    assign_string(*host_build_error, error);
+    if state != .FAILED && host_build_error.count != 0 {
+        free(host_build_error);
+        host_build_error = "";
+    }
+}
+
+assign_string :: (dst: *string, src: string) {
+    if dst.*.count != 0 {
+        free(dst.*);
+        dst.* = "";
+    }
+    if src.count != 0 dst.* = copy_string(src);
 }
 
 #if OS == .MACOS && SINGLE_BINARY {

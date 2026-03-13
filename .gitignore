@@ -71,3 +71,4 @@ dist/signal_field.dylib
 dist/brick_redux
 dist/brick_redux.dylib
 dist/function_constants_test
+dist/function_constants_test.dylib

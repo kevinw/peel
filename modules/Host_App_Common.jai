@@ -21,6 +21,13 @@ Host_Message :: struct {
 
 // A way for the app to signal back to the host.
 App_Update_Ctx :: struct {
+  Host_Build_State :: enum u8 {
+    NONE;
+    QUEUED;
+    RUNNING;
+    FAILED;
+  }
+
   //
   // Flags from the host to the app.
   //
@@ -30,10 +37,14 @@ App_Update_Ctx :: struct {
   host_data: union {
     screenshot_filename: string;
   }
+  host_build_state: Host_Build_State;
+  host_build_target: string;
+  host_build_error: string;
 
   app_return_flags: App_Return_Flags;
   app_return_data: union {
     load_app: string;
+    build_app: string;
   }
 }
 
@@ -45,6 +56,7 @@ App_Return_Flags :: enum u8 {
     Recompile :: 1 << 1; // app has requested that the host recompile the app dll from source.
     Reload :: 1 << 2; // app has requested that the host load a new app.
     Load_App :: 1 << 3; // app has requested that the host load a new app. app sets load_app field.
+    Build_And_Load_App :: 1 << 4; // app has requested that the host build an app DLL, then load it. app sets build_app to the source file.
 }
 
 Quit_Ctx :: struct {

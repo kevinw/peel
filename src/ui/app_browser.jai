@@ -17,27 +17,47 @@ App_Browser_Preview :: struct {
 
 app_browser_previews: [..] App_Browser_Preview;
 
+BeginOrReturn :: (name: string, open: *bool, window_flags: ImGui.WindowFlags) #expand {
+    using ImGui;
+
+    if !Begin(name, open, window_flags) {
+        End();
+        `return;
+    }
+    `defer End();
+}
+
 app_browser_on_ui :: () {
     if !app_ui_enabled return;
     if !app_browser_open return;
 
-    using,except(Viewport) ImGui :: #import "ImGui";
+    using ImGui;
+
 
     SetNextWindowSize(.{980, 620}, .FirstUseEver);
-    window_flags: WindowFlags = .NoFocusOnAppearing;
-    if !Begin("App Browser", *app_browser_open, window_flags) {
-        End();
-        return;
+    BeginOrReturn("App Browser", *app_browser_open, .NoFocusOnAppearing);
+
+    build_in_flight := host_build_state == .QUEUED || host_build_state == .RUNNING;
+    if build_in_flight {
+        PushPopFont(fonts.monospace);
+        if host_build_target.count != 0 {
+            Text("% Building %...", get_spinner(), app_stem_for_source_file(host_build_target));
+        } else {
+            Text("% Building app...", get_spinner());
+        }
+    } else if host_build_state == .FAILED {
+        TextColored(.{1.0, 0.45, 0.45, 1.0}, "Build failed");
+        if host_build_target.count != 0 {
+            SameLine();
+            TextDisabled("%", app_stem_for_source_file(host_build_target));
+        }
+        if host_build_error.count != 0 {
+            TextWrapped("%", host_build_error);
+        }
     }
-    defer End();
-
-
-    Text("Current app: %", APP_STEM);
-    TextDisabled("Previews come from '%'.", APP_CAPTURE_DIR);
-    Separator();
 
     avail_w := GetContentRegionAvail().x;
-    card_min_w := 220.0;
+    card_min_w := 240.0;
     columns: s32 = cast(s32) floor((avail_w + 14.0) / (card_min_w + 14.0));
     if columns < 1 columns = 1;
 
@@ -56,36 +76,59 @@ app_browser_on_ui :: () {
             min := GetCursorScreenPos();
             card_w := GetContentRegionAvail().x;
             if card_w <= 0.0 card_w = card_min_w;
-            preview_h :: 118.0;
+            preview_h := card_min_w * 0.75;
             preview_size := ImVec2.{card_w, preview_h};
-            frame_color := ifx is_current then GetColorU32(.ButtonActive) else GetColorU32(.FrameBg);
-            if is_current BeginDisabled();
-            preview_clicked := Button(temp_c_string(tprint("%##preview_%", app_stem, app_stem)), preview_size);
-            if is_current EndDisabled();
+            corner_radius :: 0.0;
+            frame_color := GetColorU32(ImVec4.{0.045, 0.045, 0.055, 1.0});
+            if is_current || build_in_flight BeginDisabled();
+            preview_clicked := InvisibleButton(temp_c_string(tprint("%##preview_%", app_stem, app_stem)), preview_size);
+            if is_current || build_in_flight EndDisabled();
+            hovered := IsItemHovered();
             max := ImVec2.{min.x + preview_size.x, min.y + preview_size.y};
-            ImGui.ImDrawList.AddRectFilled(draw_list, min, max, frame_color, 8.0);
+            if is_current {
+                frame_color = GetColorU32(ImVec4.{0.075, 0.08, 0.095, 1.0});
+            } else if hovered && !build_in_flight {
+                frame_color = GetColorU32(ImVec4.{0.085, 0.09, 0.105, 1.0});
+            }
+            ImDrawList.AddRectFilled(draw_list, min, max, frame_color, corner_radius);
+            if hovered && !is_current && !build_in_flight {
+                ImDrawList.AddRect(draw_list, min, max, GetColorU32(ImVec4.{1.0, 1.0, 1.0, 0.08}), corner_radius, thickness = 1.0);
+            }
 
             if preview != null && preview.view != 0 {
                 native_texture := gpu_get_native_texture(preview.view);
                 if native_texture != null && preview.width > 0 && preview.height > 0 {
                     tex_ref := ImTextureRef.{_TexID = cast(ImTextureID) native_texture};
                     image_min, image_max := app_browser_fit_rect(min, preview_size, cast(float) preview.width, cast(float) preview.height);
-                    ImGui.ImDrawList.AddImage(draw_list, tex_ref, image_min, image_max);
+                    ImDrawList.AddImage(draw_list, tex_ref, image_min, image_max);
                 } else {
-                    ImGui.ImDrawList.AddText(draw_list, ImVec2.{min.x + 12.0, min.y + 12.0}, GetColorU32(.TextDisabled), "No screenshot");
+                    ImDrawList.AddText(draw_list, ImVec2.{min.x + 12.0, min.y + 12.0}, GetColorU32(.TextDisabled), "No screenshot");
                 }
             } else {
-                ImGui.ImDrawList.AddText(draw_list, ImVec2.{min.x + 12.0, min.y + 12.0}, GetColorU32(.TextDisabled), "No screenshot");
+                ImDrawList.AddText(draw_list, ImVec2.{min.x + 12.0, min.y + 12.0}, GetColorU32(.TextDisabled), "No screenshot");
             }
-            if preview_clicked && !is_current {
+            if preview_clicked && !is_current && !build_in_flight {
                 app_browser_requested_app = app_source;
             }
 
-            spacing_y := GetStyle().ItemSpacing.y;
-            SetCursorPosY(GetCursorPosY() + spacing_y);
-            Text("%", app_stem);
+            spinner_on_card := host_build_target.count != 0 && app_stem_for_source_file(host_build_target) == app_stem && build_in_flight;
+            label := ifx spinner_on_card then tprint("%  %", get_spinner(), app_stem) else app_stem;
+            PushFont(fonts.monospace, fonts.MAIN_SIZE + 3.0);
+            defer PopFont();
+            label_size := CalcTextSize(temp_c_string(label));
+            label_pos := ImVec2.{
+                min.x + floor((preview_size.x - label_size.x) * 0.5),
+                min.y + floor((preview_size.y - label_size.y) * 0.5),
+            };
+            shadow_pos := ImVec2.{label_pos.x + 1.0, label_pos.y + 1.0};
+            ImDrawList.AddText(draw_list, shadow_pos, GetColorU32(ImVec4.{0.0, 0.0, 0.0, 0.85}), label);
+            ImDrawList.AddText(draw_list, label_pos, GetColorU32(ImVec4.{1.0, 1.0, 1.0, 0.96}), label);
+
             if is_current {
-                TextDisabled("Loaded");
+                loaded_text :: "Loaded";
+                loaded_size := CalcTextSize(loaded_text);
+                loaded_pos := ImVec2.{max.x - loaded_size.x - 10.0, max.y - loaded_size.y - 8.0};
+                ImDrawList.AddText(draw_list, loaded_pos, GetColorU32(ImVec4.{1.0, 1.0, 1.0, 0.55}), loaded_text);
             }
             EndGroup();
         }
@@ -217,4 +260,10 @@ app_browser_shutdown :: () {
 
 File_Utilities :: #import "File_Utilities";
 #import "stb_image";
+}
+
+spinner_frames :: string.["|", "/", "-", "\\"];
+
+get_spinner :: () -> string {
+    return spinner_frames[(frame_count / 8) % spinner_frames.count];
 }

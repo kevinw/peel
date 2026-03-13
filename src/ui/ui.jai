@@ -2,15 +2,17 @@
 
 current_ui_render_frame: UI_Render_Frame_Info;
 ui_frame_sync_semaphore: Gpu_Semaphore;
+
 fonts: struct {
-    main: *ImFont;
-    mono: *ImFont;
+    main: *ImGui.ImFont;
+    mono: *ImGui.ImFont;
+    #overlay(mono) monospace: *ImGui.ImFont;
 
     MAIN_SIZE :: 15.0;
     LARGE_SIZE :: 35.0;
 }
-ui_opts: struct {
 
+ui_opts: struct {
     // State for a window which shows all global variables and allows searching/filtering them by name or module.
     globals: struct {
         show: bool = true;
@@ -19,6 +21,7 @@ ui_opts: struct {
 };
 
 ui_init :: () {
+    using ImGui;
     ImGui.CreateContext();
     io := GetIO();
 
@@ -84,7 +87,7 @@ UI_Render_Frame_Info :: struct {
 
 ui_cancel_pending_frame :: (using ui_render_frame_info: *UI_Render_Frame_Info) {
     if ready {
-        EndFrame();
+        ImGui.EndFrame();
         ready = false;
     }
 }
@@ -177,6 +180,8 @@ Env_Vars :: #import "Env_Vars";
 }
 
 load_ui_font :: (io: *ImGui.IO, font_size_px: float) -> *ImGui.ImFont {
+    using ImGui;
+
     #if OS == .MACOS {
         candidates :: string.[
             "/System/Library/Fonts/SFNS.ttf",

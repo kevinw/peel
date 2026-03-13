@@ -32,7 +32,7 @@ PushGroup :: () #expand {
     `defer ImGui.EndGroup();
 }
 
-PushPopFont :: (font: *ImGui.ImFont, font_size_base_unscaled: float) #expand {
+PushPopFont :: (font: *ImGui.ImFont, font_size_base_unscaled: float = 0 /* zero means keep the base */) #expand {
     ImGui.PushFont(font, font_size_base_unscaled);
     `defer ImGui.PopFont();
 }

@@ -58,6 +58,7 @@ main :: () {
     USAGE_MESSAGE :: #run sprint("usage: % --app app_name", HOST_OUTPUT_EXECUTABLE_NAME);
 
     library_filename := "";
+    defer if library_filename.count > 0 free(library_filename);
     max_frames: int = 0;
 
     // parse args
@@ -104,7 +105,7 @@ main :: () {
         if !library_filename {
             first_app_jai := active_app_filename();
             log("Warning: because no --app was specified, using the first app in APP_LIST: %", first_app_jai);
-            library_filename = tprint("%.%", app_dll_basename_for_source_file(first_app_jai), DLL_EXTENSION);
+            library_filename = sprint("%.%", app_dll_basename_for_source_file(first_app_jai), DLL_EXTENSION);
         }
 
         if !library_filename {
@@ -147,6 +148,9 @@ main :: () {
 
     defer {
         #if !RELEASE || MEMORY_DEBUGGER { // can skip teardown in release builds...the OS will do this for us :)
+            #if !SINGLE_BINARY {
+                host_app_build_shutdown();
+            }
             app.on_host_message(.{type = .Quit});
             app.on_host_message(.{type = .Unload});
             reset_temporary_storage();
@@ -161,6 +165,9 @@ main :: () {
     //
     while true {
         ctx: App_Update_Ctx;
+        #if !SINGLE_BINARY {
+            host_app_build_apply_status_to_update_ctx(*ctx);
+        }
         app.on_host_message(.{type = .Update, update_ctx = *ctx});
 
         if ctx.app_return_flags & .Quit {
@@ -180,6 +187,7 @@ main :: () {
     }
 
     if library_filename {
+        free(library_filename);
         library_filename = "";
     }
 }
@@ -209,18 +217,10 @@ our_logger :: (message: string, data: *void, info: Log_Info) {
 host_runtime: Host_Runtime_Ptrs;
 host_max_frames: int;
 
-#if OS == {
-    case .MACOS;   DLL_EXTENSION :: "dylib";
-    case .WINDOWS; DLL_EXTENSION :: "dll";
-    case .LINUX;   DLL_EXTENSION :: "so";
-    case; #assert false "please implement this for this platform";
-}
 
 recompile_ourselves :: () {
     #if OS == .MACOS JAI_EXECUTABLE :: "jai-macos";
     else             JAI_EXECUTABLE :: "jai";
-
-    Process :: #import "Process";
     res := Process.run_command(JAI_EXECUTABLE, "build.jai", "-", "-onlyapp", working_directory="..");
     if res.exit_code == 0
         log("Recompiled ourselves successfully.\n", flags=.VERBOSE_ONLY);
@@ -247,11 +247,23 @@ find_newest_app_dll :: () -> string {
 }
 
 handle_app_live_reload :: (app: *App, ctx: *App_Update_Ctx, library_filename: *string, verbose := false) {
+    host_app_build_handle_completion(ctx, library_filename);
+
     if ctx.app_return_flags & .Recompile
         recompile_ourselves();
+    if ctx.app_return_flags & .Build_And_Load_App {
+        host_app_build_queue(ctx.app_return_data.build_app);
+        ctx.app_return_data.build_app = "";
+    }
     if ctx.app_return_flags & .Load_App {
+        if library_filename.*.count != 0 free(library_filename.*);
         library_filename.* = sprint("%.%", ctx.app_return_data.load_app, DLL_EXTENSION);
     }
+
+    // Free ctx.app_return_data.load_app later.
+    load_app_str :=  ifx ctx.app_return_flags & .Load_App ctx.app_return_data.load_app;
+    defer if load_app_str free(load_app_str);
+
     if app_library_changed(app) || ctx.app_return_flags & .Reload || ctx.app_return_flags & .Load_App {
         new_app := app_library_load(library_filename.*, verbose);
         next_init_ctx: Init_Ctx;
@@ -306,8 +318,11 @@ gather_runtime_ptrs_for_app :: (app: *App) -> Host_Runtime_Ptrs {
     return runtime;
 }
 
+
 #import "app_loader";
+#load "host_build.jai";
 #load "reload_pointer_check.jai";
+Process :: #import "Process";
 
 } // !SINGLE_BINARY
 

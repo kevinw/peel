@@ -38,6 +38,13 @@ app_capture_path_for_source_file :: (source_file: string, base_dir := APP_CAPTUR
     return String.path_join(base_dir, app_capture_filename_for_source_file(source_file));
 }
 
+app_source_path_for_source_file :: (source_file: string, base_dir := PATH_TO_APP_FILES) -> string {
+    if String.path_filename(source_file) == source_file {
+        return String.path_join(base_dir, source_file);
+    }
+    return source_file;
+}
+
 #scope_file
 
 String :: #import "String";

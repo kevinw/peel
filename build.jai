@@ -122,7 +122,7 @@ PLATFORM_DIR :: #run get_platform_dir(OS); // win, macos, linux
 
         if script_opts.dll break; // We only need one host when we're building dll.
     }
-    
+
     // Build the DLL(s).
     if script_opts.dll {
         if !build_jdll("Game_Sound", "src/dlls/Game_Sound.jai", script_opts) {
@@ -337,7 +337,7 @@ build_jdll :: (output_name: string, source_file: string, script_opts: Build_Scri
     return result != .failed;
 }
 
-log_build_result :: (output_name: string, output_type: type_of(Build_Options.output_type), start_time: float64, result: Build_Artifact_Result) {
+log_build_result :: (output_name: string, output_type: type_of(Build_Options.output_type), start_time: float64, result: Build_Artifact_Result, verbose := false) {
     duration := seconds_since_init() - start_time;
     duration_formatter := FormatFloat.{trailing_width = 3, value = duration};
 
@@ -355,7 +355,7 @@ log_build_result :: (output_name: string, output_type: type_of(Build_Options.out
     filename_on_disk := ifx output_type == .NO_OUTPUT then tprint("% (shader-only)", output_name) else tprint("%/%%", OUTPUT_PATH, output_name, ext);
 
     if #complete result == {
-    case .skipped; log      ("No build required for %", filename_on_disk);
+    case .skipped; if verbose log      ("No build required for %", filename_on_disk);
     case .failed;  log_error("Build FAILED for %", filename_on_disk);
     case .success; log      ("Built %%% seconds", filename_on_disk, "\t", duration_formatter);
     }
@@ -578,7 +578,7 @@ build_artifact :: (workspace_name: string,
     result: Build_Artifact_Result = .failed;
 
     begin := seconds_since_init();
-    defer log_build_result(output_filename, output_type, begin, result);
+    defer log_build_result(output_filename, output_type, begin, result, script_opts.verbose);
 
     workspace := compiler_create_workspace(workspace_name);
     defer compiler_destroy_workspace(workspace);
