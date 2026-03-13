@@ -27,8 +27,7 @@ Signal_Field_State :: struct {
 
 graphics_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
-params_cpu: *Signal_Field_Params;
-params_gpu: Gpu_Ptr;
+params: Gpu_Buffer(Signal_Field_Params);
 signal_field: Signal_Field_State = .{
     speed = 0.85,
     band_scale = 4.2,
@@ -52,8 +51,8 @@ on_dll_init :: () {
     assert(graphics_pipeline != 0, "Signal field pipeline creation failed.");
 
     gpu_arena = gpu_make_arena(64 * 1024, label = "signal field arena");
-    params_cpu, params_gpu = gpu_arena_alloc(*gpu_arena, Signal_Field_Params);
-    params_cpu.* = .{
+    params = gpu_alloc_buffer(*gpu_arena, Signal_Field_Params);
+    params.cpu.* = .{
         resolution = .{1280.0, 720.0},
         time = 0.0,
         speed = signal_field.speed,
@@ -75,17 +74,17 @@ tick :: () {
 
     _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
     if dims_ok && win_w > 0 && win_h > 0 {
-        params_cpu.resolution = .{cast(float) win_w, cast(float) win_h};
+        params.cpu.resolution = .{cast(float) win_w, cast(float) win_h};
     }
 
-    params_cpu.time = cast(float) time;
-    params_cpu.speed = signal_field.speed;
-    params_cpu.band_scale = signal_field.band_scale;
-    params_cpu.warp_strength = signal_field.warp_strength;
-    params_cpu.glow_strength = signal_field.glow_strength;
-    params_cpu.vignette_strength = signal_field.vignette_strength;
-    params_cpu.palette_mix = signal_field.palette_mix;
-    params_cpu.grain_strength = signal_field.grain_strength;
+    params.cpu.time = cast(float) time;
+    params.cpu.speed = signal_field.speed;
+    params.cpu.band_scale = signal_field.band_scale;
+    params.cpu.warp_strength = signal_field.warp_strength;
+    params.cpu.glow_strength = signal_field.glow_strength;
+    params.cpu.vignette_strength = signal_field.vignette_strength;
+    params.cpu.palette_mix = signal_field.palette_mix;
+    params.cpu.grain_strength = signal_field.grain_strength;
 
     main_queue := gpu_get_queue(.MAIN, 0);
     result=, cmd_buff := gpu_start_command_recording(main_queue);
@@ -105,7 +104,7 @@ tick :: () {
     gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
     pipeline_result := gpu_set_pipeline(cmd_buff, graphics_pipeline);
     assert(pipeline_result == .SUCCESS, tprint("Signal field pipeline bind failed: %", pipeline_result));
-    draw_result := gpu_draw_instanced(cmd_buff, 0, params_gpu, 3, 1);
+    draw_result := gpu_draw_instanced(cmd_buff, 0, params.gpu, 3, 1);
     assert(draw_result == .SUCCESS, tprint("Signal field draw failed: %", draw_result));
 
     draw_ui();

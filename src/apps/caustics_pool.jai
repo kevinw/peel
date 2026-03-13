@@ -28,8 +28,7 @@ Caustics_Pool_State :: struct {
 
 graphics_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
-params_cpu: *Caustics_Pool_Params;
-params_gpu: Gpu_Ptr;
+params: Gpu_Buffer(Caustics_Pool_Params);
 caustics_pool: Caustics_Pool_State = .{
     speed = 0.9,
     scale = 5.5,
@@ -54,8 +53,8 @@ on_dll_init :: () {
     assert(graphics_pipeline != 0, "Caustics pool pipeline creation failed.");
 
     gpu_arena = gpu_make_arena(64 * 1024, label = "caustics pool arena");
-    params_cpu, params_gpu = gpu_arena_alloc(*gpu_arena, Caustics_Pool_Params);
-    params_cpu.* = .{
+    params = gpu_alloc_buffer(*gpu_arena, Caustics_Pool_Params);
+    params.cpu.* = .{
         resolution = .{1280.0, 720.0},
         time = 0.0,
         speed = caustics_pool.speed,
@@ -78,18 +77,18 @@ tick :: () {
 
     _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
     if dims_ok && win_w > 0 && win_h > 0 {
-        params_cpu.resolution = .{cast(float) win_w, cast(float) win_h};
+        params.cpu.resolution = .{cast(float) win_w, cast(float) win_h};
     }
 
-    params_cpu.time = cast(float) time;
-    params_cpu.speed = caustics_pool.speed;
-    params_cpu.scale = caustics_pool.scale;
-    params_cpu.contrast = caustics_pool.contrast;
-    params_cpu.shimmer = caustics_pool.shimmer;
-    params_cpu.tint_mix = caustics_pool.tint_mix;
-    params_cpu.glow = caustics_pool.glow;
-    params_cpu.vignette = caustics_pool.vignette;
-    params_cpu.foam = caustics_pool.foam;
+    params.cpu.time = cast(float) time;
+    params.cpu.speed = caustics_pool.speed;
+    params.cpu.scale = caustics_pool.scale;
+    params.cpu.contrast = caustics_pool.contrast;
+    params.cpu.shimmer = caustics_pool.shimmer;
+    params.cpu.tint_mix = caustics_pool.tint_mix;
+    params.cpu.glow = caustics_pool.glow;
+    params.cpu.vignette = caustics_pool.vignette;
+    params.cpu.foam = caustics_pool.foam;
 
     main_queue := gpu_get_queue(.MAIN, 0);
     result=, cmd_buff := gpu_start_command_recording(main_queue);
@@ -109,7 +108,7 @@ tick :: () {
     gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
     pipeline_result := gpu_set_pipeline(cmd_buff, graphics_pipeline);
     assert(pipeline_result == .SUCCESS, tprint("Caustics pool pipeline bind failed: %", pipeline_result));
-    draw_result := gpu_draw_instanced(cmd_buff, 0, params_gpu, 3, 1);
+    draw_result := gpu_draw_instanced(cmd_buff, 0, params.gpu, 3, 1);
     assert(draw_result == .SUCCESS, tprint("Caustics pool draw failed: %", draw_result));
 
     draw_ui();

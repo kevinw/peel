@@ -45,7 +45,7 @@ Gpu_Frame_Ring :: struct($T: Type, $N: s64 = SGPU_FRAMES_IN_FLIGHT) {
 
 sgpu_make_frame_ring :: (arena: *Gpu_Arena, $T: Type, min_alignment: s64 = 16) -> Gpu_Frame_Ring(T) {
     return .{
-        view = gpu_arena_alloc_view(arena, T, SGPU_FRAMES_IN_FLIGHT, min_alignment),
+        view = gpu_alloc_view(arena, T, SGPU_FRAMES_IN_FLIGHT, min_alignment),
     };
 }
 

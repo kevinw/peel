@@ -26,8 +26,7 @@ graphics_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
 
-render_instances_cpu: *[TETRIS_MAX_RENDER_INSTANCES] Tetris_Block_Instance;
-render_instances_gpu: Gpu_Ptr;
+render_instances: Gpu_View(Tetris_Block_Instance);
 
 particles: [TETRIS_MAX_PARTICLES] Tetris_Particle;
 particle_count: s32;
@@ -190,7 +189,7 @@ update_particles :: () {
 add_render_instance :: (center: Vector2, half: Vector2, color: Vector4, flags: u32 = 0, anim: float = 0.0, angle: float = 0.0) {
     if draw_data.num_instances >= TETRIS_MAX_RENDER_INSTANCES return;
     i := draw_data.num_instances;
-    render_instances_cpu.*[i] = Tetris_Block_Instance.{
+    render_instances.cpu[i] = Tetris_Block_Instance.{
         center = center,
         half_size = half,
         color = color,
@@ -392,8 +391,8 @@ on_dll_init :: () {
 
     gpu_arena = gpu_make_arena(1024 * 1024 * 8, label = "tetris arena");
 
-    quad, quad_gpu := gpu_arena_alloc(*gpu_arena, [6] Vector2);
-    quad.* = .[
+    quad := gpu_alloc_view(*gpu_arena, Vector2, 6);
+    quad.cpu = .[
         .{-1.0, -1.0},
         .{+1.0, -1.0},
         .{+1.0, +1.0},
@@ -402,13 +401,13 @@ on_dll_init :: () {
         .{-1.0, +1.0},
     ];
 
-    render_instances_cpu, render_instances_gpu = gpu_arena_alloc(*gpu_arena, [TETRIS_MAX_RENDER_INSTANCES] Tetris_Block_Instance);
+    render_instances = gpu_alloc_view(*gpu_arena, Tetris_Block_Instance, TETRIS_MAX_RENDER_INSTANCES);
 
-    vertex_params_data, vertex_params_gpu := gpu_arena_alloc(*gpu_arena, [2] Gpu_Ptr);
-    vertex_params_data.* = .[quad_gpu, render_instances_gpu];
+    vertex_params_data := gpu_alloc_view(*gpu_arena, Gpu_Ptr, 2);
+    vertex_params_data.cpu = .[quad.gpu, render_instances.gpu];
 
     draw_data = .{
-        vertex_params_gpu = vertex_params_gpu,
+        vertex_params_gpu = vertex_params_data.gpu,
         pixel_gpu = 0,
         num_vertices = 6,
         num_instances = 0,

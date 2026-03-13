@@ -14,13 +14,10 @@ compute_pipeline_resolve: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
 
-sand_state_storage_gpu: Gpu_Ptr;
-sand_state_storage_cpu: *[SAND_CELL_COUNT * 2] Vector4;
+sand_state_storage: Gpu_View(Vector4);
 sand_state: AB_Buffer([SAND_CELL_COUNT] Vector4);
-sand_move_targets_ring_cpu: *[SGPU_FRAMES_IN_FLIGHT] [SAND_CELL_COUNT] u32;
-sand_move_targets_ring_gpu: Gpu_Ptr;
-sand_control_ring_cpu: *[SGPU_FRAMES_IN_FLIGHT] Sand_Compute_Control;
-sand_control_ring_gpu: Gpu_Ptr;
+sand_move_targets_ring: Gpu_View(u32);
+sand_control_ring: Gpu_Frame_Ring(Sand_Compute_Control);
 
 sand_brush_element: u32 = SAND_MAT_SAND;
 sand_brush_radius_px: float = 7.0;
@@ -172,12 +169,10 @@ on_dll_init :: () {
 
     gpu_arena = gpu_make_arena(1024 * 1024 * 18, label = "sand toy arena");
 
-    state_storage, state_storage_gpu := gpu_arena_alloc(*gpu_arena, [SAND_CELL_COUNT * 2] Vector4);
-    sand_state_storage_cpu = state_storage;
-    sand_state_storage_gpu = state_storage_gpu;
+    sand_state_storage = gpu_alloc_view(*gpu_arena, Vector4, SAND_CELL_COUNT * 2);
 
-    state_a_cpu := cast(*[SAND_CELL_COUNT] Vector4) sand_state_storage_cpu;
-    state_b_cpu := cast(*[SAND_CELL_COUNT] Vector4) (cast(*Vector4) sand_state_storage_cpu + SAND_CELL_COUNT);
+    state_a_cpu := cast(*[SAND_CELL_COUNT] Vector4) sand_state_storage.cpu.data;
+    state_b_cpu := cast(*[SAND_CELL_COUNT] Vector4) (sand_state_storage.cpu.data + SAND_CELL_COUNT);
     sand_init_state(state_a_cpu);
     state_b_cpu.* = state_a_cpu.*;
 
@@ -185,16 +180,16 @@ on_dll_init :: () {
     sand_state = .{
         a_cpu = state_a_cpu,
         b_cpu = state_b_cpu,
-        a_gpu = sand_state_storage_gpu,
-        b_gpu = sand_state_storage_gpu + bytes_per_state.(Gpu_Ptr),
+        a_gpu = sand_state_storage.gpu,
+        b_gpu = sand_state_storage.gpu + bytes_per_state.(Gpu_Ptr),
         src_is_a = true,
     };
 
-    sand_control_ring_cpu, sand_control_ring_gpu = sgpu_arena_alloc_frame_ring(*gpu_arena, Sand_Compute_Control);
-    sand_move_targets_ring_cpu, sand_move_targets_ring_gpu = sgpu_arena_alloc_frame_ring(*gpu_arena, [SAND_CELL_COUNT] u32);
+    sand_control_ring = sgpu_make_frame_ring(*gpu_arena, Sand_Compute_Control);
+    sand_move_targets_ring = gpu_alloc_view(*gpu_arena, u32, SGPU_FRAMES_IN_FLIGHT * SAND_CELL_COUNT);
     for 0..SGPU_FRAMES_IN_FLIGHT-1 {
         ring_idx := it;
-        sand_control_ring_cpu.*[ring_idx] = .{
+        sand_control_ring.view.cpu[ring_idx] = .{
             cursor_uv = .{-1.0, -1.0},
             brush_radius_px = sand_brush_radius_px,
             use_b_as_src = 0,
@@ -204,7 +199,7 @@ on_dll_init :: () {
         };
         for 0..SAND_CELL_COUNT-1 {
             cell_idx := it;
-            sand_move_targets_ring_cpu.*[ring_idx][cell_idx] = cast(u32) cell_idx;
+            sand_move_targets_ring.cpu[ring_idx * SAND_CELL_COUNT + cell_idx] = cast(u32) cell_idx;
         }
     }
 
@@ -226,13 +221,13 @@ tick :: () {
 
     imgui_wants_mouse := sand_ui();
 
-    control := sgpu_frame_ring_cpu_slot(sand_control_ring_cpu);
-    control.use_b_as_src = ifx sand_state.src_is_a then cast(u32) 0 else cast(u32) 1;
-    control.cursor_uv = .{-1.0, -1.0};
-    control.brush_radius_px = sand_brush_radius_px;
-    control.brush_active = 0;
-    control.brush_element = sand_brush_element;
-    control.frame_index = cast(u32) frame_count;
+    control := sgpu_frame_ring_slot(*sand_control_ring);
+    control.cpu.use_b_as_src = ifx sand_state.src_is_a then cast(u32) 0 else cast(u32) 1;
+    control.cpu.cursor_uv = .{-1.0, -1.0};
+    control.cpu.brush_radius_px = sand_brush_radius_px;
+    control.cpu.brush_active = 0;
+    control.cpu.brush_element = sand_brush_element;
+    control.cpu.frame_index = cast(u32) frame_count;
 
     mx, my, mouse_ok := get_mouse_pointer_position(true);
     _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
@@ -249,7 +244,7 @@ tick :: () {
         if v > 1.0 v = 1.0;
         v = 1.0 - v;
 
-        control.cursor_uv = .{u, v};
+        control.cpu.cursor_uv = .{u, v};
         cell_x := cast(s64) floor(u * cast(float) SAND_SIM_WIDTH);
         cell_y := cast(s64) floor(v * cast(float) SAND_SIM_HEIGHT);
         if cell_x < 0 cell_x = 0;
@@ -257,11 +252,11 @@ tick :: () {
         if cell_x >= SAND_SIM_WIDTH cell_x = SAND_SIM_WIDTH - 1;
         if cell_y >= SAND_SIM_HEIGHT cell_y = SAND_SIM_HEIGHT - 1;
 
-        control.brush_active = 0;
-        control.brush_element = SAND_MAT_EMPTY;
+        control.cpu.brush_active = 0;
+        control.cpu.brush_element = SAND_MAT_EMPTY;
         if left_down {
-            control.brush_active = 1;
-            control.brush_element = sand_brush_element;
+            control.cpu.brush_active = 1;
+            control.cpu.brush_element = sand_brush_element;
         }
 
         sand_prev_left_down = left_down;
@@ -275,18 +270,17 @@ tick :: () {
     result=, cmd_buff := gpu_start_command_recording(main_queue);
     assert(result == .SUCCESS);
 
-    control_gpu := sgpu_frame_ring_gpu_slot(sand_control_ring_gpu, Sand_Compute_Control);
-    move_targets_gpu := sgpu_frame_ring_gpu_slot(sand_move_targets_ring_gpu, [SAND_CELL_COUNT] u32);
+    move_targets := sand_move_targets_slot();
 
     result = gpu_set_pipeline(cmd_buff, compute_pipeline_plan);
     assert(result == .SUCCESS, tprint("Sand compute(plan) set pipeline failed: %", result));
-    gpu_dispatch_buffers(cmd_buff, .[sand_state_storage_gpu, move_targets_gpu, control_gpu], .[(SAND_CELL_COUNT + 63) / 64, 1, 1]);
+    gpu_dispatch_buffers(cmd_buff, .[sand_state_storage.gpu, move_targets.gpu, control.gpu], .[(SAND_CELL_COUNT + 63) / 64, 1, 1]);
 
     gpu_barrier(cmd_buff, .COMPUTE_SHADER, .COMPUTE_SHADER);
 
     result = gpu_set_pipeline(cmd_buff, compute_pipeline_resolve);
     assert(result == .SUCCESS, tprint("Sand compute(resolve) set pipeline failed: %", result));
-    gpu_dispatch_buffers(cmd_buff, .[sand_state_storage_gpu, move_targets_gpu, control_gpu], .[(SAND_CELL_COUNT + 63) / 64, 1, 1]);
+    gpu_dispatch_buffers(cmd_buff, .[sand_state_storage.gpu, move_targets.gpu, control.gpu], .[(SAND_CELL_COUNT + 63) / 64, 1, 1]);
 
     ab_buffer_advance(*sand_state);
     draw_data.vertex_params_gpu = ab_buffer_src_gpu(*sand_state);
@@ -318,3 +312,12 @@ tick :: () {
 SHR :: #import,file "../shader_hot_reload.jai";
 #load "shaders/sand_toy_shader.jai";
 Input :: #import "Input";
+
+sand_move_targets_slot :: (frame_number: s64 = -1) -> Gpu_View(u32) {
+    idx := sgpu_frame_ring_index(frame_number);
+    start := idx * SAND_CELL_COUNT;
+    return .{
+        cpu = array_view(sand_move_targets_ring.cpu, start, SAND_CELL_COUNT),
+        gpu = sand_move_targets_ring.gpu + (start * size_of(u32)).(Gpu_Ptr),
+    };
+}

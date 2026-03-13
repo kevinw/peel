@@ -152,14 +152,10 @@ Redux_Fragment_In :: struct {
 graphics_pipeline: Gpu_Pipeline;
 blit_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
-params_ring_cpu: *[REDUX_PARAM_RING_SLOTS] Redux_Params;
-params_ring_gpu: Gpu_Ptr;
-blit_params_ring_cpu: *[REDUX_PARAM_RING_SLOTS] Redux_Blit_Params;
-blit_params_ring_gpu: Gpu_Ptr;
-params_cpu: *Redux_Params;
-params_gpu: Gpu_Ptr;
-blit_params_cpu: *Redux_Blit_Params;
-blit_params_gpu: Gpu_Ptr;
+params_ring: Gpu_View(Redux_Params);
+blit_params_ring: Gpu_View(Redux_Blit_Params);
+params: Gpu_Buffer(Redux_Params);
+blit_params: Gpu_Buffer(Redux_Blit_Params);
 
 render_texture: Gpu_Texture;
 render_view: Gpu_Texture_View;
@@ -210,17 +206,15 @@ on_dll_init :: () {
     blit_ok     := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *blit_pipeline, blit_source, raster_desc, .METAL, redux_blit_vertex_main, redux_blit_fragment_main);
 
     gpu_arena = gpu_make_arena(256 * 1024, label = "brick redux arena");
-    params_ring_cpu, params_ring_gpu = gpu_arena_alloc(*gpu_arena, [REDUX_PARAM_RING_SLOTS] Redux_Params);
-    blit_params_ring_cpu, blit_params_ring_gpu = gpu_arena_alloc(*gpu_arena, [REDUX_PARAM_RING_SLOTS] Redux_Blit_Params);
+    params_ring = gpu_alloc_view(*gpu_arena, Redux_Params, REDUX_PARAM_RING_SLOTS);
+    blit_params_ring = gpu_alloc_view(*gpu_arena, Redux_Blit_Params, REDUX_PARAM_RING_SLOTS);
 
-    params_cpu      = redux_params_ring_cpu_slot(params_ring_cpu, 0);
-    params_gpu      = redux_params_ring_gpu_slot(params_ring_gpu, Redux_Params, 0);
-    blit_params_cpu = redux_params_ring_cpu_slot(blit_params_ring_cpu, 0);
-    blit_params_gpu = redux_params_ring_gpu_slot(blit_params_ring_gpu, Redux_Blit_Params, 0);
+    params = redux_params_ring_slot(params_ring, 0);
+    blit_params = redux_params_ring_slot(blit_params_ring, 0);
 
     for i: 0..REDUX_PARAM_RING_SLOTS-1 {
-        params_ring_cpu.*[i] = .{};
-        blit_params_ring_cpu.*[i] = .{};
+        params_ring.cpu[i] = .{};
+        blit_params_ring.cpu[i] = .{};
     }
 
     render_sampler = gpu_create_sampler(.{
@@ -311,12 +305,10 @@ tick :: () {
     if !swapchain_image return;
 
     frame_number := cast(s64) gpu_submission_frame_index();
-    params_cpu = redux_params_ring_cpu_slot(params_ring_cpu, frame_number);
-    params_gpu = redux_params_ring_gpu_slot(params_ring_gpu, Redux_Params, frame_number);
-    blit_params_cpu = redux_params_ring_cpu_slot(blit_params_ring_cpu, frame_number);
-    blit_params_gpu = redux_params_ring_gpu_slot(blit_params_ring_gpu, Redux_Blit_Params, frame_number);
-    params_cpu.* = .{};
-    blit_params_cpu.* = .{};
+    params = redux_params_ring_slot(params_ring, frame_number);
+    blit_params = redux_params_ring_slot(blit_params_ring, frame_number);
+    params.cpu.* = .{};
+    blit_params.cpu.* = .{};
 
     for Input.events_this_frame {
         using it;
@@ -379,7 +371,7 @@ tick :: () {
     }
 
     if left_pressed && !right_down && !io.WantCaptureMouse && !manip_result.captured_mouse {
-        ray_origin, ray_dir, ray_ok := mouse_world_ray(viewport, tan(params_cpu.camera_fov_y * 0.5), camera.position, cam_forward, cam_right, cam_up, .{cast(float) mx, cast(float) my}, mouse_ok);
+        ray_origin, ray_dir, ray_ok := mouse_world_ray(viewport, tan(params.cpu.camera_fov_y * 0.5), camera.position, cam_forward, cam_right, cam_up, .{cast(float) mx, cast(float) my}, mouse_ok);
         if ray_ok {
             _, hit_pos, hit_ok := ray_ground_hit(ray_origin, ray_dir);
             if hit_ok {
@@ -391,20 +383,20 @@ tick :: () {
 
     if !ensure_render_target(win_w, win_h) return;
 
-    params_cpu.resolution = .{cast(float) render_width, cast(float) render_height};
-    params_cpu.camera_fov_y = PI / 3.0;
-    params_cpu.camera_tan_half_fov = tan(params_cpu.camera_fov_y * 0.5);
-    params_cpu.time = cast(float) frame_count * (1.0 / 60.0);
-    params_cpu.camera_pos = camera.position;
-    params_cpu.camera_forward = cam_forward;
-    params_cpu.camera_right = cam_right;
-    params_cpu.camera_up = cam_up;
-    params_cpu.use_ground = ifx use_ground then cast(u32) 1 else cast(u32) 0;
-    params_cpu.object_count = cast(u32) redux_edit_count;
+    params.cpu.resolution = .{cast(float) render_width, cast(float) render_height};
+    params.cpu.camera_fov_y = PI / 3.0;
+    params.cpu.camera_tan_half_fov = tan(params.cpu.camera_fov_y * 0.5);
+    params.cpu.time = cast(float) frame_count * (1.0 / 60.0);
+    params.cpu.camera_pos = camera.position;
+    params.cpu.camera_forward = cam_forward;
+    params.cpu.camera_right = cam_right;
+    params.cpu.camera_up = cam_up;
+    params.cpu.use_ground = ifx use_ground then cast(u32) 1 else cast(u32) 0;
+    params.cpu.object_count = cast(u32) redux_edit_count;
     fill_shader_params_from_scene();
 
-    blit_params_cpu.source_texture_index = cast(u32) render_view - 1;
-    blit_params_cpu.source_sampler_index = cast(u32) blit_sampler_handle() - 1;
+    blit_params.cpu.source_texture_index = cast(u32) render_view - 1;
+    blit_params.cpu.source_sampler_index = cast(u32) blit_sampler_handle() - 1;
 
     main_queue := gpu_get_queue(.MAIN, 0);
     result=, cmd_buff := gpu_start_command_recording(main_queue);
@@ -424,7 +416,7 @@ tick :: () {
         gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
         result = gpu_set_pipeline(cmd_buff, graphics_pipeline);
         assert(result == .SUCCESS, tprint("Brick Redux graphics pipeline bind failed: %", result));
-        result = gpu_draw_instanced_direct(cmd_buff, params_gpu, 3, 1);
+        result = gpu_draw_instanced_direct(cmd_buff, params.gpu, 3, 1);
         assert(result == .SUCCESS, tprint("Brick Redux fullscreen draw failed: %", result));
     }
 
@@ -441,7 +433,7 @@ tick :: () {
         }, .COLOR_ATTACHMENT_WRITE, .COLOR_ATTACHMENT_WRITE);
         gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
         gpu_set_pipeline(cmd_buff, blit_pipeline);
-        gpu_draw_instanced_direct(cmd_buff, blit_params_gpu, 3, 1);
+        gpu_draw_instanced_direct(cmd_buff, blit_params.gpu, 3, 1);
         Gizmo_Render.gizmo_render_draw(*gizmo_render_ctx, cmd_buff, *gizmo_ctx, viewport, depth_mode = .NONE);
     }
 
@@ -565,16 +557,16 @@ apply_manip_objects_to_edits :: (objects: []Manip_Object) {
 
 fill_shader_params_from_scene :: () {
     count := min(redux_edit_count, REDUX_MAX_OBJECTS);
-    params_cpu.object_count = cast(u32) count;
+    params.cpu.object_count = cast(u32) count;
     for i: 0..count-1 {
         obj := redux_edits_cpu[i];
-        params_cpu.object_shape[i] = obj.shape;
-        params_cpu.object_op[i] = obj.op;
-        params_cpu.object_pos_radius[i] = .{obj.position.x, obj.position.y, obj.position.z, obj.radius};
-        params_cpu.object_half_extents[i] = .{obj.half_extents.x, obj.half_extents.y, obj.half_extents.z, 0.0};
-        params_cpu.object_major_blend[i] = .{obj.major_radius, obj.blend, 0.0, 0.0};
-        params_cpu.object_rotation[i] = .{obj.rotation.x, obj.rotation.y, obj.rotation.z, obj.rotation.w};
-        params_cpu.object_color[i] = obj.color;
+        params.cpu.object_shape[i] = obj.shape;
+        params.cpu.object_op[i] = obj.op;
+        params.cpu.object_pos_radius[i] = .{obj.position.x, obj.position.y, obj.position.z, obj.radius};
+        params.cpu.object_half_extents[i] = .{obj.half_extents.x, obj.half_extents.y, obj.half_extents.z, 0.0};
+        params.cpu.object_major_blend[i] = .{obj.major_radius, obj.blend, 0.0, 0.0};
+        params.cpu.object_rotation[i] = .{obj.rotation.x, obj.rotation.y, obj.rotation.z, obj.rotation.w};
+        params.cpu.object_color[i] = obj.color;
     }
 }
 
@@ -734,14 +726,12 @@ redux_params_ring_index :: (frame_number: s64 = -1) -> s64 {
     return idx;
 }
 
-redux_params_ring_cpu_slot :: (ring: *[REDUX_PARAM_RING_SLOTS] $T, frame_number: s64 = -1) -> *T #expand {
+redux_params_ring_slot :: (ring: Gpu_View($T), frame_number: s64 = -1) -> Gpu_Buffer(T) #expand {
     idx := redux_params_ring_index(frame_number);
-    return cast(*T) ring + idx;
-}
-
-redux_params_ring_gpu_slot :: (ring_base_gpu: Gpu_Ptr, $T: Type, frame_number: s64 = -1) -> Gpu_Ptr #expand {
-    idx := redux_params_ring_index(frame_number);
-    return ring_base_gpu + (idx * size_of(T)).(Gpu_Ptr);
+    return .{
+        cpu = ring.cpu.data + idx,
+        gpu = ring.gpu + (idx * size_of(T)).(Gpu_Ptr),
+    };
 }
 
 bvh_alloc_node :: () -> s32 {

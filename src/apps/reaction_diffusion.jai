@@ -11,11 +11,9 @@ compute_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
 
-state_storage_gpu: Gpu_Ptr;
-state_storage_cpu: *[RD_CELL_COUNT * 2] Vector2;
+state_storage: Gpu_View(Vector2);
 rd_state: AB_Buffer([RD_CELL_COUNT] Vector2);
-rd_control_cpu: *RD_Compute_Control;
-rd_control_gpu: Gpu_Ptr;
+rd_control: Gpu_Buffer(RD_Compute_Control);
 
 rd_init_state :: (state: *[RD_CELL_COUNT] Vector2) {
     center_x := cast(s64) RD_WIDTH / 2;
@@ -98,23 +96,21 @@ on_dll_init :: () {
 
     gpu_arena = gpu_make_arena(1024 * 1024 * 8, label = "reaction diffusion arena");
 
-    state_storage, state_storage_ptr := gpu_arena_alloc(*gpu_arena, [RD_CELL_COUNT * 2] Vector2);
-    state_storage_cpu = state_storage;
-    state_storage_gpu = state_storage_ptr;
-    state_a_cpu := cast(*[RD_CELL_COUNT] Vector2) state_storage_cpu;
-    state_b_cpu := cast(*[RD_CELL_COUNT] Vector2) (cast(*Vector2) state_storage_cpu + RD_CELL_COUNT);
+    state_storage = gpu_alloc_view(*gpu_arena, Vector2, RD_CELL_COUNT * 2);
+    state_a_cpu := cast(*[RD_CELL_COUNT] Vector2) state_storage.cpu.data;
+    state_b_cpu := cast(*[RD_CELL_COUNT] Vector2) (state_storage.cpu.data + RD_CELL_COUNT);
     rd_init_state(state_a_cpu);
     state_b_cpu.* = state_a_cpu.*;
     bytes_per_state := RD_CELL_COUNT * size_of(Vector2);
     rd_state = .{
         a_cpu = state_a_cpu,
         b_cpu = state_b_cpu,
-        a_gpu = state_storage_gpu,
-        b_gpu = state_storage_gpu + bytes_per_state.(Gpu_Ptr),
+        a_gpu = state_storage.gpu,
+        b_gpu = state_storage.gpu + bytes_per_state.(Gpu_Ptr),
         src_is_a = true,
     };
-    rd_control_cpu, rd_control_gpu = gpu_arena_alloc(*gpu_arena, RD_Compute_Control);
-    rd_control_cpu.* = .{
+    rd_control = gpu_alloc_buffer(*gpu_arena, RD_Compute_Control);
+    rd_control.cpu.* = .{
         cursor_uv = .{-1.0, -1.0},
         use_b_as_src = 0,
         cursor_active = 0,
@@ -146,7 +142,7 @@ tick :: () {
     assert(result == .SUCCESS, tprint("RD compute set pipeline failed: %", result));
     mx, my, mouse_ok := get_mouse_pointer_position(true);
     _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
-    rd_control_cpu.use_b_as_src = ifx rd_state.src_is_a then cast(u32) 0 else cast(u32) 1;
+    rd_control.cpu.use_b_as_src = ifx rd_state.src_is_a then cast(u32) 0 else cast(u32) 1;
     if mouse_ok && dims_ok && win_w > 0 && win_h > 0 {
         u := cast(float) mx / cast(float) win_w;
         v := cast(float) my / cast(float) win_h;
@@ -154,13 +150,13 @@ tick :: () {
         if u > 1.0 u = 1.0;
         if v < 0.0 v = 0.0;
         if v > 1.0 v = 1.0;
-        rd_control_cpu.cursor_uv = .{u, v};
-        rd_control_cpu.cursor_active = 1;
+        rd_control.cpu.cursor_uv = .{u, v};
+        rd_control.cpu.cursor_active = 1;
     } else {
-        rd_control_cpu.cursor_uv = .{-1.0, -1.0};
-        rd_control_cpu.cursor_active = 0;
+        rd_control.cpu.cursor_uv = .{-1.0, -1.0};
+        rd_control.cpu.cursor_active = 0;
     }
-    gpu_dispatch_buffers(compute_cmd, .[state_storage_gpu, rd_control_gpu], .[(RD_CELL_COUNT + 63) / 64, 1, 1]);
+    gpu_dispatch_buffers(compute_cmd, .[state_storage.gpu, rd_control.gpu], .[(RD_CELL_COUNT + 63) / 64, 1, 1]);
 
     ab_buffer_advance(*rd_state);
     render_state_gpu := ab_buffer_src_gpu(*rd_state);

@@ -21,7 +21,7 @@ Draw_Data :: struct {
 graphics_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
-pbr_params_cpu: *PBR_Params;
+pbr_params: Gpu_Buffer(PBR_Params);
 
 pbr_textures: [PBR_TEXTURE_COUNT] Gpu_Texture;
 pbr_views:    [PBR_TEXTURE_COUNT] Gpu_Texture_View;
@@ -65,9 +65,8 @@ on_dll_init :: () {
 
     gpu_arena = gpu_make_arena(128 * 1024, label = "pbr arena");
 
-    params_gpu: Gpu_Ptr;
-    pbr_params_cpu, params_gpu = gpu_malloc(PBR_Params);
-    pbr_params_cpu.* = .{
+    pbr_params = gpu_alloc_buffer(PBR_Params);
+    pbr_params.cpu.* = .{
         albedo_index = cast(u32) pbr_views[PBR_TEX_ALBEDO] - 1,
         normal_index = cast(u32) pbr_views[PBR_TEX_NORMAL] - 1,
         roughness_index = cast(u32) pbr_views[PBR_TEX_ROUGHNESS] - 1,
@@ -100,7 +99,7 @@ on_dll_init :: () {
     };
 
     draw_data = .{
-        params_gpu = params_gpu,
+        params_gpu = pbr_params.gpu,
         num_vertices = PBR_SPHERE_SEG_X * PBR_SPHERE_SEG_Y * 6,
         num_instances = 1,
     };
@@ -119,16 +118,15 @@ tick :: () {
     if !swapchain_image return;
 
     {
-        using pbr_params_cpu;
         mx, my, mouse_ok := get_mouse_pointer_position(true);
         _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
         if dims_ok && win_w > 0 && win_h > 0 {
-            resolution_x = cast(float) win_w;
-            resolution_y = cast(float) win_h;
+            pbr_params.cpu.resolution_x = cast(float) win_w;
+            pbr_params.cpu.resolution_y = cast(float) win_h;
             ensure_depth_target(cast(u32) win_w, cast(u32) win_h);
         }
         t := cast(float) frame_count * (1.0 / 60.0);
-        time = t;
+        pbr_params.cpu.time = t;
         if mouse_ok && dims_ok && win_w > 0 && win_h > 0 {
             u := cast(float) mx / cast(float) win_w;
             v := cast(float) my / cast(float) win_h;
@@ -137,13 +135,13 @@ tick :: () {
             if v < 0.0 v = 0.0;
             if v > 1.0 v = 1.0;
 
-            light_pos_x = ((1.0 - u) * 2.0 - 1.0) * 2.6;
-            light_pos_y = ((1.0 - v) * 2.0 - 1.0) * 2.0;
-            light_pos_z = 2.4 + sin(t * 0.35) * 0.4;
+            pbr_params.cpu.light_pos_x = ((1.0 - u) * 2.0 - 1.0) * 2.6;
+            pbr_params.cpu.light_pos_y = ((1.0 - v) * 2.0 - 1.0) * 2.0;
+            pbr_params.cpu.light_pos_z = 2.4 + sin(t * 0.35) * 0.4;
         } else {
-            light_pos_x = sin(t * 0.35) * 2.2;
-            light_pos_y = 1.8 + sin(t * 0.21) * 0.35;
-            light_pos_z = 2.4 + cos(t * 0.35) * 0.4;
+            pbr_params.cpu.light_pos_x = sin(t * 0.35) * 2.2;
+            pbr_params.cpu.light_pos_y = 1.8 + sin(t * 0.21) * 0.35;
+            pbr_params.cpu.light_pos_z = 2.4 + cos(t * 0.35) * 0.4;
         }
     }
 

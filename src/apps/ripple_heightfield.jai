@@ -19,11 +19,9 @@ compute_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
 
-ripple_state_storage_gpu: Gpu_Ptr;
-ripple_state_storage_cpu: *[RIPPLE_CELL_COUNT * 2] Vector2;
+ripple_state_storage: Gpu_View(Vector2);
 ripple_state: AB_Buffer([RIPPLE_CELL_COUNT] Vector2);
-ripple_control_ring_cpu: *[SGPU_FRAMES_IN_FLIGHT] Ripple_Compute_Control;
-ripple_control_ring_gpu: Gpu_Ptr;
+ripple_control_ring: Gpu_Frame_Ring(Ripple_Compute_Control);
 
 on_dll_init :: () {
     compute_source := cast([]u8) get_transpiled(.METAL, ripple_step_compute);
@@ -47,12 +45,9 @@ on_dll_init :: () {
 
     gpu_arena = gpu_make_arena(1024 * 1024 * 8, label = "ripple arena");
 
-    state_storage, state_storage_gpu := gpu_arena_alloc(*gpu_arena, [RIPPLE_CELL_COUNT * 2] Vector2);
-    ripple_state_storage_cpu = state_storage;
-    ripple_state_storage_gpu = state_storage_gpu;
-
-    state_a_cpu := cast(*[RIPPLE_CELL_COUNT] Vector2) ripple_state_storage_cpu;
-    state_b_cpu := cast(*[RIPPLE_CELL_COUNT] Vector2) (cast(*Vector2) ripple_state_storage_cpu + RIPPLE_CELL_COUNT);
+    ripple_state_storage = gpu_alloc_view(*gpu_arena, Vector2, RIPPLE_CELL_COUNT * 2);
+    state_a_cpu := cast(*[RIPPLE_CELL_COUNT] Vector2) ripple_state_storage.cpu.data;
+    state_b_cpu := cast(*[RIPPLE_CELL_COUNT] Vector2) (ripple_state_storage.cpu.data + RIPPLE_CELL_COUNT);
     for 0..RIPPLE_CELL_COUNT-1 {
         state_a_cpu.*[it] = .{0.0, 0.0};
     }
@@ -62,14 +57,14 @@ on_dll_init :: () {
     ripple_state = .{
         a_cpu = state_a_cpu,
         b_cpu = state_b_cpu,
-        a_gpu = ripple_state_storage_gpu,
-        b_gpu = ripple_state_storage_gpu + bytes_per_state.(Gpu_Ptr),
+        a_gpu = ripple_state_storage.gpu,
+        b_gpu = ripple_state_storage.gpu + bytes_per_state.(Gpu_Ptr),
         src_is_a = true,
     };
 
-    ripple_control_ring_cpu, ripple_control_ring_gpu = sgpu_arena_alloc_frame_ring(*gpu_arena, Ripple_Compute_Control);
+    ripple_control_ring = sgpu_make_frame_ring(*gpu_arena, Ripple_Compute_Control);
     for 0..SGPU_FRAMES_IN_FLIGHT-1 {
-        ripple_control_ring_cpu.*[it] = .{
+        ripple_control_ring.view.cpu[it] = .{
             cursor_uv = .{-1.0, -1.0},
             use_b_as_src = 0,
             cursor_mode = 0,
@@ -92,10 +87,10 @@ tick :: () {
     assert(result == .SUCCESS);
     if !swapchain_image return;
 
-    control := sgpu_frame_ring_cpu_slot(ripple_control_ring_cpu);
-    control.use_b_as_src = ifx ripple_state.src_is_a then cast(u32) 0 else cast(u32) 1;
-    control.cursor_uv = .{-1.0, -1.0};
-    control.cursor_mode = 0;
+    control := sgpu_frame_ring_slot(*ripple_control_ring);
+    control.cpu.use_b_as_src = ifx ripple_state.src_is_a then cast(u32) 0 else cast(u32) 1;
+    control.cpu.cursor_uv = .{-1.0, -1.0};
+    control.cpu.cursor_mode = 0;
 
     mx, my, mouse_ok := get_mouse_pointer_position(true);
     _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
@@ -107,11 +102,11 @@ tick :: () {
         if v < 0.0 v = 0.0;
         if v > 1.0 v = 1.0;
 
-        control.cursor_uv = .{u, v};
+        control.cpu.cursor_uv = .{u, v};
         if Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_LEFT] & .DOWN {
-            control.cursor_mode = 1;
+            control.cpu.cursor_mode = 1;
         } else if Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_RIGHT] & .DOWN {
-            control.cursor_mode = 2;
+            control.cpu.cursor_mode = 2;
         }
     }
 
@@ -121,8 +116,7 @@ tick :: () {
 
     result = gpu_set_pipeline(cmd_buff, compute_pipeline);
     assert(result == .SUCCESS, tprint("Ripple compute set pipeline failed: %", result));
-    control_gpu := sgpu_frame_ring_gpu_slot(ripple_control_ring_gpu, Ripple_Compute_Control);
-    gpu_dispatch_buffers(cmd_buff, .[ripple_state_storage_gpu, control_gpu], .[(RIPPLE_CELL_COUNT + 63) / 64, 1, 1]);
+    gpu_dispatch_buffers(cmd_buff, .[ripple_state_storage.gpu, control.gpu], .[(RIPPLE_CELL_COUNT + 63) / 64, 1, 1]);
 
     ab_buffer_advance(*ripple_state);
     draw_data.vertex_params_gpu = ab_buffer_src_gpu(*ripple_state);

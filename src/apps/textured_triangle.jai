@@ -17,7 +17,7 @@ noise_texture: Gpu_Texture;
 noise_texture_view: Gpu_Texture_View;
 noise_sampler: Gpu_Sampler;
 
-noise_fill_rgba8 :: (pixels: *[NOISE_BYTE_COUNT] u8) {
+noise_fill_rgba8 :: (pixels: []u8) {
     for y: 0..NOISE_H - 1 {
         for x: 0..NOISE_W - 1 {
             i := y * NOISE_W + x;
@@ -28,10 +28,10 @@ noise_fill_rgba8 :: (pixels: *[NOISE_BYTE_COUNT] u8) {
             checker := cast(u8) 32;
             if (((x / 8) + (y / 8)) & 1) == 0 checker = 220;
             b := checker;
-            pixels.*[idx + 0] = b;
-            pixels.*[idx + 1] = g;
-            pixels.*[idx + 2] = r;
-            pixels.*[idx + 3] = 255;
+            pixels[idx + 0] = b;
+            pixels[idx + 1] = g;
+            pixels[idx + 2] = r;
+            pixels[idx + 3] = 255;
         }
     }
 }
@@ -59,11 +59,11 @@ on_dll_init :: () {
     noise_texture_view = gpu_texture_view(noise_texture);
     noise_sampler = gpu_create_sampler({ compare_op = .NEVER });
 
-    noise_pixels, _ := gpu_arena_alloc(*gpu_arena, [NOISE_BYTE_COUNT] u8);
-    noise_fill_rgba8(noise_pixels);
-    gpu_copy_to_texture(noise_texture, noise_pixels);
+    noise_pixels := gpu_alloc_view(*gpu_arena, u8, NOISE_BYTE_COUNT);
+    noise_fill_rgba8(noise_pixels.cpu);
+    gpu_copy_to_texture(noise_texture, noise_pixels.cpu.data);
 
-    pixel_params = gpu_alloc(Textured_Triangle_Pixel_Params);
+    pixel_params = gpu_alloc_buffer(Textured_Triangle_Pixel_Params);
     pixel_params.cpu.* = .{
         texture_index = cast(u32) noise_texture_view - 1,
         sampler_index = cast(u32) noise_sampler - 1,

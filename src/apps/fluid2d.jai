@@ -13,11 +13,9 @@ compute_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
 
-fluid_state_storage_gpu: Gpu_Ptr;
-fluid_state_storage_cpu: *[FLUID_CELL_COUNT * 2] Vector4;
+fluid_state_storage: Gpu_View(Vector4);
 fluid_state: AB_Buffer([FLUID_CELL_COUNT] Vector4);
-fluid_control_ring_cpu: *[SGPU_FRAMES_IN_FLIGHT] Fluid_Compute_Control;
-fluid_control_ring_gpu: Gpu_Ptr;
+fluid_control_ring: Gpu_Frame_Ring(Fluid_Compute_Control);
 fluid_last_mouse_uv: Vector2;
 fluid_have_last_mouse := false;
 
@@ -65,12 +63,9 @@ on_dll_init :: () {
 
     gpu_arena = gpu_make_arena(1024 * 1024 * 12, label = "fluid2d arena");
 
-    state_storage, state_storage_gpu := gpu_arena_alloc(*gpu_arena, [FLUID_CELL_COUNT * 2] Vector4);
-    fluid_state_storage_cpu = state_storage;
-    fluid_state_storage_gpu = state_storage_gpu;
-
-    state_a_cpu := cast(*[FLUID_CELL_COUNT] Vector4) fluid_state_storage_cpu;
-    state_b_cpu := cast(*[FLUID_CELL_COUNT] Vector4) (cast(*Vector4) fluid_state_storage_cpu + FLUID_CELL_COUNT);
+    fluid_state_storage = gpu_alloc_view(*gpu_arena, Vector4, FLUID_CELL_COUNT * 2);
+    state_a_cpu := cast(*[FLUID_CELL_COUNT] Vector4) fluid_state_storage.cpu.data;
+    state_b_cpu := cast(*[FLUID_CELL_COUNT] Vector4) (fluid_state_storage.cpu.data + FLUID_CELL_COUNT);
     fluid_init_state(state_a_cpu);
     state_b_cpu.* = state_a_cpu.*;
 
@@ -78,14 +73,14 @@ on_dll_init :: () {
     fluid_state = .{
         a_cpu = state_a_cpu,
         b_cpu = state_b_cpu,
-        a_gpu = fluid_state_storage_gpu,
-        b_gpu = fluid_state_storage_gpu + bytes_per_state.(Gpu_Ptr),
+        a_gpu = fluid_state_storage.gpu,
+        b_gpu = fluid_state_storage.gpu + bytes_per_state.(Gpu_Ptr),
         src_is_a = true,
     };
 
-    fluid_control_ring_cpu, fluid_control_ring_gpu = sgpu_arena_alloc_frame_ring(*gpu_arena, Fluid_Compute_Control);
+    fluid_control_ring = sgpu_make_frame_ring(*gpu_arena, Fluid_Compute_Control);
     for 0..SGPU_FRAMES_IN_FLIGHT-1 {
-        fluid_control_ring_cpu.*[it] = .{
+        fluid_control_ring.view.cpu[it] = .{
             cursor_uv = .{-1.0, -1.0},
             cursor_delta_uv = .{0.0, 0.0},
             use_b_as_src = 0,
@@ -109,11 +104,11 @@ tick :: () {
     assert(result == .SUCCESS);
     if !swapchain_image return;
 
-    control := sgpu_frame_ring_cpu_slot(fluid_control_ring_cpu);
-    control.use_b_as_src = ifx fluid_state.src_is_a then cast(u32) 0 else cast(u32) 1;
-    control.cursor_uv = .{-1.0, -1.0};
-    control.cursor_delta_uv = .{0.0, 0.0};
-    control.cursor_active = 0;
+    control := sgpu_frame_ring_slot(*fluid_control_ring);
+    control.cpu.use_b_as_src = ifx fluid_state.src_is_a then cast(u32) 0 else cast(u32) 1;
+    control.cpu.cursor_uv = .{-1.0, -1.0};
+    control.cpu.cursor_delta_uv = .{0.0, 0.0};
+    control.cpu.cursor_active = 0;
 
     mx, my, mouse_ok := get_mouse_pointer_position(true);
     _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
@@ -126,13 +121,13 @@ tick :: () {
         if v > 1.0 v = 1.0;
 
         if fluid_have_last_mouse {
-            control.cursor_delta_uv = .{u - fluid_last_mouse_uv.x, v - fluid_last_mouse_uv.y};
+            control.cpu.cursor_delta_uv = .{u - fluid_last_mouse_uv.x, v - fluid_last_mouse_uv.y};
         }
         fluid_last_mouse_uv = .{u, v};
         fluid_have_last_mouse = true;
 
-        control.cursor_uv = .{u, v};
-        control.cursor_active = 1;
+        control.cpu.cursor_uv = .{u, v};
+        control.cpu.cursor_active = 1;
     } else {
         fluid_have_last_mouse = false;
     }
@@ -143,8 +138,7 @@ tick :: () {
 
     result = gpu_set_pipeline(cmd_buff, compute_pipeline);
     assert(result == .SUCCESS, tprint("Fluid2D compute set pipeline failed: %", result));
-    control_gpu := sgpu_frame_ring_gpu_slot(fluid_control_ring_gpu, Fluid_Compute_Control);
-    gpu_dispatch_buffers(cmd_buff, .[fluid_state_storage_gpu, control_gpu], .[(FLUID_CELL_COUNT + 63) / 64, 1, 1]);
+    gpu_dispatch_buffers(cmd_buff, .[fluid_state_storage.gpu, control.gpu], .[(FLUID_CELL_COUNT + 63) / 64, 1, 1]);
 
     ab_buffer_advance(*fluid_state);
     draw_data.vertex_params_gpu = ab_buffer_src_gpu(*fluid_state);

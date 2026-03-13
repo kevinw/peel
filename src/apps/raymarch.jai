@@ -8,8 +8,7 @@ SHR :: #import,file "../shader_hot_reload.jai";
 
 graphics_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
-raymarch_params_cpu: *Raymarch_Params;
-raymarch_params_gpu: Gpu_Ptr;
+raymarch_params: Gpu_Buffer(Raymarch_Params);
 
 on_dll_init :: () {
     graphics_source := cast([]u8) get_transpiled(.METAL, raymarch_vertex_main, raymarch_fragment_main);
@@ -25,8 +24,8 @@ on_dll_init :: () {
     assert(graphics_ok, "Raymarch graphics pipeline creation failed.");
 
     gpu_arena = gpu_make_arena(64 * 1024, label = "raymarch arena");
-    raymarch_params_cpu, raymarch_params_gpu = gpu_arena_alloc(*gpu_arena, Raymarch_Params);
-    raymarch_params_cpu.* = .{
+    raymarch_params = gpu_alloc_buffer(*gpu_arena, Raymarch_Params);
+    raymarch_params.cpu.* = .{
         time = 0.0,
         resolution = .{1280.0, 720.0},
         mouse_uv = .{0.5, 0.5},
@@ -44,7 +43,7 @@ tick :: () {
     _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
     mx, my, mouse_ok := get_mouse_pointer_position(true);
     if dims_ok && win_w > 0 && win_h > 0 {
-        raymarch_params_cpu.resolution = .{cast(float) win_w, cast(float) win_h};
+        raymarch_params.cpu.resolution = .{cast(float) win_w, cast(float) win_h};
     }
     if mouse_ok && dims_ok && win_w > 0 && win_h > 0 {
         u := cast(float) mx / cast(float) win_w;
@@ -53,9 +52,9 @@ tick :: () {
         if u > 1.0 u = 1.0;
         if v < 0.0 v = 0.0;
         if v > 1.0 v = 1.0;
-        raymarch_params_cpu.mouse_uv = .{u, v};
+        raymarch_params.cpu.mouse_uv = .{u, v};
     }
-    raymarch_params_cpu.time = cast(float) frame_count * (1.0 / 60.0);
+    raymarch_params.cpu.time = cast(float) frame_count * (1.0 / 60.0);
 
     main_queue := gpu_get_queue(.MAIN, 0);
     result=, cmd_buff := gpu_start_command_recording(main_queue);
@@ -74,7 +73,7 @@ tick :: () {
     gpu_set_depth_stencil_state(cmd_buff, {depth_test = .ALWAYS, depth_mode = .NONE,});
     gpu_set_pipeline(cmd_buff, graphics_pipeline);
 
-    draw_result := gpu_draw_instanced(cmd_buff, 0, raymarch_params_gpu, 3, 1);
+    draw_result := gpu_draw_instanced(cmd_buff, 0, raymarch_params.gpu, 3, 1);
     assert(draw_result == .SUCCESS, tprint("Raymarch draw failed: %", draw_result));
 
     submit_and_present_with_ui(cmd_buff);

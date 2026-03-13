@@ -312,5 +312,3 @@
         return (occlusion_state & NSWindowOcclusionStateVisible) == 0;
     }
 }
-
-ImGui :: #import "ImGui";

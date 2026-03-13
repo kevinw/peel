@@ -14,15 +14,12 @@ compute_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
 
-boid_state_storage_cpu: *[NUM_INSTANCES * 2] Boid_State;
-boid_state_storage_gpu: Gpu_Ptr;
+boid_state_storage: Gpu_View(Boid_State);
 boid_state: AB_Buffer([NUM_INSTANCES] Boid_State);
-boid_tints_cpu: *[NUM_INSTANCES] Vector4;
-boid_tints_gpu: Gpu_Ptr;
-vertex_params_a_gpu: Gpu_Ptr;
-vertex_params_b_gpu: Gpu_Ptr;
-boids_control_ring_cpu: *[SGPU_FRAMES_IN_FLIGHT] Boids_Control;
-boids_control_ring_gpu: Gpu_Ptr;
+boid_tints: Gpu_View(Vector4);
+vertex_params_a: Gpu_View(Gpu_Ptr);
+vertex_params_b: Gpu_View(Gpu_Ptr);
+boids_control_ring: Gpu_Frame_Ring(Boids_Control);
 
 build_ui :: () {
     using,except(Viewport) _ :: #import "ImGui";
@@ -51,21 +48,15 @@ on_dll_init :: () {
 
     gpu_arena = gpu_make_arena(1024 * 1024, label = "boids arena");
 
-    vertex_buffer, vertex_gpu := gpu_arena_alloc(*gpu_arena, [3] Vector2);
-    vertex_buffer.* = .[
-        .{ 0.020,  0.0 },
-        .{-0.014,  0.011},
-        .{-0.014, -0.011},
-    ];
+    vertex_buffer := gpu_alloc_view(*gpu_arena, Vector2, 3);
+    vertex_buffer.cpu[0] = .{ 0.020,  0.0 };
+    vertex_buffer.cpu[1] = .{-0.014,  0.011};
+    vertex_buffer.cpu[2] = .{-0.014, -0.011};
 
-    state_storage, state_storage_gpu := gpu_arena_alloc(*gpu_arena, [NUM_INSTANCES * 2] Boid_State);
-    boid_state_storage_cpu = state_storage;
-    boid_state_storage_gpu = state_storage_gpu;
-    boid_state_a_cpu := cast(*[NUM_INSTANCES] Boid_State) boid_state_storage_cpu;
-    boid_state_b_cpu := cast(*[NUM_INSTANCES] Boid_State) (cast(*Boid_State) boid_state_storage_cpu + NUM_INSTANCES);
-    tints, tints_gpu := gpu_arena_alloc(*gpu_arena, [NUM_INSTANCES] Vector4);
-    boid_tints_cpu = tints;
-    boid_tints_gpu = tints_gpu;
+    boid_state_storage = gpu_alloc_view(*gpu_arena, Boid_State, NUM_INSTANCES * 2);
+    boid_state_a_cpu := cast(*[NUM_INSTANCES] Boid_State) boid_state_storage.cpu.data;
+    boid_state_b_cpu := cast(*[NUM_INSTANCES] Boid_State) (boid_state_storage.cpu.data + NUM_INSTANCES);
+    boid_tints = gpu_alloc_view(*gpu_arena, Vector4, NUM_INSTANCES);
 
     palette :: Vector4.[
         .{0.949, 0.380, 0.384, 1.0}, // coral
@@ -85,44 +76,50 @@ on_dll_init :: () {
         palette_idx := cast(s64) floor(random_get_within_range(0.0, cast(float) palette.count));
         if palette_idx >= palette.count palette_idx = palette.count - 1;
         boid_state_a_cpu.*[it] = .{pos = pos, vel = vel};
-        boid_tints_cpu.*[it] = palette[palette_idx];
+        boid_tints.cpu[it] = palette[palette_idx];
     }
     boid_state_b_cpu.* = boid_state_a_cpu.*;
     bytes_per_state := NUM_INSTANCES * size_of(Boid_State);
     boid_state = .{
         a_cpu = boid_state_a_cpu,
         b_cpu = boid_state_b_cpu,
-        a_gpu = boid_state_storage_gpu,
-        b_gpu = boid_state_storage_gpu + bytes_per_state.(Gpu_Ptr),
+        a_gpu = boid_state_storage.gpu,
+        b_gpu = boid_state_storage.gpu + bytes_per_state.(Gpu_Ptr),
         src_is_a = true,
     };
 
-    param_block_a, vertex_params_gpu_a := gpu_arena_alloc(*gpu_arena, [3] Gpu_Ptr);
-    param_block_a.* = .[vertex_gpu, boid_tints_gpu, boid_state.a_gpu];
-    vertex_params_a_gpu = vertex_params_gpu_a;
+    vertex_params_a = gpu_alloc_view(*gpu_arena, Gpu_Ptr, 3);
+    vertex_params_a.cpu[0] = vertex_buffer.gpu;
+    vertex_params_a.cpu[1] = boid_tints.gpu;
+    vertex_params_a.cpu[2] = boid_state.a_gpu;
 
-    param_block_b, vertex_params_gpu_b := gpu_arena_alloc(*gpu_arena, [3] Gpu_Ptr);
-    param_block_b.* = .[vertex_gpu, boid_tints_gpu, boid_state.b_gpu];
-    vertex_params_b_gpu = vertex_params_gpu_b;
+    vertex_params_b = gpu_alloc_view(*gpu_arena, Gpu_Ptr, 3);
+    vertex_params_b.cpu[0] = vertex_buffer.gpu;
+    vertex_params_b.cpu[1] = boid_tints.gpu;
+    vertex_params_b.cpu[2] = boid_state.b_gpu;
 
-    boids_control_ring_cpu, boids_control_ring_gpu = sgpu_arena_alloc_frame_ring(*gpu_arena, Boids_Control);
+    boids_control_ring = sgpu_make_frame_ring(*gpu_arena, Boids_Control);
     for 0..SGPU_FRAMES_IN_FLIGHT-1 {
-        boids_control_ring_cpu.*[it].cursor = .{9999.0, 9999.0};
-        boids_control_ring_cpu.*[it].use_b_as_src = 0;
-        boids_control_ring_cpu.*[it]._pad = 0;
+        boids_control_ring.view.cpu[it].cursor = .{9999.0, 9999.0};
+        boids_control_ring.view.cpu[it].use_b_as_src = 0;
+        boids_control_ring.view.cpu[it]._pad = 0;
     }
 
     indices := u32.[0, 2, 1];
-    index_buffer, index_gpu := gpu_arena_alloc(*gpu_arena, [3] u32);
-    index_buffer.* = indices;
+    index_buffer := gpu_alloc_view(*gpu_arena, u32, 3);
+    index_buffer.cpu[0] = indices[0];
+    index_buffer.cpu[1] = indices[1];
+    index_buffer.cpu[2] = indices[2];
 
-    pixel_data, pixel_gpu := gpu_arena_alloc(*gpu_arena, [3] float);
-    pixel_data.* = .[1., 0., 1.];
+    pixel_data := gpu_alloc_view(*gpu_arena, float, 3);
+    pixel_data.cpu[0] = 1.0;
+    pixel_data.cpu[1] = 0.0;
+    pixel_data.cpu[2] = 1.0;
 
     draw_data = .{
-        vertex_params_gpu = vertex_params_a_gpu,
-        pixel_gpu = pixel_gpu,
-        index_gpu = index_gpu,
+        vertex_params_gpu = vertex_params_a.gpu,
+        pixel_gpu = pixel_data.gpu,
+        index_gpu = index_buffer.gpu,
         num_vertices = indices.count,
         num_instances = NUM_INSTANCES,
     };
@@ -140,15 +137,15 @@ tick :: () {
 
     mx, my, mouse_ok := get_mouse_pointer_position(true);
     _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
-    control := sgpu_frame_ring_cpu_slot(boids_control_ring_cpu);
+    control := sgpu_frame_ring_slot(*boids_control_ring);
     if mouse_ok && dims_ok && win_w > 0 && win_h > 0 {
         nx := cast(float) mx / cast(float) win_w;
         ny := cast(float) my / cast(float) win_h;
-        control.cursor.x = (nx * 2.0 - 1.0) * BOIDS_VIEW_EXTENT;
-        control.cursor.y = (ny * 2.0 - 1.0) * BOIDS_VIEW_EXTENT;
+        control.cpu.cursor.x = (nx * 2.0 - 1.0) * BOIDS_VIEW_EXTENT;
+        control.cpu.cursor.y = (ny * 2.0 - 1.0) * BOIDS_VIEW_EXTENT;
     } else {
-        control.cursor.x = 9999.0;
-        control.cursor.y = 9999.0;
+        control.cpu.cursor.x = 9999.0;
+        control.cpu.cursor.y = 9999.0;
     }
 
     main_queue := gpu_get_queue(.MAIN, 0);
@@ -157,12 +154,11 @@ tick :: () {
 
     result = gpu_set_pipeline(cmd_buff, compute_pipeline);
     assert(result == .SUCCESS, tprint("Boids compute set pipeline failed: %", result));
-    control.use_b_as_src = ifx boid_state.src_is_a then cast(u32) 0 else cast(u32) 1;
-    control_gpu := sgpu_frame_ring_gpu_slot(boids_control_ring_gpu, Boids_Control);
-    gpu_dispatch_buffers(cmd_buff, .[boid_state_storage_gpu, control_gpu], .[(NUM_INSTANCES + 63) / 64, 1, 1]);
+    control.cpu.use_b_as_src = ifx boid_state.src_is_a then cast(u32) 0 else cast(u32) 1;
+    gpu_dispatch_buffers(cmd_buff, .[boid_state_storage.gpu, control.gpu], .[(NUM_INSTANCES + 63) / 64, 1, 1]);
 
     ab_buffer_advance(*boid_state);
-    draw_data.vertex_params_gpu = ifx boid_state.src_is_a then vertex_params_a_gpu else vertex_params_b_gpu;
+    draw_data.vertex_params_gpu = ifx boid_state.src_is_a then vertex_params_a.gpu else vertex_params_b.gpu;
 
     gpu_begin_scoped_render_pass(cmd_buff, {
         color_targets = .[

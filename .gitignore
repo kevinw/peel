@@ -72,3 +72,5 @@ dist/brick_redux
 dist/brick_redux.dylib
 dist/function_constants_test
 dist/function_constants_test.dylib
+dist/model_scene
+dist/model_scene.dylib

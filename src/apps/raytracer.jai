@@ -2,8 +2,7 @@ WRITE_SHADER_OUTPUT :: true;
 
 graphics_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
-raytracer_params_cpu: *Raytracer_Params;
-raytracer_params_gpu: Gpu_Ptr;
+raytracer_params: Gpu_Buffer(Raytracer_Params);
 raytracer_gizmo_ctx: Gizmo.Gizmo_Context;
 raytracer_gizmo_render_ctx: Gizmo_Render.Gizmo_Render_Context;
 raytracer_manip_ctx: Manip_Context;
@@ -38,8 +37,8 @@ on_dll_init :: () {
     assert(graphics_ok, "Raytracer graphics pipeline creation failed.");
 
     gpu_arena = gpu_make_arena(64 * 1024, label = "raytracer arena");
-    raytracer_params_cpu, raytracer_params_gpu = gpu_arena_alloc(*gpu_arena, Raytracer_Params);
-    raytracer_params_cpu.* = .{};
+    raytracer_params = gpu_alloc_buffer(*gpu_arena, Raytracer_Params);
+    raytracer_params.cpu.* = .{};
     raytracer_objects.allocator = context.allocator;
     array_add(*raytracer_objects, .{
         name = "Cube A",
@@ -99,8 +98,8 @@ tick :: () {
     _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
     mx, my, mouse_ok := get_mouse_pointer_position(true);
     if dims_ok && win_w > 0 && win_h > 0 {
-        raytracer_params_cpu.aspect = cast(float) win_w / cast(float) win_h;
-        raytracer_params_cpu.inv_viewport = .{
+        raytracer_params.cpu.aspect = cast(float) win_w / cast(float) win_h;
+        raytracer_params.cpu.inv_viewport = .{
             1.0 / cast(float) win_w,
             1.0 / cast(float) win_h,
         };
@@ -131,11 +130,11 @@ tick :: () {
     cam_forward, cam_right, cam_up: Vector3;
     editor_camera_basis(*raytracer_camera, *cam_forward, *cam_right, *cam_up);
 
-    raytracer_params_cpu.camera_pos = raytracer_camera.position;
-    raytracer_params_cpu.time = cast(float) frame_count * (1.0 / 60.0);
-    raytracer_params_cpu.cam_forward = cam_forward;
-    raytracer_params_cpu.cam_right = cam_right;
-    raytracer_params_cpu.cam_up = cam_up;
+    raytracer_params.cpu.camera_pos = raytracer_camera.position;
+    raytracer_params.cpu.time = cast(float) frame_count * (1.0 / 60.0);
+    raytracer_params.cpu.cam_forward = cam_forward;
+    raytracer_params.cpu.cam_right = cam_right;
+    raytracer_params.cpu.cam_up = cam_up;
     raytracer_sync_objects_to_params();
 
     main_queue := gpu_get_queue(.MAIN, 0);
@@ -155,7 +154,7 @@ tick :: () {
     gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
     gpu_set_pipeline(cmd_buff, graphics_pipeline);
 
-    draw_result := gpu_draw_instanced(cmd_buff, 0, raytracer_params_gpu, 3, 1);
+    draw_result := gpu_draw_instanced(cmd_buff, 0, raytracer_params.gpu, 3, 1);
     assert(draw_result == .SUCCESS, tprint("Raytracer draw failed: %", draw_result));
 
 
@@ -206,15 +205,15 @@ raytracer_sync_objects_to_params :: () {
     if raytracer_objects.count < 2 return;
     a := raytracer_objects[0];
     b := raytracer_objects[1];
-    raytracer_params_cpu.cube0_center_refl = .{a.position.x, a.position.y, a.position.z, raytracer_object_reflectivity[0]};
-    raytracer_params_cpu.cube0_half_pad = .{a.half_extents.x * a.scale.x, a.half_extents.y * a.scale.y, a.half_extents.z * a.scale.z, 0.0};
-    raytracer_params_cpu.cube0_color_pad = .{a.color.x, a.color.y, a.color.z, 0.0};
-    raytracer_params_cpu.cube0_rotation = .{a.rotation.x, a.rotation.y, a.rotation.z, a.rotation.w};
+    raytracer_params.cpu.cube0_center_refl = .{a.position.x, a.position.y, a.position.z, raytracer_object_reflectivity[0]};
+    raytracer_params.cpu.cube0_half_pad = .{a.half_extents.x * a.scale.x, a.half_extents.y * a.scale.y, a.half_extents.z * a.scale.z, 0.0};
+    raytracer_params.cpu.cube0_color_pad = .{a.color.x, a.color.y, a.color.z, 0.0};
+    raytracer_params.cpu.cube0_rotation = .{a.rotation.x, a.rotation.y, a.rotation.z, a.rotation.w};
 
-    raytracer_params_cpu.cube1_center_refl = .{b.position.x, b.position.y, b.position.z, raytracer_object_reflectivity[1]};
-    raytracer_params_cpu.cube1_half_pad = .{b.half_extents.x * b.scale.x, b.half_extents.y * b.scale.y, b.half_extents.z * b.scale.z, 0.0};
-    raytracer_params_cpu.cube1_color_pad = .{b.color.x, b.color.y, b.color.z, 0.0};
-    raytracer_params_cpu.cube1_rotation = .{b.rotation.x, b.rotation.y, b.rotation.z, b.rotation.w};
+    raytracer_params.cpu.cube1_center_refl = .{b.position.x, b.position.y, b.position.z, raytracer_object_reflectivity[1]};
+    raytracer_params.cpu.cube1_half_pad = .{b.half_extents.x * b.scale.x, b.half_extents.y * b.scale.y, b.half_extents.z * b.scale.z, 0.0};
+    raytracer_params.cpu.cube1_color_pad = .{b.color.x, b.color.y, b.color.z, 0.0};
+    raytracer_params.cpu.cube1_rotation = .{b.rotation.x, b.rotation.y, b.rotation.z, b.rotation.w};
 }
 
 #load "../SGPU_App_Common.jai";

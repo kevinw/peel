@@ -10,8 +10,7 @@ compute_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
 
-spark_state_cpu: *[PARTICLE_COUNT]Particle;
-spark_state_gpu: Gpu_Ptr;
+spark_state: Gpu_View(Particle);
 
 surprise_vec2_normalize_or_zero :: (v: Vector2) -> Vector2 {
     len := length(v);
@@ -47,8 +46,8 @@ on_dll_init :: () {
 
     gpu_arena = gpu_make_arena(1024 * 1024 * 4, label = "surprise arena");
 
-    quad, quad_gpu := gpu_arena_alloc(*gpu_arena, [6] Vector2);
-    quad.* = .[
+    quad := gpu_alloc_view(*gpu_arena, Vector2, 6);
+    quad.cpu = .[
         .{-1.0, -1.0},
         .{+1.0, -1.0},
         .{+1.0, +1.0},
@@ -57,9 +56,7 @@ on_dll_init :: () {
         .{-1.0, +1.0},
     ];
 
-    sparks, sparks_gpu := gpu_arena_alloc(*gpu_arena, [PARTICLE_COUNT]Particle);
-    spark_state_cpu = sparks;
-    spark_state_gpu = sparks_gpu;
+    spark_state = gpu_alloc_view(*gpu_arena, Particle, PARTICLE_COUNT);
 
     for 0..PARTICLE_COUNT-1 {
         angle := random_get_within_range(0.0, 6.2831853);
@@ -67,7 +64,7 @@ on_dll_init :: () {
         pos := Vector2.{cos(angle) * radius, sin(angle) * radius};
         tangent := surprise_vec2_normalize_or_zero(.{-pos.y, pos.x});
         speed := random_get_within_range(0.0015, 0.007);
-        spark_state_cpu.*[it] = .{
+        spark_state.cpu[it] = .{
             pos = pos,
             vel = tangent * speed,
             hue = random_get_within_range(0.0, 1.0),
@@ -75,11 +72,11 @@ on_dll_init :: () {
         };
     }
 
-    param_block, vertex_params_gpu := gpu_arena_alloc(*gpu_arena, [2] Gpu_Ptr);
-    param_block.* = .[quad_gpu, spark_state_gpu];
+    param_block := gpu_alloc_view(*gpu_arena, Gpu_Ptr, 2);
+    param_block.cpu = .[quad.gpu, spark_state.gpu];
 
     draw_data = .{
-        vertex_params_gpu = vertex_params_gpu,
+        vertex_params_gpu = param_block.gpu,
         pixel_gpu = 0,
         num_vertices = 6,
         num_instances = PARTICLE_COUNT,
@@ -99,7 +96,7 @@ tick :: () {
     assert(result == .SUCCESS);
     result = gpu_set_pipeline(compute_cmd, compute_pipeline);
     assert(result == .SUCCESS, tprint("Surprise compute set pipeline failed: %", result));
-    gpu_dispatch(compute_cmd, spark_state_gpu, .[(PARTICLE_COUNT + 63) / 64, 1, 1]);
+    gpu_dispatch(compute_cmd, spark_state.gpu, .[(PARTICLE_COUNT + 63) / 64, 1, 1]);
     gpu_submit(compute_cmd);
     gpu_wait_idle();
 

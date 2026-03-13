@@ -15,8 +15,7 @@ graphics_pipeline: Gpu_Pipeline;
 compute_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 
-texture3d_params_cpu: *Texture3D_Params;
-texture3d_params_gpu: Gpu_Ptr;
+texture3d_params: Gpu_Buffer(Texture3D_Params);
 show_texture: bool = true;
 
 volume_texture: Gpu_Texture;
@@ -67,8 +66,8 @@ on_dll_init :: () {
     assert(volume_sampler != 0, "texture3d sampler creation failed.");
 
     gpu_arena = gpu_make_arena(64 * 1024, label = "texture3d arena");
-    texture3d_params_cpu, texture3d_params_gpu = gpu_arena_alloc(*gpu_arena, Texture3D_Params);
-    texture3d_params_cpu.* = .{
+    texture3d_params = gpu_alloc_buffer(*gpu_arena, Texture3D_Params);
+    texture3d_params.cpu.* = .{
         texture_index = cast(u32) volume_texture_view - 1,
         sampler_index = cast(u32) volume_sampler - 1,
         volume_size = TEXTURE3D_SIZE,
@@ -94,9 +93,9 @@ texture3d_ui :: () {
         Text("Volume: %^3 R32_SFLOAT", TEXTURE3D_SIZE);
         if Button("Rebuild Volume") volume_needs_init = true;
         Checkbox("Animate Volume", *texture3d_animate_volume);
-        SliderFloat("Density Scale", *texture3d_params_cpu.density_scale, 0.2, 4.0);
-        SliderFloat("Absorption", *texture3d_params_cpu.absorption, 0.5, 12.0);
-        SliderFloat("March Steps", *texture3d_params_cpu.march_steps, 24.0, 144.0);
+        SliderFloat("Density Scale", *texture3d_params.cpu.density_scale, 0.2, 4.0);
+        SliderFloat("Absorption", *texture3d_params.cpu.absorption, 0.5, 12.0);
+        SliderFloat("March Steps", *texture3d_params.cpu.march_steps, 24.0, 144.0);
     }
     End();
 }
@@ -110,14 +109,14 @@ tick :: () {
 
     _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
     if dims_ok && win_w > 0 && win_h > 0 {
-        texture3d_params_cpu.resolution = .{cast(float) win_w, cast(float) win_h};
+        texture3d_params.cpu.resolution = .{cast(float) win_w, cast(float) win_h};
     }
     if texture3d_animate_volume {
-        texture3d_params_cpu.time = cast(float) time;
-        texture3d_params_cpu.flags = 1;
+        texture3d_params.cpu.time = cast(float) time;
+        texture3d_params.cpu.flags = 1;
         volume_needs_init = true;
     } else {
-        texture3d_params_cpu.flags = 0;
+        texture3d_params.cpu.flags = 0;
     }
 
     main_queue := gpu_get_queue(.MAIN, 0);
@@ -128,7 +127,7 @@ tick :: () {
         compute_result := gpu_set_pipeline(cmd_buff, compute_pipeline);
         assert(compute_result == .SUCCESS, tprint("texture3d compute set pipeline failed: %", compute_result));
         groups_x := cast(u32) (TEXTURE3D_VOXEL_COUNT + 63) / 64;
-        gpu_dispatch_buffers(cmd_buff, .[texture3d_params_gpu], .[groups_x, 1, 1]);
+        gpu_dispatch_buffers(cmd_buff, .[texture3d_params.gpu], .[groups_x, 1, 1]);
         gpu_barrier(cmd_buff, .COMPUTE_SHADER, .PIXEL_SHADER);
         volume_needs_init = false;
     }
@@ -146,7 +145,7 @@ tick :: () {
         }, .COLOR_ATTACHMENT_WRITE, .COLOR_ATTACHMENT_WRITE);
         gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
         gpu_set_pipeline(cmd_buff, graphics_pipeline);
-        draw_result := gpu_draw_instanced(cmd_buff, 0, texture3d_params_gpu, 3, 1);
+        draw_result := gpu_draw_instanced(cmd_buff, 0, texture3d_params.gpu, 3, 1);
         assert(draw_result == .SUCCESS, tprint("texture3d draw failed: %", draw_result));
     }
 
