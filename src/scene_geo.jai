@@ -752,11 +752,9 @@ append_ai_mesh :: (
                 id := cast(s64) vertex_weight.mVertexId;
                 nth_bone := bone_vertex_counts[id];
                 bone_vertex_counts[id] += 1;
-                if nth_bone >= 4 continue;
 
                 vertex := *imported.vertices[base_vertex + id];
-                vertex.bone_indices.component[nth_bone] = cast(float) local_bone_index;
-                vertex.bone_weights.component[nth_bone] = vertex_weight.mWeight;
+                assign_top4_bone_weight(vertex, cast(float) local_bone_index, vertex_weight.mWeight, nth_bone);
             }
         }
 
@@ -787,6 +785,29 @@ append_ai_mesh :: (
         skin_bone_start = skin_bone_start,
         skin_bone_count = skin_bone_count,
     });
+}
+
+assign_top4_bone_weight :: (vertex: *Scene_Vertex, bone_index: float, weight: float, nth_bone: u32) {
+    if weight <= 0.0 return;
+
+    if nth_bone < 4 {
+        vertex.bone_indices.component[nth_bone] = bone_index;
+        vertex.bone_weights.component[nth_bone] = weight;
+        return;
+    }
+
+    lowest_slot: s64 = 0;
+    lowest_weight := vertex.bone_weights.component[0];
+    for i: 1..3 {
+        if vertex.bone_weights.component[i] < lowest_weight {
+            lowest_weight = vertex.bone_weights.component[i];
+            lowest_slot = i;
+        }
+    }
+
+    if weight <= lowest_weight return;
+    vertex.bone_indices.component[lowest_slot] = bone_index;
+    vertex.bone_weights.component[lowest_slot] = weight;
 }
 
 generate_missing_normals :: (vertices: []Scene_Vertex, indices: []u32, first_index: u32, index_count: u32) {

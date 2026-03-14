@@ -1,4 +1,7 @@
-SPAWN_SPHERES :: true;
+spawn_dynamic_spheres := true;
+include_static_test_box := true;
+floor_half_extents := Vector3.{15.0, 1.0, 15.0};
+floor_position := Vector3.{0.0, -1.0, 0.0};
 
 next_spawn_timer: float;
 
@@ -24,12 +27,14 @@ random_sphere :: () -> pos: Vec3, radius: float {
 
 update_test_environment :: (dt: float) {
     using physics;
-    #if SPAWN_SPHERES {
+    if spawn_dynamic_spheres {
         next_spawn_timer -= dt;
         if next_spawn_timer <= 0.0 {
             next_spawn_timer += 3.0;
             spawn_sphere();
         }
+    } else {
+        next_spawn_timer = 0.0;
     }
 }
 
@@ -50,15 +55,15 @@ init_test_environment :: () {
 
     floorId: BodyID;
     {
-        boxHalfExtents := Vec3.{15.0, 1.0, 15.0};
+        boxHalfExtents := cast,force(Vec3) floor_half_extents;
         shape := BoxShape_Create(*boxHalfExtents, JPH_DEFAULT_CONVEX_RADIUS);
-        pos := Vec3.{0.0, -1.0, 0.0};
+        pos := cast,force(Vec3) floor_position;
         s := BodyCreationSettings_Create3(shape, *pos, null /*identity*/, .Static, Layers.NON_MOVING);
         defer BodyCreationSettings_Destroy(s);
         floorId = BodyInterface_CreateAndAddBody(body_interface, s, .DontActivate);
     }
 
-    {
+    if include_static_test_box {
         boxHalfExtents := Vec3.{1.0, 1.0, 1.0};
         shape := BoxShape_Create(*boxHalfExtents, JPH_DEFAULT_CONVEX_RADIUS);
         pos := Vec3.{3.0, 1.0, -2.0};
@@ -69,7 +74,7 @@ init_test_environment :: () {
 
     // create many spheres
     array_reset(*world.spheres);
-    #if SPAWN_SPHERES {
+    if spawn_dynamic_spheres {
         for 0..30 {
             spherePosition, radius := random_sphere();
             sphereShape := SphereShape_Create(radius);
@@ -84,6 +89,18 @@ init_test_environment :: () {
     }
 
     PhysicsSystem_OptimizeBroadPhase(system);
+}
+
+configure_test_environment :: (
+    spawn_spheres: bool = true,
+    include_static_box: bool = true,
+    floor_half_extent: Vector3 = .{15.0, 1.0, 15.0},
+    floor_center: Vector3 = .{0.0, -1.0, 0.0},
+) {
+    spawn_dynamic_spheres = spawn_spheres;
+    include_static_test_box = include_static_box;
+    floor_half_extents = floor_half_extent;
+    floor_position = floor_center;
 }
 
 #scope_file

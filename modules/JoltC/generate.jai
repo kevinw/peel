@@ -77,7 +77,7 @@ CMAKE_BUILD_TYPE :: "Release"; // TODO: Maybe build both and make it a module pa
         tprint("% :: struct { #as _base: %; }", it.class_name, it.base_class_name),
     });
 
-    // @Perf Slow, bad
+    // @Perf Slow, bad - let's not do dumb string replace--let's improve the Bindings_Generator
     if !replace_texts_in_file(result.generated_bindings_filename, ..text_replacements) {
         fail_and_exit("ERROR: expected exactly one replacement for each subtype string hack");
     }

@@ -89,20 +89,22 @@ scene_anim_sample :: (state: *Scene_Anim_State, geo: *Scene_Geo, clip_index: s32
     }
 }
 
-scene_anim_write_skin_matrices :: (dst: []Vector4, geo: *Scene_Geo, state: *Scene_Anim_State, mesh: Scene_Mesh) -> s64 {
+scene_anim_write_skin_matrices :: (dst: []Vector4, geo: *Scene_Geo, state: *Scene_Anim_State, mesh: Scene_Mesh, mesh_node_index: s32) -> s64 {
     assert(state.model_index >= 0 && state.model_index < geo.models.count);
     model := geo.models[state.model_index];
     if mesh.skin_bone_count == 0 return 0;
     assert(dst.count >= mesh.skin_bone_count * 4);
 
-    inverse_ok, inv_root_bind := inverse(geo.nodes[model.root_node_index].world);
-    assert(inverse_ok, "Failed to invert root bind transform for animated model '%'.", model.name);
+    mesh_local_index := mesh_node_index - cast(s32) model.node_start;
+    assert(mesh_local_index >= 0 && mesh_local_index < state.worlds.count);
+    inverse_ok, inv_mesh_transform := inverse(state.worlds[mesh_local_index]);
+    assert(inverse_ok, "Failed to invert current mesh transform for animated model '%'.", model.name);
 
     for i: 0..mesh.skin_bone_count-1 {
         skin_bone := geo.mesh_skin_bones[mesh.skin_bone_start + i];
         local_index := skin_bone.node_index - cast(s32) model.node_start;
         assert(local_index >= 0 && local_index < state.worlds.count);
-        skin_matrix := inv_root_bind * state.worlds[local_index] * skin_bone.inverse_bind;
+        skin_matrix := inv_mesh_transform * state.worlds[local_index] * skin_bone.inverse_bind;
         row_start := cast(s64) i * 4;
         dst[row_start + 0] = skin_matrix.v[0];
         dst[row_start + 1] = skin_matrix.v[1];

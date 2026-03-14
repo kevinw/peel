@@ -8,6 +8,8 @@ Opioniated and simplified Jai bindings gen for C/C++ projects which use CMake or
 
 option_skip_download_if_already_unzipped := true; // TODO
 
+BUILD_CPP_SRC_DIR_SENTINEL :: "<<build_cpp_src_dir>>";
+
 Project_Options :: struct {
     project_name: string;
 
@@ -137,15 +139,30 @@ build_and_generate_bindings :: (using project_opts: Project_Options, build_opts:
     if !build_opts.skip_build {
         if build_opts.build_cpp.files.count > 0 {
             // Build C++ files
-            log("Building C++ files...");
             push_working_directory(absolute_build_dir);
+            log("Building C++ files... (cwd is %)", get_working_directory());
             abs_files: [..]string;
-            for build_opts.build_cpp.files array_add(*abs_files, tprint("%/%", absolute_source_dir, it));
+            for build_opts.build_cpp.files {
+                source_file := it;
+                if !file_exists(source_file) {
+                    // TODO: files could come with an enum indicating if they are src-build local or jai-generate local.
+                    // for now we just check if the given file exists, and if not, we assume the caller
+                    // meant "relative to srcbuild"
+                    source_file = path_join(absolute_source_dir, source_file,, temp);
+                }
+                array_add(*abs_files, source_file);
+            }
+
+            extra: [..]string;
+            for build_opts.build_cpp.extra {
+                array_add(*extra, replace(it, BUILD_CPP_SRC_DIR_SENTINEL, absolute_source_dir));
+            }
+
             if !build_cpp(output_basename = tprint("lib%", project_name),
                           files = ..abs_files,
                           type = build_opts.build_cpp.build_type,
                           debug = false,
-                          extra = build_opts.build_cpp.extra
+                          extra = extra
             ) {
                 fail_and_exit("Failed to buildcpp");
             }
