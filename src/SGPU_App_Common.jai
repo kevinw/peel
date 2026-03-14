@@ -437,7 +437,7 @@ host_init :: (init_ctx: Init_Ctx) -> bool {
         }
     }
 
-    if !init_ctx.keep_window_device_and_sdl {
+    if !init_ctx.keep_window_device_and_sdl && !doing_peel_diagnostic() {
         wait_for_initial_focus_before_dll_init();
     }
 

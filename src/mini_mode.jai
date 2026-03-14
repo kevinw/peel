@@ -89,6 +89,7 @@ mini_mode_note_window_occluded :: (occluded: bool) {
         #if !MINI_MODE_ENABLED return;
         if !window return;
         if app_mini_mode_active return;
+        if doing_peel_diagnostic() return;
 
         ns_window := cast(*NSWindow) window;
         saved_window.frame = NSWindow.frame(ns_window);
@@ -120,6 +121,7 @@ mini_mode_note_window_occluded :: (occluded: bool) {
 
     mini_mode_tick :: () {
         if frame_countdown <= 0 return;
+        if doing_peel_diagnostic() return;
 
         frame_countdown -= 1;
         if frame_countdown == 0 {
@@ -159,13 +161,13 @@ Input :: #import "Input";
 
 mini_mode_allowed_now :: () -> bool {
     if snapshot.enabled return false;
+    if doing_peel_diagnostic() return false;
 
     #if READBACK_ENABLED {
         if readback_stats_needs_swapchain_readback(*readback_stats) return false;
     }
 
-    if window_snapshot_mode return false;
-    if window_validate_mode return false;
+    if doing_peel_diagnostic() return false;
 
     return true;
 }

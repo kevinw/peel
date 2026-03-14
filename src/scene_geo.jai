@@ -1,6 +1,8 @@
 Scene_Vertex :: struct {
     position: Vector4;
     normal: Vector4;
+    bone_indices: Vector4;
+    bone_weights: Vector4;
     uv: Vector2;
     _pad0: Vector2;
 }
@@ -17,6 +19,8 @@ Scene_Mesh :: struct {
     first_index: u32;
     index_count: u32;
     material_index: u32;
+    skin_bone_start: u32;
+    skin_bone_count: u32;
     _pad0: u32;
 }
 
@@ -41,11 +45,59 @@ Scene_Model :: struct {
     node_count: u32;
     mesh_start: u32;
     mesh_count: u32;
+    anim_clip_start: u32;
+    anim_clip_count: u32;
 }
 
 Scene_Bounds :: struct {
     min: Vector3;
     max: Vector3;
+}
+
+Scene_Node_Transform :: struct {
+    translation: Vector3;
+    rotation: Quaternion;
+    scale: Vector3;
+}
+
+Scene_Mesh_Skin_Bone :: struct {
+    node_index: s32;
+    _pad0: s32;
+    inverse_bind: Matrix4;
+}
+
+Scene_Anim_Position_Key :: struct {
+    time: float;
+    value: Vector3;
+}
+
+Scene_Anim_Rotation_Key :: struct {
+    time: float;
+    value: Quaternion;
+}
+
+Scene_Anim_Scale_Key :: struct {
+    time: float;
+    value: Vector3;
+}
+
+Scene_Anim_Channel :: struct {
+    node_index: s32;
+    _pad0: s32;
+    position_key_start: u32;
+    position_key_count: u32;
+    rotation_key_start: u32;
+    rotation_key_count: u32;
+    scale_key_start: u32;
+    scale_key_count: u32;
+}
+
+Scene_Anim_Clip :: struct {
+    name: string;
+    duration: float;
+    ticks_per_second: float;
+    channel_start: u32;
+    channel_count: u32;
 }
 
 Imported_Texture :: struct {
@@ -62,7 +114,14 @@ Imported_Scene :: struct {
     textures: [..]Imported_Texture;
     meshes: [..]Scene_Mesh;
     nodes: [..]Scene_Node;
+    node_bind_transforms: [..]Scene_Node_Transform;
     node_mesh_refs: [..]u32;
+    mesh_skin_bones: [..]Scene_Mesh_Skin_Bone;
+    anim_position_keys: [..]Scene_Anim_Position_Key;
+    anim_rotation_keys: [..]Scene_Anim_Rotation_Key;
+    anim_scale_keys: [..]Scene_Anim_Scale_Key;
+    anim_channels: [..]Scene_Anim_Channel;
+    anim_clips: [..]Scene_Anim_Clip;
     models: [..]Scene_Model;
 }
 
@@ -79,7 +138,14 @@ Scene_Geo :: struct {
 
     meshes: [..]Scene_Mesh;
     nodes: [..]Scene_Node;
+    node_bind_transforms: [..]Scene_Node_Transform;
     node_mesh_refs: [..]u32;
+    mesh_skin_bones: [..]Scene_Mesh_Skin_Bone;
+    anim_position_keys: [..]Scene_Anim_Position_Key;
+    anim_rotation_keys: [..]Scene_Anim_Rotation_Key;
+    anim_scale_keys: [..]Scene_Anim_Scale_Key;
+    anim_channels: [..]Scene_Anim_Channel;
+    anim_clips: [..]Scene_Anim_Clip;
     models: [..]Scene_Model;
 }
 
@@ -96,7 +162,14 @@ scene_geo_init_from_imported :: (geo: *Scene_Geo, imported: *Imported_Scene) {
     geo.texture_keys.allocator = context.allocator;
     geo.meshes.allocator = context.allocator;
     geo.nodes.allocator = context.allocator;
+    geo.node_bind_transforms.allocator = context.allocator;
     geo.node_mesh_refs.allocator = context.allocator;
+    geo.mesh_skin_bones.allocator = context.allocator;
+    geo.anim_position_keys.allocator = context.allocator;
+    geo.anim_rotation_keys.allocator = context.allocator;
+    geo.anim_scale_keys.allocator = context.allocator;
+    geo.anim_channels.allocator = context.allocator;
+    geo.anim_clips.allocator = context.allocator;
     geo.models.allocator = context.allocator;
 
     for it: imported.textures {
@@ -148,7 +221,22 @@ scene_geo_init_from_imported :: (geo: *Scene_Geo, imported: *Imported_Scene) {
 
     array_copy(*geo.meshes, imported.meshes);
     array_copy(*geo.nodes, imported.nodes);
+    array_copy(*geo.node_bind_transforms, imported.node_bind_transforms);
     array_copy(*geo.node_mesh_refs, imported.node_mesh_refs);
+    array_copy(*geo.mesh_skin_bones, imported.mesh_skin_bones);
+    array_copy(*geo.anim_position_keys, imported.anim_position_keys);
+    array_copy(*geo.anim_rotation_keys, imported.anim_rotation_keys);
+    array_copy(*geo.anim_scale_keys, imported.anim_scale_keys);
+    array_copy(*geo.anim_channels, imported.anim_channels);
+    for it: imported.anim_clips {
+        array_add(*geo.anim_clips, .{
+            name = copy_string(it.name),
+            duration = it.duration,
+            ticks_per_second = it.ticks_per_second,
+            channel_start = it.channel_start,
+            channel_count = it.channel_count,
+        });
+    }
     for it: imported.models {
         array_add(*geo.models, .{
             name = copy_string(it.name),
@@ -157,6 +245,8 @@ scene_geo_init_from_imported :: (geo: *Scene_Geo, imported: *Imported_Scene) {
             node_count = it.node_count,
             mesh_start = it.mesh_start,
             mesh_count = it.mesh_count,
+            anim_clip_start = it.anim_clip_start,
+            anim_clip_count = it.anim_clip_count,
         });
     }
 
@@ -167,7 +257,15 @@ scene_geo_deinit :: (geo: *Scene_Geo) {
     for geo.texture_keys if it.count != 0 free(it);
     array_free(geo.texture_keys);
     for geo.models if it.name.count != 0 free(it.name);
+    for geo.anim_clips if it.name.count != 0 free(it.name);
+    array_free(geo.anim_clips);
+    array_free(geo.anim_channels);
+    array_free(geo.anim_scale_keys);
+    array_free(geo.anim_rotation_keys);
+    array_free(geo.anim_position_keys);
+    array_free(geo.mesh_skin_bones);
     array_free(geo.models);
+    array_free(geo.node_bind_transforms);
     array_free(geo.nodes);
     array_free(geo.node_mesh_refs);
     array_free(geo.meshes);
@@ -185,6 +283,16 @@ scene_geo_deinit :: (geo: *Scene_Geo) {
 
 scene_geo_model_index_by_name :: (geo: *Scene_Geo, name: string) -> s32 {
     for geo.models if it.name == name return cast(s32) it_index;
+    return -1;
+}
+
+scene_geo_model_clip_index_by_name :: (geo: *Scene_Geo, model_index: s32, name: string) -> s32 {
+    assert(model_index >= 0 && model_index < geo.models.count, "Invalid Scene_Geo model index %", model_index);
+    model := geo.models[model_index];
+    if model.anim_clip_count == 0 return -1;
+    for clip_index: model.anim_clip_start .. model.anim_clip_start + model.anim_clip_count - 1 {
+        if geo.anim_clips[clip_index].name == name return cast(s32) clip_index;
+    }
     return -1;
 }
 
@@ -266,7 +374,15 @@ imported_scene_deinit :: (scene: *Imported_Scene) {
     array_free(scene.textures);
     array_free(scene.meshes);
     array_free(scene.nodes);
+    array_free(scene.node_bind_transforms);
     array_free(scene.node_mesh_refs);
+    array_free(scene.mesh_skin_bones);
+    array_free(scene.anim_position_keys);
+    array_free(scene.anim_rotation_keys);
+    array_free(scene.anim_scale_keys);
+    array_free(scene.anim_channels);
+    for it: scene.anim_clips if it.name.count != 0 free(it.name);
+    array_free(scene.anim_clips);
     for it: scene.models if it.name.count != 0 free(it.name);
     array_free(scene.models);
     scene.* = .{};
@@ -297,7 +413,9 @@ imported_scene_load_cached :: (scene: *Imported_Scene, model_paths: []string) {
 
 #scope_file
 
-IMPORTED_SCENE_CACHE_VERSION : u32 : 1;
+Hash_Table :: #import "Hash_Table";
+using,only(Table, table_find, table_reset, table_set) _ :: Hash_Table;
+IMPORTED_SCENE_CACHE_VERSION : u32 : 2;
 IMPORTED_SCENE_CACHE_MAGIC : u32 : 0x53474d44; // SGMD
 
 imported_scene_cache_path :: (model_paths: []string) -> string {
@@ -322,7 +440,13 @@ imported_scene_serialize :: (builder: *[..]u8, scene: Imported_Scene) -> bool {
     cache_put_array(builder, scene.materials);
     cache_put_array(builder, scene.meshes);
     cache_put_array(builder, scene.nodes);
+    cache_put_array(builder, scene.node_bind_transforms);
     cache_put_array(builder, scene.node_mesh_refs);
+    cache_put_array(builder, scene.mesh_skin_bones);
+    cache_put_array(builder, scene.anim_position_keys);
+    cache_put_array(builder, scene.anim_rotation_keys);
+    cache_put_array(builder, scene.anim_scale_keys);
+    cache_put_array(builder, scene.anim_channels);
 
     cache_put(builder, cast(u32) scene.textures.count);
     for scene.textures {
@@ -341,6 +465,17 @@ imported_scene_serialize :: (builder: *[..]u8, scene: Imported_Scene) -> bool {
         cache_put(builder, it.node_count);
         cache_put(builder, it.mesh_start);
         cache_put(builder, it.mesh_count);
+        cache_put(builder, it.anim_clip_start);
+        cache_put(builder, it.anim_clip_count);
+    }
+
+    cache_put(builder, cast(u32) scene.anim_clips.count);
+    for scene.anim_clips {
+        cache_put_string(builder, it.name);
+        cache_put(builder, it.duration);
+        cache_put(builder, it.ticks_per_second);
+        cache_put(builder, it.channel_start);
+        cache_put(builder, it.channel_count);
     }
     return true;
 }
@@ -358,7 +493,13 @@ imported_scene_deserialize :: (scene: *Imported_Scene, source_in: string) -> boo
     if !cache_get_array(*source, *scene.materials) return false, false;
     if !cache_get_array(*source, *scene.meshes) return false, false;
     if !cache_get_array(*source, *scene.nodes) return false, false;
+    if !cache_get_array(*source, *scene.node_bind_transforms) return false, false;
     if !cache_get_array(*source, *scene.node_mesh_refs) return false, false;
+    if !cache_get_array(*source, *scene.mesh_skin_bones) return false, false;
+    if !cache_get_array(*source, *scene.anim_position_keys) return false, false;
+    if !cache_get_array(*source, *scene.anim_rotation_keys) return false, false;
+    if !cache_get_array(*source, *scene.anim_scale_keys) return false, false;
+    if !cache_get_array(*source, *scene.anim_channels) return false, false;
 
     texture_count: u32;
     if !cache_get(*source, *texture_count) return false, false;
@@ -383,7 +524,21 @@ imported_scene_deserialize :: (scene: *Imported_Scene, source_in: string) -> boo
         if !cache_get(*source, *model.node_count) return false, false;
         if !cache_get(*source, *model.mesh_start) return false, false;
         if !cache_get(*source, *model.mesh_count) return false, false;
+        if !cache_get(*source, *model.anim_clip_start) return false, false;
+        if !cache_get(*source, *model.anim_clip_count) return false, false;
         array_add(*scene.models, model);
+    }
+
+    clip_count: u32;
+    if !cache_get(*source, *clip_count) return false, false;
+    for 0..cast(s64) clip_count-1 {
+        clip: Scene_Anim_Clip;
+        if !cache_get_string(*source, *clip.name) return false, false;
+        if !cache_get(*source, *clip.duration) return false, false;
+        if !cache_get(*source, *clip.ticks_per_second) return false, false;
+        if !cache_get(*source, *clip.channel_start) return false, false;
+        if !cache_get(*source, *clip.channel_count) return false, false;
+        array_add(*scene.anim_clips, clip);
     }
 
     return true, source.count == 0;
@@ -500,6 +655,9 @@ load_model_into_imported_scene :: (imported: *Imported_Scene, path: string) {
     mesh_start := cast(u32) imported.meshes.count;
     node_start := cast(u32) imported.nodes.count;
     material_start := cast(u32) imported.materials.count;
+    anim_clip_start := cast(u32) imported.anim_clips.count;
+    node_name_to_index: Table(string, s32);
+    defer Hash_Table.deinit(*node_name_to_index);
 
     scene_materials: []*ai.Material = .{ scene.mNumMaterials, scene.mMaterials };
     for scene_materials {
@@ -510,13 +668,17 @@ load_model_into_imported_scene :: (imported: *Imported_Scene, path: string) {
         });
     }
 
+    root_node_index := append_ai_node_recursive(imported, scene, scene.mRootNode, -1, mesh_start, *node_name_to_index);
+    compute_world_matrices(imported.nodes, node_start, cast(u32) imported.nodes.count - node_start);
+
     scene_meshes := ai.meshes(scene);
     for scene_meshes {
-        append_ai_mesh(imported, it, material_start);
+        append_ai_mesh(imported, it, material_start, *node_name_to_index);
     }
 
-    root_node_index := append_ai_node_recursive(imported, scene, scene.mRootNode, -1, mesh_start);
-    compute_world_matrices(imported.nodes, node_start, cast(u32) imported.nodes.count - node_start);
+    for anim, anim_index: ai.animations(scene) {
+        append_ai_animation(imported, anim, *node_name_to_index, model_name, cast(s32) anim_index);
+    }
 
     array_add(*imported.models, .{
         name = copy_string(model_name),
@@ -525,6 +687,8 @@ load_model_into_imported_scene :: (imported: *Imported_Scene, path: string) {
         node_count = cast(u32) imported.nodes.count - node_start,
         mesh_start = mesh_start,
         mesh_count = scene.mNumMeshes,
+        anim_clip_start = anim_clip_start,
+        anim_clip_count = cast(u32) imported.anim_clips.count - anim_clip_start,
     });
 }
 
@@ -532,6 +696,7 @@ append_ai_mesh :: (
     imported: *Imported_Scene,
     mesh: *ai.Mesh,
     material_base: u32,
+    node_name_to_index: *Table(string, s32),
 ) {
     base_vertex := cast(u32) imported.vertices.count;
     num_vertices := cast(s64) mesh.mNumVertices;
@@ -540,7 +705,7 @@ append_ai_mesh :: (
     tex_coords := mesh.mTextureCoords[0];
 
     for 0..num_vertices-1 {
-        pos := cast(Vector3) mesh.mVertices[it];
+        pos := cast,force(Vector3) mesh.mVertices[it];
         normal := Vector3.{0.0, 1.0, 0.0};
         if normals != null normal = normals[it];
 
@@ -566,6 +731,46 @@ append_ai_mesh :: (
             base_vertex + face.mIndices[2]);
     }
 
+    skin_bone_start := cast(u32) imported.mesh_skin_bones.count;
+    skin_bone_count: u32 = 0;
+    if mesh.mNumBones > 0 {
+        bone_vertex_counts := NewArray(num_vertices, u32);
+        defer array_free(bone_vertex_counts);
+
+        for bone: ai.bones(mesh) {
+            found, node_index := table_find(node_name_to_index, ai.to_string(bone.mName));
+            assert(found, "Bone node '%' not found in imported node table.", ai.to_string(bone.mName));
+
+            local_bone_index := skin_bone_count;
+            skin_bone_count += 1;
+            array_add(*imported.mesh_skin_bones, .{
+                node_index = node_index,
+                inverse_bind = cast,force(Matrix4) bone.mOffsetMatrix,
+            });
+
+            for vertex_weight: ai.weights(bone) {
+                id := cast(s64) vertex_weight.mVertexId;
+                nth_bone := bone_vertex_counts[id];
+                bone_vertex_counts[id] += 1;
+                if nth_bone >= 4 continue;
+
+                vertex := *imported.vertices[base_vertex + id];
+                vertex.bone_indices.component[nth_bone] = cast(float) local_bone_index;
+                vertex.bone_weights.component[nth_bone] = vertex_weight.mWeight;
+            }
+        }
+
+        for vertex_offset: 0..num_vertices-1 {
+            vertex := *imported.vertices[base_vertex + vertex_offset];
+            weight_sum: float = 0.0;
+            for i: 0..3 weight_sum += vertex.bone_weights.component[i];
+            if weight_sum > 0.0 {
+                inv_sum := 1.0 / weight_sum;
+                for i: 0..3 vertex.bone_weights.component[i] *= inv_sum;
+            }
+        }
+    }
+
     if normals == null {
         generate_missing_normals(imported.vertices, imported.indices, first_index, cast(u32) imported.indices.count - first_index);
     }
@@ -579,6 +784,8 @@ append_ai_mesh :: (
         first_index = first_index,
         index_count = cast(u32) imported.indices.count - first_index,
         material_index = material_index,
+        skin_bone_start = skin_bone_start,
+        skin_bone_count = skin_bone_count,
     });
 }
 
@@ -618,8 +825,15 @@ append_ai_node_recursive :: (
     ai_node: *ai.Node,
     parent_index: s32,
     mesh_base: u32,
+    node_name_to_index: *Table(string, s32),
 ) -> s32 {
     node_index := cast(s32) imported.nodes.count;
+
+    bind_scale: ai.Vector3D;
+    bind_rotation: ai.Quaternion;
+    bind_translation: ai.Vector3D;
+    ai.DecomposeMatrix(*ai_node.mTransformation, *bind_scale, *bind_rotation, *bind_translation);
+
     array_add(*imported.nodes, .{
         parent_index = parent_index,
         first_child_index = -1,
@@ -629,6 +843,12 @@ append_ai_node_recursive :: (
         local = cast,force(Matrix4) ai_node.mTransformation,
         world = Matrix4_Identity,
     });
+    array_add(*imported.node_bind_transforms, .{
+        translation = .{bind_translation.x, bind_translation.y, bind_translation.z},
+        rotation = .{bind_rotation.x, bind_rotation.y, bind_rotation.z, bind_rotation.w},
+        scale = .{bind_scale.x, bind_scale.y, bind_scale.z},
+    });
+    table_set(node_name_to_index, ai.to_string(ai_node.mName), node_index);
 
     for mesh_index: ai.mesh_indices(ai_node) {
         array_add(*imported.node_mesh_refs, mesh_base + mesh_index);
@@ -636,7 +856,7 @@ append_ai_node_recursive :: (
 
     prev_child := -1;
     for child: ai.children(ai_node) {
-        child_index := append_ai_node_recursive(imported, scene, child, node_index, mesh_base);
+        child_index := append_ai_node_recursive(imported, scene, child, node_index, mesh_base, node_name_to_index);
         if prev_child == -1 {
             imported.nodes[node_index].first_child_index = child_index;
         } else {
@@ -646,6 +866,61 @@ append_ai_node_recursive :: (
     }
 
     return node_index;
+}
+
+append_ai_animation :: (imported: *Imported_Scene, anim: *ai.Animation, node_name_to_index: *Table(string, s32), model_name: string, anim_index: s32) {
+    clip_name := ai.to_string(anim.mName);
+    if clip_name.count == 0 clip_name = tprint("%_anim_%", model_name, anim_index);
+
+    clip: Scene_Anim_Clip;
+    clip.name = copy_string(clip_name);
+    clip.duration = cast(float) anim.mDuration;
+    clip.ticks_per_second = ifx anim.mTicksPerSecond != 0 then cast(float) anim.mTicksPerSecond else 25.0;
+    clip.channel_start = cast(u32) imported.anim_channels.count;
+
+    for channel: ai.channels(anim) {
+        node_name := ai.to_string(channel.mNodeName);
+        found, node_index := table_find(node_name_to_index, node_name);
+        if !found continue;
+
+        entry: Scene_Anim_Channel;
+        entry.node_index = node_index;
+        entry.position_key_start = cast(u32) imported.anim_position_keys.count;
+        entry.rotation_key_start = cast(u32) imported.anim_rotation_keys.count;
+        entry.scale_key_start = cast(u32) imported.anim_scale_keys.count;
+
+        for i: 0..cast(s64) channel.mNumPositionKeys-1 {
+            key := channel.mPositionKeys[i];
+            array_add(*imported.anim_position_keys, .{
+                time = cast(float) key.mTime,
+                value = .{key.mValue.x, key.mValue.y, key.mValue.z},
+            });
+        }
+        entry.position_key_count = cast(u32) imported.anim_position_keys.count - entry.position_key_start;
+
+        for i: 0..cast(s64) channel.mNumRotationKeys-1 {
+            key := channel.mRotationKeys[i];
+            array_add(*imported.anim_rotation_keys, .{
+                time = cast(float) key.mTime,
+                value = .{key.mValue.x, key.mValue.y, key.mValue.z, key.mValue.w},
+            });
+        }
+        entry.rotation_key_count = cast(u32) imported.anim_rotation_keys.count - entry.rotation_key_start;
+
+        for i: 0..cast(s64) channel.mNumScalingKeys-1 {
+            key := channel.mScalingKeys[i];
+            array_add(*imported.anim_scale_keys, .{
+                time = cast(float) key.mTime,
+                value = .{key.mValue.x, key.mValue.y, key.mValue.z},
+            });
+        }
+        entry.scale_key_count = cast(u32) imported.anim_scale_keys.count - entry.scale_key_start;
+
+        array_add(*imported.anim_channels, entry);
+    }
+
+    clip.channel_count = cast(u32) imported.anim_channels.count - clip.channel_start;
+    array_add(*imported.anim_clips, clip);
 }
 
 compute_world_matrices :: (nodes: []Scene_Node, node_start: u32, node_count: u32) {
