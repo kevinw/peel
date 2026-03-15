@@ -1,6 +1,9 @@
+SCENE_INVALID_TEXTURE_INDEX :: ~cast(u32) 0;
+
 Scene_Vertex :: struct {
     position: Vector4;
     normal: Vector4;
+    tangent: Vector4;
     bone_indices: Vector4;
     bone_weights: Vector4;
     uv: Vector2;
@@ -10,9 +13,13 @@ Scene_Vertex :: struct {
 Scene_Material :: struct {
     base_color_factor: Vector4;
     base_color_texture_index: u32;
+    normal_texture_index: u32;
+    roughness_texture_index: u32;
+    ao_texture_index: u32;
+    address_mode_u: u32;
+    address_mode_v: u32;
+    sampler_index: u32;
     _pad0: u32;
-    _pad1: u32;
-    _pad2: u32;
 }
 
 Scene_Mesh :: struct {
@@ -52,6 +59,12 @@ Scene_Model :: struct {
 Scene_Bounds :: struct {
     min: Vector3;
     max: Vector3;
+}
+
+Scene_Sampler_Binding :: struct {
+    sampler: Gpu_Sampler;
+    mode_u: u32;
+    mode_v: u32;
 }
 
 Scene_Node_Transform :: struct {
@@ -134,7 +147,7 @@ Scene_Geo :: struct {
     textures: [..]Gpu_Texture;
     texture_views: [..]Gpu_Texture_View;
     texture_keys: [..]string;
-    sampler: Gpu_Sampler;
+    samplers: [..]Scene_Sampler_Binding;
 
     meshes: [..]Scene_Mesh;
     nodes: [..]Scene_Node;
@@ -160,6 +173,7 @@ scene_geo_init_from_imported :: (geo: *Scene_Geo, imported: *Imported_Scene) {
     geo.textures.allocator = context.allocator;
     geo.texture_views.allocator = context.allocator;
     geo.texture_keys.allocator = context.allocator;
+    geo.samplers.allocator = context.allocator;
     geo.meshes.allocator = context.allocator;
     geo.nodes.allocator = context.allocator;
     geo.node_bind_transforms.allocator = context.allocator;
@@ -173,23 +187,14 @@ scene_geo_init_from_imported :: (geo: *Scene_Geo, imported: *Imported_Scene) {
     geo.models.allocator = context.allocator;
 
     for it: imported.textures {
+        assert(it.width > 0 && it.height > 0 && it.pixels.count >= cast(s64) it.width * cast(s64) it.height * 4,
+            "Imported texture invalid: key=% width=% height=% pixels=%.",
+            it.key, it.width, it.height, it.pixels.count);
         texture, view := create_texture_from_rgba8(it.pixels, it.width, it.height);
         array_add(*geo.textures, texture);
         array_add(*geo.texture_views, view);
         array_add(*geo.texture_keys, copy_string(it.key));
     }
-
-    geo.sampler = gpu_create_sampler(.{
-        min_filter = .LINEAR,
-        mag_filter = .LINEAR,
-        mip_filter = .NEAREST,
-        min_lod = 0.0,
-        max_lod = 0.0,
-        address_mode_u = .REPEAT,
-        address_mode_v = .REPEAT,
-        address_mode_w = .REPEAT,
-    });
-    assert(geo.sampler != 0, "Scene_Geo sampler creation failed.");
 
     total_bytes :=
         imported.vertices.count * size_of(Scene_Vertex) +
@@ -215,6 +220,22 @@ scene_geo_init_from_imported :: (geo: *Scene_Geo, imported: *Imported_Scene) {
             material := it;
             assert(material.base_color_texture_index < geo.texture_views.count, "Imported texture index % out of range %.", material.base_color_texture_index, geo.texture_views.count);
             material.base_color_texture_index = cast(u32) geo.texture_views[material.base_color_texture_index] - 1;
+            if material.normal_texture_index != SCENE_INVALID_TEXTURE_INDEX {
+                assert(material.normal_texture_index < geo.texture_views.count, "Imported normal texture index % out of range %.", material.normal_texture_index, geo.texture_views.count);
+                material.normal_texture_index = cast(u32) geo.texture_views[material.normal_texture_index] - 1;
+            }
+            if material.roughness_texture_index != SCENE_INVALID_TEXTURE_INDEX {
+                assert(material.roughness_texture_index < geo.texture_views.count, "Imported roughness texture index % out of range %.", material.roughness_texture_index, geo.texture_views.count);
+                material.roughness_texture_index = cast(u32) geo.texture_views[material.roughness_texture_index] - 1;
+            }
+            if material.ao_texture_index != SCENE_INVALID_TEXTURE_INDEX {
+                assert(material.ao_texture_index < geo.texture_views.count, "Imported AO texture index % out of range %.", material.ao_texture_index, geo.texture_views.count);
+                material.ao_texture_index = cast(u32) geo.texture_views[material.ao_texture_index] - 1;
+            }
+            sampler := scene_geo_get_or_create_sampler(geo,
+                address_mode_from_assimp(cast(ai.TextureMapMode) material.address_mode_u),
+                address_mode_from_assimp(cast(ai.TextureMapMode) material.address_mode_v));
+            material.sampler_index = cast(u32) sampler - 1;
             geo.materials.cpu[it_index] = material;
         }
     }
@@ -275,8 +296,8 @@ scene_geo_deinit :: (geo: *Scene_Geo) {
     }
     array_free(geo.textures);
     array_free(geo.texture_views);
-
-    if geo.sampler != 0 gpu_free(geo.sampler);
+    for geo.samplers if it.sampler != 0 gpu_free(it.sampler);
+    array_free(geo.samplers);
     if geo.arena.cpu != null gpu_free_arena(geo.arena);
     geo.* = .{};
 }
@@ -415,7 +436,7 @@ imported_scene_load_cached :: (scene: *Imported_Scene, model_paths: []string) {
 
 Hash_Table :: #import "Hash_Table";
 using,only(Table, table_find, table_reset, table_set) _ :: Hash_Table;
-IMPORTED_SCENE_CACHE_VERSION : u32 : 2;
+IMPORTED_SCENE_CACHE_VERSION : u32 : 9;
 IMPORTED_SCENE_CACHE_MAGIC : u32 : 0x53474d44; // SGMD
 
 imported_scene_cache_path :: (model_paths: []string) -> string {
@@ -636,12 +657,14 @@ cache_get_string :: (source: *string, out: *string) -> bool {
 
 Texture_Load_Result :: struct {
     texture_index: u32;
+    map_mode_u: ai.TextureMapMode;
+    map_mode_v: ai.TextureMapMode;
 }
 
 load_model_into_imported_scene :: (imported: *Imported_Scene, path: string) {
     load_flags: ai.PostProcessSteps :
           .Triangulate | .JoinIdenticalVertices | .ImproveCacheLocality | .OptimizeMeshes
-        | .GenUVCoords | .FindInvalidData | .FindDegenerates | .RemoveRedundantMaterials
+        | .GenUVCoords | .CalcTangentSpace | .FindInvalidData | .FindDegenerates | .RemoveRedundantMaterials
         | .FlipUVs
     ;
 
@@ -661,10 +684,22 @@ load_model_into_imported_scene :: (imported: *Imported_Scene, path: string) {
 
     scene_materials: []*ai.Material = .{ scene.mNumMaterials, scene.mMaterials };
     for scene_materials {
-        texture_index := load_material_base_color_texture(imported, scene, it, model_dir, path).texture_index;
+        base_color_load := load_material_texture(imported, scene, it, model_dir, path,
+            ai.TextureType.[.BASE_COLOR, .DIFFUSE], default_texture_index = 0);
+        normal_texture_index := load_material_texture(imported, scene, it, model_dir, path,
+            ai.TextureType.[.NORMALS], default_texture_index = SCENE_INVALID_TEXTURE_INDEX).texture_index;
+        roughness_texture_index := load_material_texture(imported, scene, it, model_dir, path,
+            ai.TextureType.[.DIFFUSE_ROUGHNESS, .UNKNOWN], default_texture_index = SCENE_INVALID_TEXTURE_INDEX).texture_index;
+        ao_texture_index := load_material_texture(imported, scene, it, model_dir, path,
+            ai.TextureType.[.AMBIENT_OCCLUSION, .LIGHTMAP], default_texture_index = SCENE_INVALID_TEXTURE_INDEX).texture_index;
         array_add(*imported.materials, .{
             base_color_factor = .{1.0, 1.0, 1.0, 1.0},
-            base_color_texture_index = texture_index,
+            base_color_texture_index = base_color_load.texture_index,
+            normal_texture_index = normal_texture_index,
+            roughness_texture_index = roughness_texture_index,
+            ao_texture_index = ao_texture_index,
+            address_mode_u = cast(u32) base_color_load.map_mode_u,
+            address_mode_v = cast(u32) base_color_load.map_mode_v,
         });
     }
 
@@ -702,12 +737,26 @@ append_ai_mesh :: (
     num_vertices := cast(s64) mesh.mNumVertices;
 
     normals := cast(*Vector3) mesh.mNormals;
+    tangents := cast(*Vector3) mesh.mTangents;
+    bitangents := cast(*Vector3) mesh.mBitangents;
     tex_coords := mesh.mTextureCoords[0];
 
     for 0..num_vertices-1 {
         pos := cast,force(Vector3) mesh.mVertices[it];
         normal := Vector3.{0.0, 1.0, 0.0};
         if normals != null normal = normals[it];
+        tangent4 := Vector4.{1.0, 0.0, 0.0, 1.0};
+        if tangents != null {
+            tangent := tangents[it];
+            tangent_vec := Vector3.{tangent.x, tangent.y, tangent.z};
+            normalize(*tangent_vec, fallback = .{1.0, 0.0, 0.0});
+            tangent_sign := 1.0;
+            if bitangents != null {
+                bitangent := Vector3.{bitangents[it].x, bitangents[it].y, bitangents[it].z};
+                tangent_sign = ifx dot(cross(normal, tangent_vec), bitangent) < 0.0 then -1.0 else 1.0;
+            }
+            tangent4 = .{tangent_vec.x, tangent_vec.y, tangent_vec.z, tangent_sign};
+        }
 
         uv := Vector2.{0.0, 0.0};
         if tex_coords != null {
@@ -718,6 +767,7 @@ append_ai_mesh :: (
         array_add(*imported.vertices, .{
             position = .{pos.x, pos.y, pos.z, 1.0},
             normal = .{normal.x, normal.y, normal.z, 0.0},
+            tangent = tangent4,
             uv = uv,
         });
     }
@@ -954,27 +1004,37 @@ compute_world_matrices :: (nodes: []Scene_Node, node_start: u32, node_count: u32
     }
 }
 
-load_material_base_color_texture :: (
+load_material_texture :: (
     imported: *Imported_Scene,
     scene: *ai.Scene,
     material: *ai.Material,
     model_dir: string,
     model_path: string,
+    texture_types: []ai.TextureType,
+    default_texture_index: u32,
 ) -> Texture_Load_Result {
-    texture_types := ai.TextureType.[.BASE_COLOR, .DIFFUSE];
     for texture_types {
         if ai.GetMaterialTextureCount(material, it) == 0 continue;
 
         path: ai.String;
-        res := ai.GetMaterialTexture(material, it, 0, *path, null, null, null, null, null, null);
+        map_mode := ai.TextureMapMode.Wrap;
+        res := ai.GetMaterialTexture(material, it, 0, *path, null, null, null, null, *map_mode, null);
         if res != .SUCCESS continue;
 
         resolved := resolve_assimp_texture_key(scene, model_dir, model_path, ai.to_string(path));
         defer if resolved.count != 0 free(resolved);
-        return .{texture_index = get_or_load_texture(imported, scene, resolved, ai.to_string(path))};
+        return .{
+            texture_index = get_or_load_texture(imported, scene, resolved, ai.to_string(path)),
+            map_mode_u = map_mode,
+            map_mode_v = map_mode,
+        };
     }
 
-    return .{texture_index = 0};
+    return .{
+        texture_index = default_texture_index,
+        map_mode_u = .Wrap,
+        map_mode_v = .Wrap,
+    };
 }
 
 resolve_assimp_texture_key :: (scene: *ai.Scene, model_dir: string, model_path: string, path: string) -> string {
@@ -982,7 +1042,29 @@ resolve_assimp_texture_key :: (scene: *ai.Scene, model_dir: string, model_path: 
     if path.count > 0 && path[0] == #char "*" {
         return sprint("%#%", model_path, path);
     }
-    return copy_string(String.path_join(model_dir, path));
+
+    normalized_path := String.replace(path, "\\", "/",, temp);
+    if normalized_path.count == 0 normalized_path = path;
+
+    if normalized_path.count > 0 && normalized_path[0] == #char "/" {
+        return copy_string(normalized_path);
+    }
+
+    model_file_dir := directory_parent(model_path);
+    candidate_dirs := string.[
+        model_dir,
+        model_file_dir,
+        directory_parent(model_file_dir),
+    ];
+    for candidate_dirs {
+        dir := trim_trailing_slashes(it);
+        if dir.count == 0 continue;
+
+        candidate := String.path_join(dir, normalized_path);
+        if file_exists(candidate) return copy_string(candidate);
+    }
+
+    return copy_string(String.path_join(model_dir, normalized_path));
 }
 
 get_or_load_texture :: (imported: *Imported_Scene, scene: *ai.Scene, resolved_key: string, assimp_path: string) -> u32 {
@@ -1076,6 +1158,20 @@ copy_bytes :: (src: []u8) -> [..]u8 {
     return dst;
 }
 
+trim_trailing_slashes :: (path: string) -> string {
+    result := path;
+    while result.count > 0 && (result[result.count-1] == #char "/" || result[result.count-1] == #char "\\") {
+        result.count -= 1;
+    }
+    return result;
+}
+
+directory_parent :: (path: string) -> string {
+    trimmed := trim_trailing_slashes(path);
+    if trimmed.count == 0 return trimmed;
+    return trim_trailing_slashes(String.path_strip_filename(trimmed));
+}
+
 bgra_to_rgba :: (src: []u8) -> [..]u8 {
     dst := copy_bytes(src);
     i := 0;
@@ -1091,6 +1187,43 @@ bgra_to_rgba :: (src: []u8) -> [..]u8 {
         i += 4;
     }
     return dst;
+}
+
+address_mode_from_assimp :: (mode: ai.TextureMapMode) -> Gpu_Sampler_Desc.Address_Mode {
+    if mode == {
+    case .Wrap; return .REPEAT;
+    case .Mirror; return .MIRRORED_REPEAT;
+    case .Clamp; return .CLAMP_TO_EDGE;
+    case .Decal; return .CLAMP_TO_EDGE;
+    }
+    return .CLAMP_TO_EDGE;
+}
+
+scene_geo_get_or_create_sampler :: (geo: *Scene_Geo, mode_u: Gpu_Sampler_Desc.Address_Mode, mode_v: Gpu_Sampler_Desc.Address_Mode) -> Gpu_Sampler {
+    for geo.samplers {
+        if it.sampler == 0 continue;
+        if it.mode_u == cast(u32) mode_u && it.mode_v == cast(u32) mode_v {
+            return it.sampler;
+        }
+    }
+
+    sampler := gpu_create_sampler(.{
+        min_filter = .LINEAR,
+        mag_filter = .LINEAR,
+        mip_filter = .NEAREST,
+        min_lod = 0.0,
+        max_lod = 0.0,
+        address_mode_u = mode_u,
+        address_mode_v = mode_v,
+        address_mode_w = .CLAMP_TO_EDGE,
+    });
+    assert(sampler != 0, "Scene_Geo sampler creation failed.");
+    array_add(*geo.samplers, .{
+        sampler = sampler,
+        mode_u = cast(u32) mode_u,
+        mode_v = cast(u32) mode_v,
+    });
+    return sampler;
 }
 
 create_texture_from_bgra8 :: (pixels: []u8, width: u32, height: u32) -> Gpu_Texture, Gpu_Texture_View {

@@ -1,5 +1,6 @@
 spawn_dynamic_spheres := true;
 include_static_test_box := true;
+include_floor := true;
 floor_half_extents := Vector3.{15.0, 1.0, 15.0};
 floor_position := Vector3.{0.0, -1.0, 0.0};
 
@@ -53,14 +54,13 @@ spawn_sphere :: () {
 init_test_environment :: () {
     using physics;
 
-    floorId: BodyID;
-    {
+    if include_floor {
         boxHalfExtents := cast,force(Vec3) floor_half_extents;
         shape := BoxShape_Create(*boxHalfExtents, JPH_DEFAULT_CONVEX_RADIUS);
         pos := cast,force(Vec3) floor_position;
         s := BodyCreationSettings_Create3(shape, *pos, null /*identity*/, .Static, Layers.NON_MOVING);
         defer BodyCreationSettings_Destroy(s);
-        floorId = BodyInterface_CreateAndAddBody(body_interface, s, .DontActivate);
+        BodyInterface_CreateAndAddBody(body_interface, s, .DontActivate);
     }
 
     if include_static_test_box {
@@ -69,7 +69,7 @@ init_test_environment :: () {
         pos := Vec3.{3.0, 1.0, -2.0};
         s := BodyCreationSettings_Create3(shape, *pos, null /*identity*/, .Static, Layers.NON_MOVING);
         defer BodyCreationSettings_Destroy(s);
-        floorId = BodyInterface_CreateAndAddBody(body_interface, s, .DontActivate);
+        BodyInterface_CreateAndAddBody(body_interface, s, .DontActivate);
     }
 
     // create many spheres
@@ -94,11 +94,13 @@ init_test_environment :: () {
 configure_test_environment :: (
     spawn_spheres: bool = true,
     include_static_box: bool = true,
+    create_floor: bool = true,
     floor_half_extent: Vector3 = .{15.0, 1.0, 15.0},
     floor_center: Vector3 = .{0.0, -1.0, 0.0},
 ) {
     spawn_dynamic_spheres = spawn_spheres;
     include_static_test_box = include_static_box;
+    include_floor = create_floor;
     floor_half_extents = floor_half_extent;
     floor_position = floor_center;
 }

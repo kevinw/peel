@@ -140,6 +140,104 @@ deinit :: () {
     JPH.Shutdown();
 }
 
+Collider_Shape :: struct {
+    handle: *void;
+}
+
+create_static_heightfield :: (samples: []float, sample_count: u32, offset: Vector3, scale: Vector3) -> BodyID {
+    using physics;
+    assert(system != null && body_interface != null, "Physics must be initialized before creating a heightfield.");
+    assert(sample_count > 1, "Heightfield sample_count must be > 1.");
+    assert(samples.count == cast(s64) sample_count * cast(s64) sample_count,
+        "Heightfield sample count mismatch: expected %, got %.",
+        cast(s64) sample_count * cast(s64) sample_count, samples.count);
+
+    offset_jph := cast,force(Vec3) offset;
+    scale_jph := cast,force(Vec3) scale;
+    settings := HeightFieldShapeSettings_Create(samples.data, *offset_jph, *scale_jph, sample_count, null);
+    assert(settings != null, "HeightFieldShapeSettings creation failed.");
+    defer ShapeSettings_Destroy(cast(*ShapeSettings) settings);
+
+    shape := HeightFieldShapeSettings_CreateShape(settings);
+    assert(shape != null, "HeightFieldShape creation failed.");
+    defer Shape_Destroy(cast(*Shape) shape);
+
+    zero_pos := Vec3.{0.0, 0.0, 0.0};
+    body_settings := BodyCreationSettings_Create3(cast(*Shape) shape, *zero_pos, null, .Static, Layers.NON_MOVING);
+    assert(body_settings != null, "Heightfield body settings creation failed.");
+    defer BodyCreationSettings_Destroy(body_settings);
+
+    return BodyInterface_CreateAndAddBody(body_interface, body_settings, .DontActivate);
+}
+
+create_mesh_shape :: (vertices: []Vector3, indices: []u32) -> Collider_Shape {
+    using physics;
+    assert(system != null && body_interface != null, "Physics must be initialized before creating a mesh shape.");
+    assert(indices.count % 3 == 0, "Mesh collider index count must be divisible by 3.");
+
+    verts: [..]Vec3;
+    tris: [..]IndexedTriangle;
+    verts.allocator = temp;
+    tris.allocator = temp;
+    array_reserve(*verts, vertices.count);
+    array_reserve(*tris, indices.count / 3);
+
+    for vertices array_add(*verts, cast,force(Vec3) it);
+    tri_count := indices.count / 3;
+    for tri_index: 0..tri_count-1 {
+        base := tri_index * 3;
+        array_add(*tris, .{
+            i1 = indices[base + 0],
+            i2 = indices[base + 1],
+            i3 = indices[base + 2],
+            materialIndex = 0,
+            userData = 0,
+        });
+    }
+
+    settings := MeshShapeSettings_Create2(verts.data, cast(u32) verts.count, tris.data, cast(u32) tris.count);
+    assert(settings != null, "MeshShapeSettings creation failed.");
+    defer ShapeSettings_Destroy(cast(*ShapeSettings) settings);
+    MeshShapeSettings_Sanitize(settings);
+
+    shape := MeshShapeSettings_CreateShape(settings);
+    assert(shape != null, "MeshShape creation failed.");
+    return .{handle = cast(*void) shape};
+}
+
+create_scaled_shape :: (base_shape: Collider_Shape, scale: Vector3) -> Collider_Shape {
+    assert(base_shape.handle != null, "Base collider shape is null.");
+    scale_jph := cast,force(Vec3) scale;
+    shape := ScaledShape_Create(cast(*Shape) base_shape.handle, *scale_jph);
+    assert(shape != null, "ScaledShape creation failed.");
+    return .{handle = cast(*void) shape};
+}
+
+create_static_body_from_shape :: (shape: Collider_Shape, position: Vector3, rotation: Quaternion) -> BodyID {
+    using physics;
+    assert(system != null && body_interface != null, "Physics must be initialized before creating a body.");
+    assert(shape.handle != null, "Collider shape is null.");
+
+    pos_jph := cast,force(Vec3) position;
+    rot_jph := cast,force(Quat) rotation;
+    body_settings := BodyCreationSettings_Create3(cast(*Shape) shape.handle, *pos_jph, *rot_jph, .Static, Layers.NON_MOVING);
+    assert(body_settings != null, "Static body settings creation failed.");
+    defer BodyCreationSettings_Destroy(body_settings);
+    return BodyInterface_CreateAndAddBody(body_interface, body_settings, .DontActivate);
+}
+
+destroy_shape :: (shape: *Collider_Shape) {
+    if shape.handle == null return;
+    Shape_Destroy(cast(*Shape) shape.handle);
+    shape.handle = null;
+}
+
+destroy_body :: (body_id: BodyID) {
+    using physics;
+    if body_interface == null return;
+    BodyInterface_RemoveAndDestroyBody(body_interface, body_id);
+}
+
 push_renderer_ctx :: (user_data: *void) #expand {
     ctx := cast(*#Context)user_data;
 

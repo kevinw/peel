@@ -74,3 +74,4 @@ dist/function_constants_test
 dist/function_constants_test.dylib
 dist/model_scene
 dist/model_scene.dylib
+dist/physics_test.dylib
