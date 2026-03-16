@@ -1,0 +1,1 @@
+jai build.jai - src/apps/model_scene.jai -tracy && ./modules/tracy/macos/tracy-profiler -a 127.0.0.1 & pushd dist && sleep 3 && ./model_scene; popd
