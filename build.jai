@@ -12,6 +12,7 @@ Build_Script_Opts :: struct {
     verbose                 : bool;   @"?Print verbose output for the build process"
     perf                    : bool;   @"?Show a compiler performance report"
     timings                 : bool;   @"?Show extra timings"
+    tracy                   : bool;   @"?Compile with Tracy profiling"
 
     // used internally (todo: move elsewhere)
     sub_build               : bool;
@@ -76,6 +77,9 @@ PLATFORM_DIR :: #run get_platform_dir(OS); // win, macos, linux
     if is_set.shader_entry_ids && !is_set.shader_only {
         exit_with_error("Error: -shader_entry_ids requires -shader_only.");
     }
+    if script_opts.tracy {
+        if is_set.dll exit_with_error("Error: Cannot currently use Tracy plugin when building a live-reload DLL.");
+    }
 
     if script_opts.release || environment_specifies_release_build() set_release_build(*script_opts);
 
@@ -110,6 +114,7 @@ PLATFORM_DIR :: #run get_platform_dir(OS); // win, macos, linux
 
         if !script_opts.dll  {
             array_add(*host_build_strings, tprint("#load \"%\";\n", app_to_build));
+            array_add(*host_build_strings, tprint("TRACY_PROFILER_ENABLED :: %;", script_opts.tracy));
             script_opts.output_exe = String.path_strip_extension(String.path_filename(app_to_build));
         } else {
             script_opts.output_exe = LIVE_RELOAD_HOST_EXE_NAME;
@@ -259,12 +264,12 @@ get_dynamic_library_paths :: () -> []string /* temp allocated */ {
     // cross platform--needs a "win" or "linux" or "macos" directory on the end of these. see platform_dir below.
     local_module_dll_paths :: string.[
         "ImGui",
-        //"SDL3/lib",
         "assimp/lib",
         "JoltC/lib",
+        "Game_Sound/lib",
+        //"SDL3/lib",
         //"SDL_gpu_ext/lib",
         //"ImGuizmo/lib",
-        "Game_Sound/lib",
         //"im3d/lib",
     ];
 
@@ -411,6 +416,19 @@ add_host_plugins :: (plugins: *[..]*Metaprogram_Plugin, script_opts: Build_Scrip
     build_manifest_plugin.on_event_userdata = userdata;
 
     array_add(plugins, build_manifest_plugin);
+
+    if script_opts.tracy {
+        Tracy :: #import "tracy";
+        tracy_plugin := cast(*Tracy.My_Plugin)Tracy.get_plugin();
+        tracy_plugin.should_instrument = (body: *Code_Procedure_Body) -> bool {
+            filename := body.enclosing_load.fully_pathed_filename;
+            if String.ends_with(filename, "shader.jai") return false;
+            if String.ends_with(filename, "ShaderFuncs/module.jai") return false;
+            return true;
+        }
+        should_instrument: (body: *Code_Procedure_Body) -> bool;
+        array_add(plugins, tracy_plugin);
+    }
 }
 
 host_build_manifest_event :: (p: *Build_Manifest.Build_Manifest_Metaprogram_Plugin, evt: Build_Manifest.Build_Manifest_Event, userdata: *void) {
@@ -531,6 +549,7 @@ build_app :: (script_opts: Build_Script_Opts, app_filename: string) -> bool {
 
     build_strings: [..]string;
     array_add(*build_strings, sprint("APP_NAME :: \"%\";", app_filename));
+    array_add(*build_strings, tprint("TRACY_PROFILER_ENABLED :: %;", script_opts.tracy));
     #if OS == .MACOS {
         array_add(*build_strings, "PEEL_MACOS_RUNTIME_OWNER :: false;");
     }

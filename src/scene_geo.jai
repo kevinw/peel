@@ -127,6 +127,7 @@ Imported_Scene :: struct {
     textures: [..]Imported_Texture;
     meshes: [..]Scene_Mesh;
     nodes: [..]Scene_Node;
+    node_names: [..]string;
     node_bind_transforms: [..]Scene_Node_Transform;
     node_mesh_refs: [..]u32;
     mesh_skin_bones: [..]Scene_Mesh_Skin_Bone;
@@ -151,6 +152,7 @@ Scene_Geo :: struct {
 
     meshes: [..]Scene_Mesh;
     nodes: [..]Scene_Node;
+    node_names: [..]string;
     node_bind_transforms: [..]Scene_Node_Transform;
     node_mesh_refs: [..]u32;
     mesh_skin_bones: [..]Scene_Mesh_Skin_Bone;
@@ -160,6 +162,7 @@ Scene_Geo :: struct {
     anim_channels: [..]Scene_Anim_Channel;
     anim_clips: [..]Scene_Anim_Clip;
     models: [..]Scene_Model;
+    model_bounds: [..]Scene_Bounds;
 }
 
 scene_geo_init :: (geo: *Scene_Geo, model_paths: []string) {
@@ -170,22 +173,6 @@ scene_geo_init :: (geo: *Scene_Geo, model_paths: []string) {
 }
 
 scene_geo_init_from_imported :: (geo: *Scene_Geo, imported: *Imported_Scene) {
-    geo.textures.allocator = context.allocator;
-    geo.texture_views.allocator = context.allocator;
-    geo.texture_keys.allocator = context.allocator;
-    geo.samplers.allocator = context.allocator;
-    geo.meshes.allocator = context.allocator;
-    geo.nodes.allocator = context.allocator;
-    geo.node_bind_transforms.allocator = context.allocator;
-    geo.node_mesh_refs.allocator = context.allocator;
-    geo.mesh_skin_bones.allocator = context.allocator;
-    geo.anim_position_keys.allocator = context.allocator;
-    geo.anim_rotation_keys.allocator = context.allocator;
-    geo.anim_scale_keys.allocator = context.allocator;
-    geo.anim_channels.allocator = context.allocator;
-    geo.anim_clips.allocator = context.allocator;
-    geo.models.allocator = context.allocator;
-
     for it: imported.textures {
         assert(it.width > 0 && it.height > 0 && it.pixels.count >= cast(s64) it.width * cast(s64) it.height * 4,
             "Imported texture invalid: key=% width=% height=% pixels=%.",
@@ -242,6 +229,7 @@ scene_geo_init_from_imported :: (geo: *Scene_Geo, imported: *Imported_Scene) {
 
     array_copy(*geo.meshes, imported.meshes);
     array_copy(*geo.nodes, imported.nodes);
+    for imported.node_names array_add(*geo.node_names, copy_string(it));
     array_copy(*geo.node_bind_transforms, imported.node_bind_transforms);
     array_copy(*geo.node_mesh_refs, imported.node_mesh_refs);
     array_copy(*geo.mesh_skin_bones, imported.mesh_skin_bones);
@@ -259,16 +247,13 @@ scene_geo_init_from_imported :: (geo: *Scene_Geo, imported: *Imported_Scene) {
         });
     }
     for it: imported.models {
-        array_add(*geo.models, .{
-            name = copy_string(it.name),
-            root_node_index = it.root_node_index,
-            node_start = it.node_start,
-            node_count = it.node_count,
-            mesh_start = it.mesh_start,
-            mesh_count = it.mesh_count,
-            anim_clip_start = it.anim_clip_start,
-            anim_clip_count = it.anim_clip_count,
-        });
+        model := array_add(*geo.models);
+        model.* = it;
+        model.name = copy_string(it.name);
+    }
+    array_reserve(*geo.model_bounds, geo.models.count);
+    for model_index: 0..geo.models.count-1 {
+        array_add(*geo.model_bounds, compute_model_bounds_from_geo(geo, cast(s32) model_index));
     }
 
     gpu_commit_residency();
@@ -286,6 +271,9 @@ scene_geo_deinit :: (geo: *Scene_Geo) {
     array_free(geo.anim_position_keys);
     array_free(geo.mesh_skin_bones);
     array_free(geo.models);
+    for geo.node_names if it.count != 0 free(it);
+    array_free(geo.node_names);
+    array_free(geo.model_bounds);
     array_free(geo.node_bind_transforms);
     array_free(geo.nodes);
     array_free(geo.node_mesh_refs);
@@ -317,39 +305,23 @@ scene_geo_model_clip_index_by_name :: (geo: *Scene_Geo, model_index: s32, name: 
     return -1;
 }
 
-scene_geo_model_bounds :: (geo: *Scene_Geo, model_index: s32) -> Scene_Bounds {
+scene_geo_model_node_index_by_name :: (geo: *Scene_Geo, model_index: s32, name: string) -> s32 {
     assert(model_index >= 0 && model_index < geo.models.count, "Invalid Scene_Geo model index %", model_index);
     model := geo.models[model_index];
-
-    bounds: Scene_Bounds;
-    bounds.min = .{1000000.0, 1000000.0, 1000000.0};
-    bounds.max = .{-1000000.0, -1000000.0, -1000000.0};
-
     for node_index: model.node_start .. model.node_start + model.node_count - 1 {
-        node := geo.nodes[node_index];
-        if node.mesh_ref_count == 0 continue;
-
-        for mesh_ref_offset: 0..node.mesh_ref_count-1 {
-            mesh_index := geo.node_mesh_refs[node.first_mesh_ref + mesh_ref_offset];
-            mesh := geo.meshes[mesh_index];
-
-            for index_offset: 0..mesh.index_count-1 {
-                vertex_index := geo.indices.cpu[mesh.first_index + index_offset];
-                vertex := geo.vertices.cpu[vertex_index];
-                world_pos4 := node.world * vertex.position;
-                world_pos := Vector3.{world_pos4.x, world_pos4.y, world_pos4.z};
-
-                bounds.min.x = min(bounds.min.x, world_pos.x);
-                bounds.min.y = min(bounds.min.y, world_pos.y);
-                bounds.min.z = min(bounds.min.z, world_pos.z);
-                bounds.max.x = max(bounds.max.x, world_pos.x);
-                bounds.max.y = max(bounds.max.y, world_pos.y);
-                bounds.max.z = max(bounds.max.z, world_pos.z);
-            }
-        }
+        if geo.node_names[node_index] == name return cast(s32) node_index;
     }
+    lowered_name := String.to_lower_copy(name);
+    for node_index: model.node_start .. model.node_start + model.node_count - 1 {
+        lowered_node_name := String.to_lower_copy(geo.node_names[node_index]);
+        if lowered_node_name == lowered_name return cast(s32) node_index;
+    }
+    return -1;
+}
 
-    return bounds;
+scene_geo_model_bounds :: (geo: *Scene_Geo, model_index: s32) -> Scene_Bounds {
+    assert(model_index >= 0 && model_index < geo.models.count, "Invalid Scene_Geo model index %", model_index);
+    return geo.model_bounds[model_index];
 }
 
 scene_geo_append_model_instances :: (
@@ -395,6 +367,8 @@ imported_scene_deinit :: (scene: *Imported_Scene) {
     array_free(scene.textures);
     array_free(scene.meshes);
     array_free(scene.nodes);
+    for scene.node_names if it.count != 0 free(it);
+    array_free(scene.node_names);
     array_free(scene.node_bind_transforms);
     array_free(scene.node_mesh_refs);
     array_free(scene.mesh_skin_bones);
@@ -434,9 +408,43 @@ imported_scene_load_cached :: (scene: *Imported_Scene, model_paths: []string) {
 
 #scope_file
 
+compute_model_bounds_from_geo :: (geo: *Scene_Geo, model_index: s32) -> Scene_Bounds {
+    model := geo.models[model_index];
+
+    bounds: Scene_Bounds;
+    bounds.min = .{1000000.0, 1000000.0, 1000000.0};
+    bounds.max = .{-1000000.0, -1000000.0, -1000000.0};
+
+    for node_index: model.node_start .. model.node_start + model.node_count - 1 {
+        node := geo.nodes[node_index];
+        if node.mesh_ref_count == 0 continue;
+
+        for mesh_ref_offset: 0..node.mesh_ref_count-1 {
+            mesh_index := geo.node_mesh_refs[node.first_mesh_ref + mesh_ref_offset];
+            mesh := geo.meshes[mesh_index];
+
+            for index_offset: 0..mesh.index_count-1 {
+                vertex_index := geo.indices.cpu[mesh.first_index + index_offset];
+                vertex := geo.vertices.cpu[vertex_index];
+                world_pos4 := node.world * vertex.position;
+                world_pos := Vector3.{world_pos4.x, world_pos4.y, world_pos4.z};
+
+                bounds.min.x = min(bounds.min.x, world_pos.x);
+                bounds.min.y = min(bounds.min.y, world_pos.y);
+                bounds.min.z = min(bounds.min.z, world_pos.z);
+                bounds.max.x = max(bounds.max.x, world_pos.x);
+                bounds.max.y = max(bounds.max.y, world_pos.y);
+                bounds.max.z = max(bounds.max.z, world_pos.z);
+            }
+        }
+    }
+
+    return bounds;
+}
+
 Hash_Table :: #import "Hash_Table";
 using,only(Table, table_find, table_reset, table_set) _ :: Hash_Table;
-IMPORTED_SCENE_CACHE_VERSION : u32 : 9;
+IMPORTED_SCENE_CACHE_VERSION : u32 : 10;
 IMPORTED_SCENE_CACHE_MAGIC : u32 : 0x53474d44; // SGMD
 
 imported_scene_cache_path :: (model_paths: []string) -> string {
@@ -461,6 +469,8 @@ imported_scene_serialize :: (builder: *[..]u8, scene: Imported_Scene) -> bool {
     cache_put_array(builder, scene.materials);
     cache_put_array(builder, scene.meshes);
     cache_put_array(builder, scene.nodes);
+    cache_put(builder, cast(u32) scene.node_names.count);
+    for scene.node_names cache_put_string(builder, it);
     cache_put_array(builder, scene.node_bind_transforms);
     cache_put_array(builder, scene.node_mesh_refs);
     cache_put_array(builder, scene.mesh_skin_bones);
@@ -514,6 +524,13 @@ imported_scene_deserialize :: (scene: *Imported_Scene, source_in: string) -> boo
     if !cache_get_array(*source, *scene.materials) return false, false;
     if !cache_get_array(*source, *scene.meshes) return false, false;
     if !cache_get_array(*source, *scene.nodes) return false, false;
+    node_name_count: u32;
+    if !cache_get(*source, *node_name_count) return false, false;
+    for 0..cast(s64) node_name_count-1 {
+        node_name: string;
+        if !cache_get_string(*source, *node_name) return false, false;
+        array_add(*scene.node_names, node_name);
+    }
     if !cache_get_array(*source, *scene.node_bind_transforms) return false, false;
     if !cache_get_array(*source, *scene.node_mesh_refs) return false, false;
     if !cache_get_array(*source, *scene.mesh_skin_bones) return false, false;
@@ -914,6 +931,7 @@ append_ai_node_recursive :: (
         local = cast,force(Matrix4) ai_node.mTransformation,
         world = Matrix4_Identity,
     });
+    array_add(*imported.node_names, copy_string(ai.to_string(ai_node.mName)));
     array_add(*imported.node_bind_transforms, .{
         translation = .{bind_translation.x, bind_translation.y, bind_translation.z},
         rotation = .{bind_rotation.x, bind_rotation.y, bind_rotation.z, bind_rotation.w},
@@ -1120,10 +1138,11 @@ imported_scene_create_default_white_texture :: (imported: *Imported_Scene) {
 create_texture_from_rgba8 :: (pixels: []u8, width: u32, height: u32) -> Gpu_Texture, Gpu_Texture_View {
     result, texture := gpu_create_texture(.{
         dimensions = .[width, height, 1],
-        format = .B8G8R8A8_UNORM,
+        format = .R8G8B8A8_UNORM,
         usage = .SAMPLED | .TRANSFER_DST,
     });
     assert(result == .SUCCESS && texture != 0, "Scene_Geo texture creation failed.");
+    /*
 
     bgra_pixels: [..]u8;
     bgra_pixels.allocator = temp;
@@ -1144,6 +1163,8 @@ create_texture_from_rgba8 :: (pixels: []u8, width: u32, height: u32) -> Gpu_Text
     }
 
     gpu_copy_to_texture(texture, bgra_pixels.data);
+    */
+    gpu_copy_to_texture(texture, pixels.data);
     view := gpu_texture_view(texture);
     assert(view != 0, "Scene_Geo texture view creation failed.");
     return texture, view;

@@ -1,0 +1,146 @@
+[1]
+scene "Model Scene" {
+  asset "teapot" {
+    model "./models/teapot.obj"
+  }
+  asset "hero_lizard" {
+    model "./models/nerdy+lizard+3d+model.glb"
+  }
+  asset "runner_lizard" {
+    model "./models/Lizard run.glb"
+  }
+  asset "hard_hat" {
+    model "./models/hard-hat/source/helm.obj"
+  }
+  asset "stone_1" {
+    model "./models/Low Poly Stones/Mesh/ST_Stone1.fbx"
+  }
+  asset "stone_2" {
+    model "./models/Low Poly Stones/Mesh/ST_Stone2.fbx"
+  }
+  asset "stone_3" {
+    model "./models/Low Poly Stones/Mesh/ST_Stone3.fbx"
+  }
+  asset "stone_4" {
+    model "./models/Low Poly Stones/Mesh/ST_Stone4.fbx"
+  }
+  asset "stone_5" {
+    model "./models/Low Poly Stones/Mesh/ST_Stone5.fbx"
+  }
+
+  node "Ground" {
+    procedural_ground {
+      size 48 46
+      center_z -12
+      render_grid 112 112
+      physics_grid 28 28
+      base_color "./textures/Ground104_1K-JPG/Ground104_1K-JPG_Color.jpg"
+      normal "./textures/Ground104_1K-JPG/Ground104_1K-JPG_NormalGL.jpg"
+      roughness "./textures/Ground104_1K-JPG/Ground104_1K-JPG_Roughness.jpg"
+      ao "./textures/Ground104_1K-JPG/Ground104_1K-JPG_AmbientOcclusion.jpg"
+    }
+  }
+
+  node "Hero Lizard" {
+    position 4.9 0.0 -5.6
+    rotation_deg 0 180 0
+    scale 5 5 5
+    mesh_render "hero_lizard"
+  }
+
+  node "Player" {
+    position -6.8 0 -9.5
+    rotation_deg 0 180 0
+    scale 0.01 0.01 0.01
+    instance_scene "prefabs/player.scene"
+  }
+
+  node "Floating Teapots" {
+    scatter_render {
+      assets "teapot"
+      count 8
+      mode floating
+      x_range -40 40
+      z_range -50 20
+      y_range 10 16
+      scale_range 0.18 0.34
+      yaw_range_deg 0 360
+      seed 1954238209
+    }
+  }
+
+  node "Stone Field A" {
+    scatter_render {
+      assets "stone_1"
+      count 80
+      mode ground
+      x_range -20 20
+      z_range -34 10
+      y_range 0 0
+      scale_range 1.8 3.0
+      yaw_range_deg 0 360
+      ground_y_offset 0.015
+      seed 11
+    }
+  }
+
+  node "Stone Field B" {
+    scatter_render {
+      assets "stone_2"
+      count 10
+      mode ground
+      x_range -20 20
+      z_range -34 10
+      y_range 0 0
+      scale_range 1.8 3.0
+      yaw_range_deg 0 360
+      ground_y_offset 0.015
+      seed 12
+    }
+  }
+
+  node "Stone Field C" {
+    scatter_render {
+      assets "stone_3"
+      count 10
+      mode ground
+      x_range -20 20
+      z_range -34 10
+      y_range 0 0
+      scale_range 1.8 3.0
+      yaw_range_deg 0 360
+      ground_y_offset 0.015
+      seed 13
+    }
+  }
+
+  node "Stone Field D" {
+    scatter_render {
+      assets "stone_4"
+      count 5
+      mode ground
+      x_range -20 20
+      z_range -34 10
+      y_range 0 0
+      scale_range 1.8 3.0
+      yaw_range_deg 0 360
+      ground_y_offset 0.015
+      seed 14
+    }
+  }
+
+  node "Stone Field E" {
+    scatter_render {
+      assets "stone_5"
+      count 50
+      mode ground
+      x_range -20 20
+      z_range -34 10
+      y_range 0 0
+      scale_range 0.3 1.0
+      yaw_range_deg 0 360
+      ground_y_offset 0.015
+      seed 15
+    }
+  }
+}

@@ -17,6 +17,14 @@ Running_Lizard_Instance :: struct {
     mesh_index: u32;
 }
 
+Running_Lizard_Attachment_Instance :: struct {
+    instance_index: u32;
+    geo_node_index: s32;
+    attachment_node_index: s32;
+    _pad0: s32;
+    attachment_offset: Matrix4;
+}
+
 Stone_Physics_Placement :: struct {
     position: Vector3;
     rotation: Quaternion;
@@ -103,6 +111,7 @@ ground_roughness_texture_view: Gpu_Texture_View;
 ground_ao_texture: Gpu_Texture;
 ground_ao_texture_view: Gpu_Texture_View;
 ground_index_count: u32;
+active_ground: Scene_File.Scene_Procedural_Ground_Desc;
 ground_physics_body: u32;
 ground_physics_body_valid: bool;
 stone_physics_bodies: [..]u32;
@@ -111,21 +120,31 @@ stone_scaled_shapes: [..]Physics.Collider_Shape;
 scene_batches: [..]Draw_Batch;
 animated_batches: [..]Animated_Batch;
 running_lizard_instances: [..]Running_Lizard_Instance;
+running_lizard_attachment_instances: [..]Running_Lizard_Attachment_Instance;
+running_lizard_compiled_root_node_index: s32 = -1;
+scene_doc: Scene_File.Scene_Document;
+compiled_scene: Scene_File.Compiled_Scene;
+scene_palette_models: [..]string;
+scene_manip_ctx: Manip_Context;
+scene_manip_objects: [..]Manip_Object;
+scene_manip_node_indices: [..]s32;
+scene_manip_objects_dirty: bool = true;
+scene_manip_apply_pending: bool;
+scene_dirty: bool;
+scene_place_palette_index: s32 = -1;
 scene_debug_logged: bool;
 autopilot_enabled: bool;
 physics_gizmos_enabled: bool;
 show_shadow_debug: bool;
-shadow_debug_isolate_animated: bool;
-shadow_debug_disable_skinning: bool;
-shadow_debug_selected_animated_batch: s32 = -1;
 physics_g_was_down: bool;
-player_control_mode: bool = true;
+control_mode: enum { Player; Editor; } = .Player;
 p_was_down: bool;
 orbit_yaw: float = 0.0;
 orbit_pitch: float = -0.32;
 orbit_distance: float = 8.5;
 orbit_prev_mouse: Vector2;
 orbit_have_prev_mouse: bool;
+left_was_down: bool;
 gizmo_ctx: Gizmo.Gizmo_Context;
 gizmo_render_ctx: Gizmo_Render.Gizmo_Render_Context;
 
@@ -165,7 +184,7 @@ on_dll_init :: () {
     assert(debug_shadow_source.count > 0, "Transpilation failed for model scene shadow debug shaders.");
 
     main_raster: Gpu_Raster_Desc = .{
-        cull = .NONE,
+        cull = .CCW,
         depth_format = .D32_SFLOAT,
         color_targets = .[
             .{format = .B8G8R8A8_UNORM},
@@ -189,171 +208,15 @@ on_dll_init :: () {
     assert(debug_shadow_pipeline != 0, "Model scene shadow debug pipeline creation failed.");
     shadow_map_init(*shadow_map);
 
-    model_paths := string.[
-        "./models/teapot.obj",
-        "./models/nerdy+lizard+3d+model.glb",
-        "./models/Lizard run.glb",
-        "./models/Low Poly Stones/Mesh/ST_Stone1.fbx",
-        "./models/Low Poly Stones/Mesh/ST_Stone2.fbx",
-        "./models/Low Poly Stones/Mesh/ST_Stone3.fbx",
-        "./models/Low Poly Stones/Mesh/ST_Stone4.fbx",
-        "./models/Low Poly Stones/Mesh/ST_Stone5.fbx",
-    ];
-    scene_geo_init(*scene_geo, model_paths);
-
-    teapot_model := scene_geo_model_index_by_name(*scene_geo, "teapot");
-    lizard_model := scene_geo_model_index_by_name(*scene_geo, "nerdy+lizard+3d+model");
-    running_lizard_model := scene_geo_model_index_by_name(*scene_geo, "Lizard run");
-    stone_models := s32.[
-        scene_geo_model_index_by_name(*scene_geo, "ST_Stone1"),
-        scene_geo_model_index_by_name(*scene_geo, "ST_Stone2"),
-        scene_geo_model_index_by_name(*scene_geo, "ST_Stone3"),
-        scene_geo_model_index_by_name(*scene_geo, "ST_Stone4"),
-        scene_geo_model_index_by_name(*scene_geo, "ST_Stone5"),
-    ];
-    assert(teapot_model >= 0 && lizard_model >= 0 && running_lizard_model >= 0, "Failed to resolve core Scene_Geo model indices.");
-    for stone_models assert(it >= 0, "Failed to resolve stone Scene_Geo model index %.", it_index);
-    hero_lizard_bounds := scene_geo_model_bounds(*scene_geo, lizard_model);
-    hero_lizard_size := hero_lizard_bounds.max - hero_lizard_bounds.min;
-    hero_lizard_max_extent := max(max(hero_lizard_size.x, hero_lizard_size.y), hero_lizard_size.z);
-    running_lizard_bounds := scene_geo_model_bounds(*scene_geo, running_lizard_model);
-    running_lizard_size := running_lizard_bounds.max - running_lizard_bounds.min;
-    running_lizard_max_extent := max(max(running_lizard_size.x, running_lizard_size.y), running_lizard_size.z);
-    hero_lizard_world_scale := 12.0;
-    running_lizard_target_extent := hero_lizard_max_extent * hero_lizard_world_scale * 0.4;
-    running_lizard_scale = ifx running_lizard_max_extent > 0.0 then running_lizard_target_extent / running_lizard_max_extent else 1.0;
-    running_lizard_ground_y = -running_lizard_bounds.min.y * running_lizard_scale - 0.2;
-    running_lizard_model_info := scene_geo.models[running_lizard_model];
-    assert(running_lizard_model_info.anim_clip_count > 0, "Running lizard model has no imported animation clips.");
-    running_lizard_clip_index = cast(s32) running_lizard_model_info.anim_clip_start;
-    scene_anim_init(*running_lizard_anim, *scene_geo, running_lizard_model, running_lizard_clip_index);
-    character_controller_init_in_system(
-        *running_lizard_controller,
-        Physics.physics.system,
-        .{-6.8, running_lizard_ground_y, -9.5},
-        visual_yaw_offset = 0.0);
-
-    root_transforms: [..]Matrix4;
-    instances_cpu: [..]Scene_Instance_CPU;
-    defer array_free(root_transforms);
-    defer array_free(instances_cpu);
-
-    total_skin_matrix_count: s64 = 0;
-
-    array_add(*root_transforms, make_translation_matrix4(.{4.9, 1.1, -5.6}) * make_scale_matrix4(.{12.0, 12.0, 12.0}));
-    scene_geo_append_model_instances(*scene_batches, *instances_cpu, *scene_geo, lizard_model, root_transforms);
-    array_reset(*root_transforms);
-
-    running_lizard_root = character_controller_root_matrix(*running_lizard_controller, running_lizard_scale);
-    for node_index: running_lizard_model_info.node_start .. running_lizard_model_info.node_start + running_lizard_model_info.node_count - 1 {
-        node := scene_geo.nodes[node_index];
-        if node.mesh_ref_count == 0 continue;
-        for mesh_ref_offset: 0..node.mesh_ref_count-1 {
-            mesh_index := scene_geo.node_mesh_refs[node.first_mesh_ref + mesh_ref_offset];
-            mesh := scene_geo.meshes[mesh_index];
-            batch := array_add(*scene_batches);
-            batch.mesh_index = mesh_index;
-            batch.first_instance = cast(u32) instances_cpu.count;
-            batch.instance_count = 1;
-
-            instance_world := running_lizard_root;
-            node_local_index := cast(s32) node_index - cast(s32) running_lizard_model_info.node_start;
-            if node_local_index >= 0 && node_local_index < running_lizard_anim.worlds.count {
-                instance_world = running_lizard_root * running_lizard_anim.worlds[node_local_index];
-            } else if mesh.skin_bone_count == 0 {
-                instance_world = running_lizard_root * node.world;
-            }
-            instance_index := cast(u32) instances_cpu.count;
-            array_add(*instances_cpu, .{
-                world = instance_world,
-                tint = .{1.0, 0.96, 0.96, 1.0},
-                shadow_view_proj_0 = .{1.0, 0.0, 0.0, 0.0},
-                shadow_view_proj_1 = .{0.0, 1.0, 0.0, 0.0},
-                shadow_view_proj_2 = .{0.0, 0.0, 1.0, 0.0},
-                shadow_view_proj_3 = .{0.0, 0.0, 0.0, 1.0},
-            });
-            array_add(*running_lizard_instances, .{
-                instance_index = instance_index,
-                node_index = cast(s32) node_index,
-                mesh_index = mesh_index,
-            });
-
-            if mesh.skin_bone_count > 0 {
-                array_add(*animated_batches, .{
-                    batch_index = cast(s32) scene_batches.count - 1,
-                    node_index = cast(s32) node_index,
-                    skin_matrix_start = cast(u32) total_skin_matrix_count,
-                    skin_matrix_count = mesh.skin_bone_count,
-                });
-                total_skin_matrix_count += mesh.skin_bone_count;
-            }
-        }
-    }
-
-    append_floating_teapot_transforms(*root_transforms);
-    scene_geo_append_model_instances(*scene_batches, *instances_cpu, *scene_geo, teapot_model, root_transforms, tint = .{0.94, 0.78, 0.48, 1.0});
-    for stone_models {
-        array_reset(*root_transforms);
-        stone_placements: [..]Stone_Physics_Placement;
-        defer array_free(stone_placements);
-        stone_bounds := scene_geo_model_bounds(*scene_geo, it);
-        stone_size := stone_bounds.max - stone_bounds.min;
-        stone_max_extent := max(max(stone_size.x, stone_size.y), stone_size.z);
-        stone_base_scale := ifx stone_max_extent > 0.0 then 2.2 / stone_max_extent else 1.0;
-        append_scattered_stone_transforms(*root_transforms, *stone_placements, cast(u32) it_index, stone_models.count, stone_base_scale);
-        scene_geo_append_model_instances(*scene_batches, *instances_cpu, *scene_geo, it, root_transforms, tint = .{0.92, 0.9, 0.88, 1.0});
-
-        base_shape := build_model_mesh_collider_shape(scene_geo, it);
-        array_add(*stone_base_shapes, base_shape);
-        for stone_placements {
-            scaled_shape := Physics.create_scaled_shape(base_shape, .{it.scale, it.scale, it.scale});
-            array_add(*stone_scaled_shapes, scaled_shape);
-            body := Physics.create_static_body_from_shape(scaled_shape, it.position, it.rotation);
-            array_add(*stone_physics_bodies, body);
-        }
-    }
-
-    init_ground_plane();
-
-    arena_bytes :=
-        instances_cpu.count * size_of(Scene_Instance_CPU) +
-        scene_batches.count * size_of(Scene_Draw_Params_CPU) +
-        total_skin_matrix_count * 4 * size_of(Vector4) +
-        1024;
-    gpu_arena = gpu_make_arena(arena_bytes, label = "model scene arena");
-    assert(gpu_arena.cpu != null, "Model scene arena creation failed.");
-
-    scene_instances = gpu_alloc_view(*gpu_arena, Scene_Instance_CPU, instances_cpu.count);
-    if instances_cpu.count > 0 {
-        memcpy(scene_instances.cpu.data, instances_cpu.data, instances_cpu.count * size_of(Scene_Instance_CPU));
-    }
-
-    if total_skin_matrix_count > 0 {
-        scene_skin_matrices = gpu_alloc_view(*gpu_arena, Vector4, total_skin_matrix_count * 4);
-    }
-
-    scene_draw_params = gpu_alloc_view(*gpu_arena, Scene_Draw_Params_CPU, scene_batches.count);
-    for batch: scene_batches {
-        mesh := scene_geo.meshes[batch.mesh_index];
-        scene_draw_params.cpu[it_index] = .{
-            vertices = scene_geo.vertices.gpu,
-            indices = scene_geo.indices.gpu + (mesh.first_index * size_of(u32)).(Gpu_Ptr),
-            materials = scene_geo.materials.gpu,
-            instances = scene_instances.gpu + (batch.first_instance * size_of(Scene_Instance_CPU)).(Gpu_Ptr),
-            skin_matrices = 0,
-            view_proj = Matrix4_Identity,
-            light_dir = normalize(Vector3.{0.35, -1.0, 0.25}),
-            camera_pos = scene_camera.position,
-            material_index = mesh.material_index,
-            sampler_index = 0,
-            skin_matrix_count = 0,
-        };
-    }
-    for animated_batches {
-        batch_index := cast(s64) it.batch_index;
-        scene_draw_params.cpu[batch_index].skin_matrices = scene_skin_matrices.gpu + (it.skin_matrix_start * 4 * size_of(Vector4)).(Gpu_Ptr);
-        scene_draw_params.cpu[batch_index].skin_matrix_count = it.skin_matrix_count;
-    }
+    scene_palette_models = Scene_File.scan_scene_palette_models();
+    scene_manip_objects.allocator = context.allocator;
+    scene_manip_node_indices.allocator = context.allocator;
+    running_lizard_attachment_instances.allocator = context.allocator;
+    scene_doc, compiled_scene = Scene_File.load_compiled_scene_cached(SCENE_ROOT_PATH);
+    init_scene_geo_from_palette();
+    rebuild_scene_runtime();
+    scene_manip_objects_dirty = true;
+    scene_manip_apply_pending = false;
 
     _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
     if dims_ok && win_w > 0 && win_h > 0 {
@@ -364,18 +227,16 @@ on_dll_init :: () {
 } @on_dll_init
 
 on_unload :: () {
-    controller_deinit(*running_lizard_controller);
-    for stone_physics_bodies Physics.destroy_body(it);
+    clear_scene_runtime_resources();
+    Scene_File.deinit(*scene_doc);
+    Scene_File.deinit(*compiled_scene);
+    for scene_palette_models free(it);
+    array_free(scene_palette_models);
+    array_free(scene_manip_node_indices);
+    array_free(scene_manip_objects);
     array_free(stone_physics_bodies);
-    for * stone_scaled_shapes Physics.destroy_shape(it);
     array_free(stone_scaled_shapes);
-    for * stone_base_shapes Physics.destroy_shape(it);
     array_free(stone_base_shapes);
-    if ground_physics_body_valid {
-        Physics.destroy_body(ground_physics_body);
-        ground_physics_body_valid = false;
-        ground_physics_body = 0;
-    }
     Physics.deinit();
     Gizmo_Render.deinit(*gizmo_render_ctx);
     Gizmo.deinit(*gizmo_ctx);
@@ -383,26 +244,11 @@ on_unload :: () {
     if shadow_pipeline != 0 gpu_free_pipeline(shadow_pipeline);
     if ground_pipeline != 0 gpu_free_pipeline(ground_pipeline);
     shadow_map_deinit(*shadow_map);
-    if ground_ao_texture_view != 0 gpu_free_texture_view(ground_ao_texture_view);
-    if ground_ao_texture != 0 gpu_free(ground_ao_texture);
-    if ground_sampler != 0 gpu_free(ground_sampler);
-    if ground_roughness_texture_view != 0 gpu_free_texture_view(ground_roughness_texture_view);
-    if ground_roughness_texture != 0 gpu_free(ground_roughness_texture);
-    if ground_normal_texture_view != 0 gpu_free_texture_view(ground_normal_texture_view);
-    if ground_normal_texture != 0 gpu_free(ground_normal_texture);
-    if ground_texture_view != 0 gpu_free_texture_view(ground_texture_view);
-    if ground_texture != 0 gpu_free(ground_texture);
-    if ground_draw_params.cpu != null gpu_free(cast(*void) ground_draw_params.cpu);
-    if ground_shadow_params.cpu != null gpu_free(cast(*void) ground_shadow_params.cpu);
-    if ground_instance.cpu != null gpu_free(cast(*void) ground_instance.cpu);
-    if ground_indices.cpu.data != null gpu_free(cast(*void) ground_indices.cpu.data);
-    if ground_vertices.cpu.data != null gpu_free(cast(*void) ground_vertices.cpu.data);
-    scene_anim_deinit(*running_lizard_anim);
     array_free(running_lizard_instances);
+    array_free(running_lizard_attachment_instances);
     array_free(animated_batches);
     array_free(scene_batches);
     scene_geo_deinit(*scene_geo);
-    if gpu_arena.cpu != null gpu_free_arena(gpu_arena);
 } @on_unload
 
 tick :: () {
@@ -425,34 +271,66 @@ tick :: () {
     physics_g_was_down = g_down;
     p_down := (Input.input_button_states[cast(Input.Key_Code) #char "P"] & .DOWN) != 0;
     if p_down && !p_was_down {
-        player_control_mode = !player_control_mode;
+        if #complete control_mode == {
+        case .Player; control_mode = .Editor;
+        case .Editor; control_mode = .Player;
+        }
     }
     p_was_down = p_down;
 
     if app_ui_enabled {
         using ImGui;
         if Begin("Model Scene", flags = .NoCollapse | .AlwaysAutoResize) {
-            Text("Mode: %", ifx player_control_mode then "Player Control" else "Camera Control");
             Checkbox("Autopilot", *autopilot_enabled);
             if Checkbox("Physics Gizmos", *physics_gizmos_enabled) {
                 Physics.debug_draw_enabled = physics_gizmos_enabled;
             }
             Checkbox("Show Shadow Debug", *show_shadow_debug);
-            Checkbox("Isolate Animated Shadow Batch", *shadow_debug_isolate_animated);
-            Checkbox("Disable Shadow Skinning", *shadow_debug_disable_skinning);
             if animated_batches.count > 0 {
                 max_batch_index := cast(s32) animated_batches.count - 1;
-                if shadow_debug_selected_animated_batch > max_batch_index shadow_debug_selected_animated_batch = max_batch_index;
-                ImGui.SliderInt("Shadow Animated Batch", *shadow_debug_selected_animated_batch, -1, max_batch_index);
             }
             Separator();
-            Text("Toggle Mode: P");
-            if player_control_mode {
-                Text("Move Lizard: WASD");
-                Text("Orbit Camera: RMB drag");
-            } else {
-                Text("Fly Camera: WASD/QE");
-                Text("Look Camera: RMB drag");
+            if Button("Save Scene") {
+                scene_dirty = !Scene_File.save_scene_document(scene_doc);
+            }
+            SameLine();
+            if Button("Reload Scene") {
+                Scene_File.deinit(*compiled_scene);
+                compiled_scene = Scene_File.recompile_scene_document(scene_doc);
+                rebuild_scene_runtime();
+                scene_manip_objects_dirty = true;
+                scene_manip_apply_pending = false;
+                scene_dirty = false;
+            }
+            is_editor := control_mode == .Editor;
+            if toggle("Toggle Editor (P)", *is_editor) {
+                control_mode = ifx is_editor then .Editor else .Player;
+            }
+            if control_mode == .Editor {
+                Text("%", ifx scene_dirty then "Scene Dirty" else "Scene Saved");
+                if scene_place_palette_index >= 0 {
+                    Text("Placing: %", String.path_filename(scene_palette_models[scene_place_palette_index]));
+                    SameLine();
+                    if Button("Cancel Placement") scene_place_palette_index = -1;
+                }
+                if BeginChild("Palette", .{340.0, 220.0}) {
+                    for scene_palette_models {
+                        selected := cast(s32) it_index == scene_place_palette_index;
+                        label := String.path_filename(it);
+                        if Selectable(temp_c_string(label), selected) {
+                            scene_place_palette_index = cast(s32) it_index;
+                        }
+                    }
+                }
+                EndChild();
+                Separator();
+            }
+            if #complete control_mode == {
+            case .Player;
+                Text("Move Lizard: WASD / Orbit Camera: RMB drag");
+            case .Editor;
+                Text("Fly Camera: WASD/QE - Look Camera: RMB drag");
+                Text("Edit: LMB select/drag gizmo");
             }
             Text("Toggle Gizmos: G");
         }
@@ -460,7 +338,14 @@ tick :: () {
     }
 
     right_down := (Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_RIGHT] & .DOWN) != 0;
-    if player_control_mode {
+    left_down := (Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_LEFT] & .DOWN) != 0;
+    left_pressed := left_down && !left_was_down;
+    left_released := !left_down && left_was_down;
+    left_was_down = left_down;
+
+    controller_forward, controller_right, controller_up: Vector3;
+    if #complete control_mode == {
+    case .Player;
         if right_down && mouse_ok && !io.WantCaptureMouse {
             mouse := Vector2.{cast(float) mx, cast(float) my};
             if orbit_have_prev_mouse {
@@ -474,39 +359,37 @@ tick :: () {
         } else {
             orbit_have_prev_mouse = false;
         }
-    } else {
-        _ = editor_camera_update(*scene_camera, dt, mx, my, mouse_ok,
-            allow_move = !io.WantCaptureKeyboard,
-            allow_look = right_down && !io.WantCaptureMouse);
-    }
-
-    controller_forward, controller_right, controller_up: Vector3;
-    if player_control_mode {
         controller_forward = .{sin(orbit_yaw), 0.0, -cos(orbit_yaw)};
         controller_right = .{cos(orbit_yaw), 0.0, sin(orbit_yaw)};
         controller_up = .{0.0, 1.0, 0.0};
-    } else {
+    case .Editor;
+        _ = editor_camera_update(*scene_camera, dt, mx, my, mouse_ok,
+            allow_move = !io.WantCaptureKeyboard,
+            allow_look = right_down && !io.WantCaptureMouse);
         editor_camera_basis(*scene_camera, *controller_forward, *controller_right, *controller_up);
     }
+
     controller_forward.y = 0.0;
     controller_right.y = 0.0;
     normalize(*controller_forward, fallback = .{0.0, 0.0, -1.0});
     normalize(*controller_right, fallback = .{1.0, 0.0, 0.0});
 
-    desired_move := Vector3.{0.0, 0.0, 0.0};
-    if player_control_mode {
+    desired_move: Vector3;
+    if #complete control_mode == {
+    case .Player;
         if Input.input_button_states[cast(Input.Key_Code) #char "W"] & .DOWN desired_move += controller_forward;
         if Input.input_button_states[cast(Input.Key_Code) #char "S"] & .DOWN desired_move -= controller_forward;
         if Input.input_button_states[cast(Input.Key_Code) #char "A"] & .DOWN desired_move -= controller_right;
         if Input.input_button_states[cast(Input.Key_Code) #char "D"] & .DOWN desired_move += controller_right;
+    case .Editor;
+        //
     }
+
     if autopilot_enabled && dot(desired_move, desired_move) < 1.0e-6 {
         autopilot_center := Vector3.{-6.8, running_lizard_ground_y, -9.5};
         autopilot_radius := 3.8;
         autopilot_target := autopilot_center + .{
-            cos(cast(float) time * 0.35) * autopilot_radius,
-            0.0,
-            sin(cast(float) time * 0.35) * autopilot_radius,
+            cos(cast(float) time * 0.35) * autopilot_radius, 0.0, sin(cast(float) time * 0.35) * autopilot_radius,
         };
         desired_move = autopilot_target - character_controller_position(*running_lizard_controller);
     }
@@ -518,7 +401,42 @@ tick :: () {
         append_lizard_physics_gizmos();
     }
 
-    if player_control_mode {
+    if control_mode == .Editor && dims_ok && win_w > 0 && win_h > 0 {
+        if scene_manip_objects_dirty {
+            scene_rebuild_manip_objects();
+            scene_manip_objects_dirty = false;
+        }
+        cam_forward, cam_right, cam_up: Vector3;
+        editor_camera_basis(*scene_camera, *cam_forward, *cam_right, *cam_up);
+        frame := Manip_Frame_Input.{
+            viewport = .{cast(float) win_w, cast(float) win_h},
+            camera_pos = scene_camera.position,
+            camera_forward = cam_forward,
+            camera_right = cam_right,
+            camera_up = cam_up,
+            fov_y = PI / 3.2,
+            mouse_pos = .{cast(float) mx, cast(float) my},
+            mouse_valid = mouse_ok,
+            mouse_down = left_down,
+            mouse_pressed = left_pressed,
+            mouse_released = left_released,
+            block_mouse = io.WantCaptureMouse,
+        };
+        if scene_place_palette_index >= 0 && left_pressed && !io.WantCaptureMouse {
+            scene_place_selected_palette_at_cursor(frame);
+        } else {
+            manip_result := manip_update(*scene_manip_ctx, *gizmo_ctx, scene_manip_objects, frame);
+            if manip_result.changed {
+                scene_manip_apply_pending = true;
+            }
+            if scene_manip_apply_pending && left_released {
+                scene_apply_manip_back_to_doc();
+                scene_manip_apply_pending = false;
+            }
+        }
+    }
+
+    if control_mode == .Player {
         player_focus := character_controller_position(*running_lizard_controller) + .{0.0, 0.95, 0.0};
         orbit_dir := Vector3.{
             sin(orbit_yaw) * cos(orbit_pitch),
@@ -561,6 +479,14 @@ tick :: () {
             instance_world = running_lizard_root * running_lizard_anim.worlds[node_local_index];
         }
         scene_instances.cpu[it.instance_index].world = instance_world;
+    }
+    for running_lizard_attachment_instances {
+        attachment_world := running_lizard_root;
+        attachment_local_index := it.attachment_node_index - cast(s32) running_lizard_model.node_start;
+        if attachment_local_index >= 0 && attachment_local_index < running_lizard_anim.worlds.count {
+            attachment_world = running_lizard_root * running_lizard_anim.worlds[attachment_local_index];
+        }
+        scene_instances.cpu[it.instance_index].world = attachment_world * it.attachment_offset * scene_geo.nodes[it.geo_node_index].world;
     }
     for animated_batches {
         batch := scene_batches[it.batch_index];
@@ -610,15 +536,6 @@ tick :: () {
     {
         saved_shadow_skin_counts: [..]u32;
         defer array_free(saved_shadow_skin_counts);
-        if shadow_debug_disable_skinning {
-            saved_shadow_skin_counts.allocator = temp;
-            array_resize(*saved_shadow_skin_counts, animated_batches.count);
-            for animated_batches {
-                batch_index := cast(s64) it.batch_index;
-                saved_shadow_skin_counts[it_index] = scene_draw_params.cpu[batch_index].skin_matrix_count;
-                scene_draw_params.cpu[batch_index].skin_matrix_count = 0;
-            }
-        }
 
         gpu_begin_scoped_render_pass(cmd_buff, .{
             depth_target = .{
@@ -644,22 +561,10 @@ tick :: () {
         draw_result := gpu_draw_instanced_direct(cmd_buff, ground_shadow_params.gpu, ground_index_count, 1);
         assert(draw_result == .SUCCESS, "Model scene ground shadow draw failed.");
         for batch: scene_batches {
-            if shadow_debug_isolate_animated {
-                animated_index := find_animated_batch_index_for_batch(cast(s32) it_index);
-                if animated_index < 0 continue;
-                if shadow_debug_selected_animated_batch >= 0 && animated_index != shadow_debug_selected_animated_batch continue;
-            }
             mesh := scene_geo.meshes[batch.mesh_index];
             params_gpu := scene_draw_params.gpu + (it_index * size_of(Scene_Draw_Params_CPU)).(Gpu_Ptr);
             draw_result = gpu_draw_instanced_direct(cmd_buff, params_gpu, mesh.index_count, batch.instance_count);
             assert(draw_result == .SUCCESS, "Model scene shadow draw failed.");
-        }
-
-        if shadow_debug_disable_skinning {
-            for animated_batches {
-                batch_index := cast(s64) it.batch_index;
-                scene_draw_params.cpu[batch_index].skin_matrix_count = saved_shadow_skin_counts[it_index];
-            }
         }
     }
 
@@ -757,25 +662,584 @@ find_animated_batch_index_for_batch :: (batch_index: s32) -> s32 {
     return -1;
 }
 
-GROUND_COLOR_PATH :: "./textures/Ground104_1K-JPG/Ground104_1K-JPG_Color.jpg";
-GROUND_NORMAL_PATH :: "./textures/Ground104_1K-JPG/Ground104_1K-JPG_NormalGL.jpg";
-GROUND_ROUGHNESS_PATH :: "./textures/Ground104_1K-JPG/Ground104_1K-JPG_Roughness.jpg";
-GROUND_AO_PATH :: "./textures/Ground104_1K-JPG/Ground104_1K-JPG_AmbientOcclusion.jpg";
-GROUND_GRID_X :: 112;
-GROUND_GRID_Z :: 112;
-GROUND_PHYSICS_GRID_X :: GROUND_GRID_X / 4;
-GROUND_PHYSICS_GRID_Z :: GROUND_GRID_Z / 4;
-GROUND_SIZE_X :: 48.0;
-GROUND_SIZE_Z :: 46.0;
-GROUND_CENTER_Z :: -12.0;
-FLOATING_TEAPOT_COUNT :: 8;
-SCATTERED_STONE_COUNT :: 150;
+init_scene_geo_from_palette :: () {
+    model_paths: [..]string;
+    model_paths.allocator = temp;
+    for scene_palette_models array_add(*model_paths, it);
+    scene_geo_init(*scene_geo, model_paths);
+}
 
-init_ground_plane :: () {
-    ground_texture, ground_texture_view = load_texture_rgba8(GROUND_COLOR_PATH);
-    ground_normal_texture, ground_normal_texture_view = load_texture_rgba8(GROUND_NORMAL_PATH);
-    ground_roughness_texture, ground_roughness_texture_view = load_texture_rgba8(GROUND_ROUGHNESS_PATH);
-    ground_ao_texture, ground_ao_texture_view = load_texture_rgba8(GROUND_AO_PATH);
+rebuild_scene_runtime :: () {
+    clear_scene_runtime_resources();
+
+    root_transforms: [..]Matrix4;
+    root_transforms.allocator = temp;
+    instances_cpu: [..]Scene_Instance_CPU;
+    instances_cpu.allocator = temp;
+    collider_model_indices: [..]s32;
+    collider_model_indices.allocator = temp;
+
+    array_reset(*scene_batches);
+    array_reset(*animated_batches);
+    array_reset(*running_lizard_instances);
+    array_reset(*running_lizard_attachment_instances);
+    running_lizard_compiled_root_node_index = -1;
+    running_lizard_clip_index = -1;
+    running_lizard_scale = 1.0;
+    running_lizard_ground_y = 0.0;
+    autopilot_enabled = false;
+    active_ground = .{};
+
+    total_skin_matrix_count: s64 = 0;
+    ground_enabled := false;
+
+    for compiled_scene.nodes {
+        if it.ground.enabled {
+            ground_enabled = true;
+            active_ground = it.ground;
+            continue;
+        }
+
+        if it.scatter.enabled {
+            append_compiled_scatter_instances(*instances_cpu, *root_transforms, *total_skin_matrix_count, *collider_model_indices, cast(s32) it_index);
+            continue;
+        }
+
+        if running_lizard_compiled_root_node_index >= 0 && compiled_node_is_under_player_root(cast(s32) it_index) {
+            continue;
+        }
+
+        if #complete it.render_kind == {
+        case .MESH;
+            if it.asset_index < 0 continue;
+            model_index := scene_model_index_for_compiled_asset(it.asset_index);
+            if model_index < 0 continue;
+            array_reset(*root_transforms);
+            array_add(*root_transforms, it.world * compiled_asset_import_matrix(compiled_scene.assets[it.asset_index]));
+            scene_geo_append_model_instances(*scene_batches, *instances_cpu, *scene_geo, model_index, root_transforms);
+            continue;
+        case .SKINNED_MESH;
+            if it.behavior.type_name == "Player_Controller" {
+                running_lizard_scale, running_lizard_ground_y = init_player_from_compiled_node(*instances_cpu, *total_skin_matrix_count, cast(s32) it_index);
+                autopilot_enabled = it.behavior.autopilot;
+                continue;
+            }
+
+            if it.asset_index < 0 continue;
+            model_index := scene_model_index_for_compiled_asset(it.asset_index);
+            if model_index < 0 continue;
+            array_reset(*root_transforms);
+            array_add(*root_transforms, it.world * compiled_asset_import_matrix(compiled_scene.assets[it.asset_index]));
+            scene_geo_append_model_instances(*scene_batches, *instances_cpu, *scene_geo, model_index, root_transforms);
+        case .NONE;
+            // nothing to do.
+        }
+    }
+
+    if ground_enabled init_ground_plane(active_ground);
+
+    arena_bytes :=
+        max(cast(s64) 1, instances_cpu.count) * size_of(Scene_Instance_CPU) +
+        max(cast(s64) 1, scene_batches.count) * size_of(Scene_Draw_Params_CPU) +
+        max(cast(s64) 1, total_skin_matrix_count * 4) * size_of(Vector4) +
+        1024;
+    gpu_arena = gpu_make_arena(arena_bytes, label = "model scene arena");
+    assert(gpu_arena.cpu != null, "Model scene arena creation failed.");
+
+    scene_instances = gpu_alloc_view(*gpu_arena, Scene_Instance_CPU, instances_cpu.count);
+    if instances_cpu.count > 0 memcpy(scene_instances.cpu.data, instances_cpu.data, instances_cpu.count * size_of(Scene_Instance_CPU));
+
+    if total_skin_matrix_count > 0 scene_skin_matrices = gpu_alloc_view(*gpu_arena, Vector4, total_skin_matrix_count * 4);
+
+    scene_draw_params = gpu_alloc_view(*gpu_arena, Scene_Draw_Params_CPU, scene_batches.count);
+    for batch: scene_batches {
+        mesh := scene_geo.meshes[batch.mesh_index];
+        scene_draw_params.cpu[it_index] = .{
+            vertices = scene_geo.vertices.gpu,
+            indices = scene_geo.indices.gpu + (mesh.first_index * size_of(u32)).(Gpu_Ptr),
+            materials = scene_geo.materials.gpu,
+            instances = scene_instances.gpu + (batch.first_instance * size_of(Scene_Instance_CPU)).(Gpu_Ptr),
+            skin_matrices = 0,
+            view_proj = Matrix4_Identity,
+            light_dir = normalize(Vector3.{0.35, -1.0, 0.25}),
+            camera_pos = scene_camera.position,
+            material_index = mesh.material_index,
+            sampler_index = 0,
+            skin_matrix_count = 0,
+        };
+    }
+    for animated_batches {
+        batch_index := cast(s64) it.batch_index;
+        scene_draw_params.cpu[batch_index].skin_matrices = scene_skin_matrices.gpu + (it.skin_matrix_start * 4 * size_of(Vector4)).(Gpu_Ptr);
+        scene_draw_params.cpu[batch_index].skin_matrix_count = it.skin_matrix_count;
+    }
+
+    gpu_commit_residency();
+}
+
+clear_scene_runtime_resources :: () {
+    controller_deinit(*running_lizard_controller);
+    scene_anim_deinit(*running_lizard_anim);
+
+    for stone_physics_bodies Physics.destroy_body(it);
+    array_reset(*stone_physics_bodies);
+    for *stone_scaled_shapes Physics.destroy_shape(it);
+    array_reset(*stone_scaled_shapes);
+    for *stone_base_shapes Physics.destroy_shape(it);
+    array_reset(*stone_base_shapes);
+
+    if ground_physics_body_valid {
+        Physics.destroy_body(ground_physics_body);
+        ground_physics_body_valid = false;
+        ground_physics_body = 0;
+    }
+
+    if scene_depth_view != 0 {
+        gpu_free_texture_view(scene_depth_view);
+        scene_depth_view = 0;
+    }
+    if scene_depth_texture != 0 {
+        gpu_free(scene_depth_texture);
+        scene_depth_texture = 0;
+    }
+    scene_depth_w = 0;
+    scene_depth_h = 0;
+
+    if ground_ao_texture_view != 0 gpu_free_texture_view(ground_ao_texture_view);
+    if ground_ao_texture != 0 gpu_free(ground_ao_texture);
+    if ground_sampler != 0 gpu_free(ground_sampler);
+    if ground_roughness_texture_view != 0 gpu_free_texture_view(ground_roughness_texture_view);
+    if ground_roughness_texture != 0 gpu_free(ground_roughness_texture);
+    if ground_normal_texture_view != 0 gpu_free_texture_view(ground_normal_texture_view);
+    if ground_normal_texture != 0 gpu_free(ground_normal_texture);
+    if ground_texture_view != 0 gpu_free_texture_view(ground_texture_view);
+    if ground_texture != 0 gpu_free(ground_texture);
+    if ground_draw_params.cpu != null gpu_free(cast(*void) ground_draw_params.cpu);
+    if ground_shadow_params.cpu != null gpu_free(cast(*void) ground_shadow_params.cpu);
+    if ground_instance.cpu != null gpu_free(cast(*void) ground_instance.cpu);
+    if ground_indices.cpu.data != null gpu_free(cast(*void) ground_indices.cpu.data);
+    if ground_vertices.cpu.data != null gpu_free(cast(*void) ground_vertices.cpu.data);
+    ground_texture = 0;
+    ground_texture_view = 0;
+    ground_normal_texture = 0;
+    ground_normal_texture_view = 0;
+    ground_roughness_texture = 0;
+    ground_roughness_texture_view = 0;
+    ground_ao_texture = 0;
+    ground_ao_texture_view = 0;
+    ground_sampler = 0;
+    ground_vertices = .{};
+    ground_indices = .{};
+    ground_instance = .{};
+    ground_shadow_params = .{};
+    ground_draw_params = .{};
+    ground_index_count = 0;
+
+    if gpu_arena.cpu != null gpu_free_arena(gpu_arena);
+    gpu_arena = .{};
+    scene_instances = .{};
+    scene_draw_params = .{};
+    scene_skin_matrices = .{};
+
+    array_reset(*running_lizard_instances);
+    array_reset(*animated_batches);
+    array_reset(*scene_batches);
+}
+
+append_compiled_scatter_instances :: (instances_cpu: *[..]Scene_Instance_CPU, root_transforms: *[..]Matrix4, total_skin_matrix_count: *s64, collider_model_indices: *[..]s32, node_index: s32) {
+    node := compiled_scene.nodes[node_index];
+    random_seed(node.scatter.seed);
+    for 0..node.scatter.count-1 {
+        if node.scatter.assets.count == 0 break;
+        asset_name := node.scatter.assets[cast(s64) (random_get_within_range(0.0, cast(float) node.scatter.assets.count))];
+        asset_index := compiled_scene_find_asset_index_by_name_for_runtime(asset_name);
+        if asset_index < 0 continue;
+        model_index := scene_model_index_for_compiled_asset(asset_index);
+        if model_index < 0 continue;
+
+        x := random_get_within_range(node.scatter.x_min, node.scatter.x_max);
+        z := random_get_within_range(node.scatter.z_min, node.scatter.z_max);
+        y := random_get_within_range(node.scatter.y_min, node.scatter.y_max);
+        if node.scatter.mode == .GROUND {
+            y = ground_height_at(ground_plane_desc, x, z) + node.scatter.ground_y_offset;
+        }
+        yaw_deg := random_get_within_range(node.scatter.yaw_min_deg, node.scatter.yaw_max_deg);
+        target_extent := random_get_within_range(node.scatter.scale_min, node.scatter.scale_max);
+        asset := compiled_scene.assets[asset_index];
+        model_scale := normalized_model_scale(asset, model_index, target_extent);
+        q: Quaternion;
+        set_from_axis_and_angle(*q, .{0.0, 1.0, 0.0}, yaw_deg * PI / 180.0);
+
+        scatter_world :=
+            node.world
+            * make_translation_matrix4(.{x, y, z})
+            * rotation_matrix(Matrix4, q)
+            * make_scale_matrix4(.{model_scale, model_scale, model_scale})
+            * compiled_asset_import_matrix(asset);
+
+        array_reset(root_transforms);
+        array_add(root_transforms, scatter_world);
+        scene_geo_append_model_instances(*scene_batches, instances_cpu, *scene_geo, model_index, root_transforms.*, tint = .{0.92, 0.9, 0.88, 1.0});
+
+        base_shape := get_or_create_collider_base_shape(collider_model_indices, model_index);
+        scaled_shape := Physics.create_scaled_shape(base_shape, asset_import_scale(asset) * model_scale);
+        array_add(*stone_scaled_shapes, scaled_shape);
+        world_pos, world_rot_deg, world_scale_vec := decompose_matrix_trs(scatter_world);
+        _ = world_scale_vec;
+        body := Physics.create_static_body_from_shape(scaled_shape, world_pos, quat_from_euler_deg(world_rot_deg));
+        array_add(*stone_physics_bodies, body);
+    }
+}
+
+get_or_create_collider_base_shape :: (collider_model_indices: *[..]s32, model_index: s32) -> Physics.Collider_Shape {
+    for collider_model_indices.* {
+        if it == model_index return stone_base_shapes[it_index];
+    }
+    shape := build_model_mesh_collider_shape(scene_geo, model_index);
+    array_add(collider_model_indices, model_index);
+    array_add(*stone_base_shapes, shape);
+    return shape;
+}
+
+init_player_from_compiled_node :: (instances_cpu: *[..]Scene_Instance_CPU, total_skin_matrix_count: *s64, node_index: s32) -> float, float {
+    node := compiled_scene.nodes[node_index];
+    running_lizard_compiled_root_node_index = node_index;
+    assert(node.asset_index >= 0, "Player controller node '%' is missing an asset.", node.name);
+    model_index := scene_model_index_for_compiled_asset(node.asset_index);
+    assert(model_index >= 0, "Failed to resolve player model '%'.", node.name);
+    clip_name := ifx node.clip_name.count > 0 then node.clip_name else "Run";
+    clip_index := scene_geo_model_clip_index_by_name(*scene_geo, model_index, clip_name);
+    if clip_index < 0 clip_index = cast(s32) scene_geo.models[model_index].anim_clip_start;
+    running_lizard_clip_index = clip_index;
+    scene_anim_init(*running_lizard_anim, *scene_geo, model_index, clip_index);
+
+    start_pos, start_rot_deg, start_scale := decompose_matrix_trs(node.world * compiled_asset_import_matrix(compiled_scene.assets[node.asset_index]));
+    running_lizard_scale = max(max(start_scale.x, start_scale.y), start_scale.z);
+    running_lizard_bounds := scene_geo_model_bounds(*scene_geo, model_index);
+    running_lizard_ground_y = -running_lizard_bounds.min.y * running_lizard_scale - 0.2;
+
+    character_controller_init_in_system(
+        *running_lizard_controller,
+        Physics.physics.system,
+        .{start_pos.x, running_lizard_ground_y, start_pos.z},
+        visual_yaw_offset = start_rot_deg.y * PI / 180.0);
+
+    running_lizard_root = character_controller_root_matrix(*running_lizard_controller, running_lizard_scale);
+    running_lizard_model_info := scene_geo.models[model_index];
+    for geo_node_index: running_lizard_model_info.node_start .. running_lizard_model_info.node_start + running_lizard_model_info.node_count - 1 {
+        geo_node := scene_geo.nodes[geo_node_index];
+        if geo_node.mesh_ref_count == 0 continue;
+        for mesh_ref_offset: 0..geo_node.mesh_ref_count-1 {
+            mesh_index := scene_geo.node_mesh_refs[geo_node.first_mesh_ref + mesh_ref_offset];
+            mesh := scene_geo.meshes[mesh_index];
+            batch := array_add(*scene_batches);
+            batch.mesh_index = mesh_index;
+            batch.first_instance = cast(u32) instances_cpu.count;
+            batch.instance_count = 1;
+
+            instance_index := cast(u32) instances_cpu.count;
+            array_add(instances_cpu, .{
+                world = running_lizard_root,
+                tint = .{1.0, 1.0, 1.0, 1.0},
+                shadow_view_proj_0 = .{1.0, 0.0, 0.0, 0.0},
+                shadow_view_proj_1 = .{0.0, 1.0, 0.0, 0.0},
+                shadow_view_proj_2 = .{0.0, 0.0, 1.0, 0.0},
+                shadow_view_proj_3 = .{0.0, 0.0, 0.0, 1.0},
+            });
+            array_add(*running_lizard_instances, .{
+                instance_index = instance_index,
+                node_index = cast(s32) geo_node_index,
+                mesh_index = mesh_index,
+            });
+
+            if mesh.skin_bone_count > 0 {
+                array_add(*animated_batches, .{
+                    batch_index = cast(s32) scene_batches.count - 1,
+                    node_index = cast(s32) geo_node_index,
+                    skin_matrix_start = cast(u32) total_skin_matrix_count.*,
+                    skin_matrix_count = mesh.skin_bone_count,
+                });
+                total_skin_matrix_count.* += mesh.skin_bone_count;
+            }
+        }
+    }
+
+    attachment_node_index := node.first_child_index;
+    while attachment_node_index >= 0 {
+        attachment_node := compiled_scene.nodes[attachment_node_index];
+        if attachment_node.render_kind == .MESH && attachment_node.asset_index >= 0 {
+            attachment_model_index := scene_model_index_for_compiled_asset(attachment_node.asset_index);
+            if attachment_model_index >= 0 {
+                anchor_geo_node_index := running_lizard_model_info.root_node_index;
+                if attachment_node.attach_node_name.count > 0 {
+                    resolved_anchor := scene_geo_model_node_index_by_name(*scene_geo, model_index, attachment_node.attach_node_name);
+                    if resolved_anchor >= 0 {
+                        anchor_geo_node_index = resolved_anchor;
+                    } else {
+                        log("PLAYER_ATTACH unresolved attach_node '%' on '%', falling back to player root.", attachment_node.attach_node_name, attachment_node.name);
+                    }
+                }
+                attachment_offset :=
+                    make_translation_matrix4(attachment_node.local_position)
+                    * rotation_matrix(Matrix4, quat_from_euler_deg(attachment_node.local_rotation_deg))
+                    * make_scale_matrix4(attachment_node.local_scale)
+                    * compiled_asset_import_matrix(compiled_scene.assets[attachment_node.asset_index]);
+                attachment_model := scene_geo.models[attachment_model_index];
+                for geo_node_index: attachment_model.node_start .. attachment_model.node_start + attachment_model.node_count - 1 {
+                    geo_node := scene_geo.nodes[geo_node_index];
+                    if geo_node.mesh_ref_count == 0 continue;
+                    for mesh_ref_offset: 0..geo_node.mesh_ref_count-1 {
+                        mesh_index := scene_geo.node_mesh_refs[geo_node.first_mesh_ref + mesh_ref_offset];
+                        batch := array_add(*scene_batches);
+                        batch.mesh_index = mesh_index;
+                        batch.first_instance = cast(u32) instances_cpu.count;
+                        batch.instance_count = 1;
+
+                        instance_index := cast(u32) instances_cpu.count;
+                        array_add(instances_cpu, .{
+                            world = running_lizard_root * attachment_offset * scene_geo.nodes[geo_node_index].world,
+                            tint = .{1.0, 1.0, 1.0, 1.0},
+                            shadow_view_proj_0 = .{1.0, 0.0, 0.0, 0.0},
+                            shadow_view_proj_1 = .{0.0, 1.0, 0.0, 0.0},
+                            shadow_view_proj_2 = .{0.0, 0.0, 1.0, 0.0},
+                            shadow_view_proj_3 = .{0.0, 0.0, 0.0, 1.0},
+                        });
+                        array_add(*running_lizard_attachment_instances, .{
+                            instance_index = instance_index,
+                            geo_node_index = cast(s32) geo_node_index,
+                            attachment_node_index = anchor_geo_node_index,
+                            attachment_offset = attachment_offset,
+                        });
+                    }
+                }
+            }
+        }
+        attachment_node_index = compiled_scene.nodes[attachment_node_index].next_sibling_index;
+    }
+
+    return running_lizard_scale, running_lizard_ground_y;
+}
+
+scene_model_index_for_compiled_asset :: (asset_index: s32) -> s32 {
+    if asset_index < 0 || asset_index >= compiled_scene.assets.count return -1;
+    asset := compiled_scene.assets[asset_index];
+    model_name := String.path_strip_extension(String.path_filename(asset.model_path));
+    return scene_geo_model_index_by_name(*scene_geo, model_name);
+}
+
+compiled_asset_import_matrix :: (asset: Scene_File.Scene_Asset_Desc) -> Matrix4 {
+    return rotation_matrix(Matrix4, quat_from_euler_deg(asset.import_settings.rotation_deg))
+        * make_scale_matrix4(asset.import_settings.scale);
+}
+
+compiled_scene_find_asset_index_by_name_for_runtime :: (asset_name: string) -> s32 {
+    for compiled_scene.assets if it.name == asset_name return cast(s32) it_index;
+    return -1;
+}
+
+normalized_model_scale :: (asset: Scene_File.Scene_Asset_Desc, model_index: s32, target_extent: float) -> float {
+    bounds := scene_geo_model_bounds(*scene_geo, model_index);
+    size := bounds.max - bounds.min;
+    import_scale := asset_import_scale(asset);
+    scaled_size := size * import_scale;
+    max_extent := max(max(scaled_size.x, scaled_size.y), scaled_size.z);
+    return ifx max_extent > 0.0 then target_extent / max_extent else 1.0;
+}
+
+asset_import_scale :: (asset: Scene_File.Scene_Asset_Desc) -> Vector3 {
+    scale := asset.import_settings.scale;
+    if abs(scale.x) <= 1.0e-6 scale.x = 1.0;
+    if abs(scale.y) <= 1.0e-6 scale.y = 1.0;
+    if abs(scale.z) <= 1.0e-6 scale.z = 1.0;
+    return abs(scale);
+}
+
+decompose_matrix_trs :: (m: Matrix4) -> Vector3, Vector3, Vector3 {
+    ai_scale: ai.Vector3D;
+    ai_rotation: ai.Vector3D;
+    ai_position: ai.Vector3D;
+    temp_m := m;
+    ai.Matrix4DecomposeIntoScalingEulerAnglesPosition(cast(*ai.Matrix4x4) *temp_m, *ai_scale, *ai_rotation, *ai_position);
+    return
+        .{ai_position.x, ai_position.y, ai_position.z},
+        Vector3.{ai_rotation.x, ai_rotation.y, ai_rotation.z} * (180.0 / PI),
+        .{ai_scale.x, ai_scale.y, ai_scale.z};
+}
+
+quat_from_euler_deg :: (deg: Vector3) -> Quaternion {
+    radians := deg * (PI / 180.0);
+    hx := radians.x * 0.5;
+    hy := radians.y * 0.5;
+    hz := radians.z * 0.5;
+    cx := cos(hx); sx := sin(hx);
+    cy := cos(hy); sy := sin(hy);
+    cz := cos(hz); sz := sin(hz);
+    qx := Quaternion.{x = sx, y = 0.0, z = 0.0, w = cx};
+    qy := Quaternion.{x = 0.0, y = sy, z = 0.0, w = cy};
+    qz := Quaternion.{x = 0.0, y = 0.0, z = sz, w = cz};
+    q := qz * qy * qx;
+    normalize_or_identity(*q);
+    return q;
+}
+
+scene_rebuild_manip_objects :: () {
+    array_reset(*scene_manip_objects);
+    array_reset(*scene_manip_node_indices);
+
+    for scene_doc.nodes {
+        if it.ground.enabled || it.scatter.enabled continue;
+        if it.render_kind == .NONE && it.instance_scene_path.count == 0 continue;
+        compiled_index := find_compiled_node_for_source(scene_doc.source_path, it.name);
+        if compiled_index < 0 continue;
+        compiled_node := compiled_scene.nodes[compiled_index];
+        pos, rot_deg, scale := decompose_matrix_trs(compiled_node.world);
+
+        half_extents := Vector3.{0.4, 0.4, 0.4};
+        if compiled_node.asset_index >= 0 {
+            model_index := scene_model_index_for_compiled_asset(compiled_node.asset_index);
+            if model_index >= 0 {
+                bounds := scene_geo_model_bounds(*scene_geo, model_index);
+                size := bounds.max - bounds.min;
+                base_extent := max(max(size.x, size.y), size.z);
+                if base_extent > 0.0 {
+                    import_scale := asset_import_scale(compiled_scene.assets[compiled_node.asset_index]);
+                    object_scale := scale * import_scale;
+                    half_extents = 0.5 * size * max(max(object_scale.x, object_scale.y), object_scale.z) / base_extent;
+                }
+            }
+        }
+
+        array_add(*scene_manip_objects, .{
+            name = it.name,
+            position = pos,
+            rotation = quat_from_euler_deg(rot_deg),
+            scale = scale,
+            half_extents = max(half_extents, Vector3.{0.2, 0.2, 0.2}),
+            color = .{0.85, 0.8, 0.35, 1.0},
+        });
+        array_add(*scene_manip_node_indices, cast(s32) it_index);
+    }
+}
+
+scene_apply_manip_back_to_doc :: () {
+    if scene_manip_ctx.selected_index < 0 return;
+    selected := cast(s64) scene_manip_ctx.selected_index;
+    if selected >= scene_manip_objects.count return;
+    node_index := scene_manip_node_indices[selected];
+    obj := scene_manip_objects[selected];
+    doc_node := *scene_doc.nodes[node_index];
+
+    world := make_translation_matrix4(obj.position) * rotation_matrix(Matrix4, obj.rotation) * make_scale_matrix4(obj.scale);
+    parent_world := Matrix4_Identity;
+    if doc_node.parent_index >= 0 {
+        parent_compiled_index := find_compiled_node_for_source(scene_doc.source_path, scene_doc.nodes[doc_node.parent_index].name);
+        if parent_compiled_index >= 0 parent_world = compiled_scene.nodes[parent_compiled_index].world;
+    }
+    inv_ok, parent_inv := inverse(parent_world);
+    assert(inv_ok, "Failed to invert parent transform during scene manipulation.");
+    local := parent_inv * world;
+    local_pos, local_rot_deg, local_scale := decompose_matrix_trs(local);
+    doc_node.position = local_pos;
+    doc_node.rotation_deg = local_rot_deg;
+    doc_node.scale = local_scale;
+    scene_dirty = true;
+
+    Scene_File.deinit(*compiled_scene);
+    compiled_scene = Scene_File.recompile_scene_document(scene_doc);
+    rebuild_scene_runtime();
+    scene_manip_objects_dirty = true;
+}
+
+scene_place_selected_palette_at_cursor :: (frame: Manip_Frame_Input) {
+    if scene_place_palette_index < 0 || cast(s64) scene_place_palette_index >= scene_palette_models.count {
+        log("SCENE_PLACE aborted: invalid palette index=% model_count=%", scene_place_palette_index, scene_palette_models.count);
+        return;
+    }
+    ray_origin, ray_dir, ray_ok := scene_mouse_world_ray(frame);
+    log("SCENE_PLACE ray: ok=% origin=% dir=% mouse=% viewport=%", ray_ok, ray_origin, ray_dir, frame.mouse_pos, frame.viewport);
+    if !ray_ok return;
+    hit, p := scene_ray_intersect_plane(ray_origin, ray_dir, .{0.0, 0.0, 0.0}, .{0.0, 1.0, 0.0});
+    log("SCENE_PLACE plane hit: hit=% point=%", hit, p);
+    if !hit return;
+    p.y = ground_height_at(ground_plane_desc, p.x, p.z);
+    model_path := scene_palette_models[scene_place_palette_index];
+    log("SCENE_PLACE placing model=% at point=%", model_path, p);
+    new_node := Scene_File.place_palette_model(*scene_doc, scene_palette_models[scene_place_palette_index], p);
+    log("SCENE_PLACE new node index=% total_nodes=%", new_node, scene_doc.nodes.count);
+    scene_dirty = true;
+    scene_place_palette_index = -1;
+    Scene_File.deinit(*compiled_scene);
+    compiled_scene = Scene_File.recompile_scene_document(scene_doc);
+    log("SCENE_PLACE recompiled scene: compiled_nodes=% compiled_assets=%", compiled_scene.nodes.count, compiled_scene.assets.count);
+    rebuild_scene_runtime();
+    scene_manip_objects_dirty = true;
+    scene_rebuild_manip_objects();
+    scene_manip_objects_dirty = false;
+    for scene_manip_node_indices if it == new_node scene_manip_ctx.selected_index = cast(s32) it_index;
+    log("SCENE_PLACE selected manip index=%", scene_manip_ctx.selected_index);
+}
+
+find_compiled_node_for_source :: (source_path: string, node_name: string) -> s32 {
+    for compiled_scene.nodes {
+        if it.source_path == source_path && it.name == node_name return cast(s32) it_index;
+    }
+    return -1;
+}
+
+compiled_node_is_under_player_root :: (node_index: s32) -> bool {
+    if running_lizard_compiled_root_node_index < 0 return false;
+    if node_index == running_lizard_compiled_root_node_index return false;
+    probe := compiled_scene.nodes[node_index].parent_index;
+    while probe >= 0 {
+        if probe == running_lizard_compiled_root_node_index return true;
+        probe = compiled_scene.nodes[probe].parent_index;
+    }
+    return false;
+}
+
+scene_mouse_world_ray :: (frame: Manip_Frame_Input) -> Vector3, Vector3, bool {
+    if !frame.mouse_valid {
+        log("SCENE_PLACE ray failed: mouse invalid");
+        return .{}, .{}, false;
+    }
+    if frame.viewport.x <= 1.0 || frame.viewport.y <= 1.0 {
+        log("SCENE_PLACE ray failed: viewport too small=%", frame.viewport);
+        return .{}, .{}, false;
+    }
+    nx := ((frame.mouse_pos.x + 0.5) / frame.viewport.x) * 2.0 - 1.0;
+    ny := ((frame.mouse_pos.y + 0.5) / frame.viewport.y) * 2.0 - 1.0;
+    aspect := frame.viewport.x / max(frame.viewport.y, 1.0);
+    tan_half_fov := tan(frame.fov_y * 0.5);
+    dir := frame.camera_forward + frame.camera_right * (nx * aspect * tan_half_fov) + frame.camera_up * (ny * tan_half_fov);
+    normalize(*dir, fallback = frame.camera_forward);
+    return frame.camera_pos, dir, true;
+}
+
+scene_ray_intersect_plane :: (ray_origin: Vector3, ray_dir: Vector3, plane_origin: Vector3, plane_normal: Vector3) -> bool, Vector3 {
+    denom := dot(ray_dir, plane_normal);
+    if abs(denom) <= 0.00001 {
+        log("SCENE_PLACE plane miss: parallel denom=%", denom);
+        return false, .{};
+    }
+    t := dot(plane_origin - ray_origin, plane_normal) / denom;
+    if t <= 0.00001 {
+        log("SCENE_PLACE plane miss: behind origin t=%", t);
+        return false, .{};
+    }
+    return true, ray_origin + ray_dir * t;
+}
+
+SCENE_ROOT_PATH :: "./scenes/model_scene.scene";
+
+ground_plane_desc: Scene_File.Scene_Procedural_Ground_Desc;
+
+init_ground_plane :: (ground: Scene_File.Scene_Procedural_Ground_Desc) {
+    ground_plane_desc = ground;
+
+    ground_texture, ground_texture_view = load_texture_rgba8(ground.base_color_path);
+    ground_normal_texture, ground_normal_texture_view = load_texture_rgba8(ground.normal_path);
+    ground_roughness_texture, ground_roughness_texture_view = load_texture_rgba8(ground.roughness_path);
+    ground_ao_texture, ground_ao_texture_view = load_texture_rgba8(ground.ao_path);
     ground_sampler = gpu_create_sampler(.{
         min_filter = .LINEAR,
         mag_filter = .LINEAR,
@@ -794,17 +1258,17 @@ init_ground_plane :: () {
     defer array_free(ground_vertices_cpu);
     defer array_free(ground_indices_cpu);
     defer array_free(ground_height_samples);
-    build_ground_plane_mesh(*ground_vertices_cpu, *ground_indices_cpu);
-    build_ground_height_samples(*ground_height_samples, GROUND_PHYSICS_GRID_X, GROUND_PHYSICS_GRID_Z);
+    build_ground_plane_mesh(*ground_vertices_cpu, *ground_indices_cpu, ground);
+    build_ground_height_samples(*ground_height_samples, ground.physics_grid_x, ground.physics_grid_z, ground);
 
-    assert(GROUND_PHYSICS_GRID_X == GROUND_PHYSICS_GRID_Z, "Jolt heightfield path currently expects a square physics grid.");
-    sample_count := cast(u32) GROUND_PHYSICS_GRID_X + 1;
-    cell_size_x := GROUND_SIZE_X / cast(float) GROUND_PHYSICS_GRID_X;
-    cell_size_z := GROUND_SIZE_Z / cast(float) GROUND_PHYSICS_GRID_Z;
+    assert(ground.physics_grid_x == ground.physics_grid_z, "Jolt heightfield path currently expects a square physics grid.");
+    sample_count := cast(u32) ground.physics_grid_x + 1;
+    cell_size_x := ground.size_x / cast(float) ground.physics_grid_x;
+    cell_size_z := ground.size_z / cast(float) ground.physics_grid_z;
     ground_physics_body = Physics.create_static_heightfield(
         ground_height_samples,
         sample_count,
-        .{-GROUND_SIZE_X * 0.5, 0.0, -GROUND_SIZE_Z * 0.5 + GROUND_CENTER_Z},
+        .{-ground.size_x * 0.5, 0.0, -ground.size_z * 0.5 + ground.center_z},
         .{cell_size_x, 1.0, cell_size_z});
     ground_physics_body_valid = true;
 
@@ -854,75 +1318,20 @@ init_ground_plane :: () {
     ground_index_count = cast(u32) ground_indices.cpu.count;
 }
 
-append_floating_teapot_transforms :: (root_transforms: *[..]Matrix4) {
-    random_seed(cast(u64) 0x74ea0701);
-    for 0..FLOATING_TEAPOT_COUNT {
-        angle := random_get_within_range(0.0, 2.0 * PI);
-        radius := random_get_within_range(16.0, 23.0);
-        x := cos(angle) * radius;
-        z := sin(angle) * radius + GROUND_CENTER_Z;
-        y := random_get_within_range(5.0, 8.5);
-        scale := random_get_within_range(0.35, 0.7);
-        yaw := random_get_within_range(0.0, 2.0 * PI);
-        q: Quaternion;
-        set_from_axis_and_angle(*q, .{0.0, 1.0, 0.0}, yaw);
-        array_add(root_transforms,
-            make_translation_matrix4(.{x, y, z})
-            * rotation_matrix(Matrix4, q)
-            * make_scale_matrix4(.{scale, scale, scale}));
-    }
-}
-
-append_scattered_stone_transforms :: (root_transforms: *[..]Matrix4, placements: *[..]Stone_Physics_Placement, variant_index: u32, variant_count: s64, base_scale: float) {
-    target_count := SCATTERED_STONE_COUNT / variant_count;
-    if cast(s64) variant_index < SCATTERED_STONE_COUNT % variant_count target_count += 1;
-
-    accepted: s64 = 0;
-    random_seed(cast(u64) 0x5eedC0de + cast(u64) variant_index * 0x9E3779B97F4A7C15);
-    while accepted < target_count {
-        x := random_get_within_range(-GROUND_SIZE_X * 0.42, GROUND_SIZE_X * 0.42);
-        z := random_get_within_range(-GROUND_SIZE_Z * 0.44, GROUND_SIZE_Z * 0.44) + GROUND_CENTER_Z;
-
-        central_exclusion := abs(x) < 4.8 && z > -18.0 && z < 5.0;
-        hero_exclusion := length(.{x - 4.9, z + 5.6}) < 4.0;
-        runner_exclusion := length(.{x + 6.8, z + 9.5}) < 4.5;
-        teapot_exclusion := abs(x) < 14.0 && z > -18.0 && z < -3.0;
-        if central_exclusion || hero_exclusion || runner_exclusion || teapot_exclusion {
-            continue;
-        }
-
-        y := ground_height_at(x, z) + 0.015;
-        scale := base_scale * random_get_within_range(0.8, 1.35);
-        rotation_y := random_get_within_range(0.0, 2.0 * PI);
-        q: Quaternion;
-        set_from_axis_and_angle(*q, .{0.0, 1.0, 0.0}, rotation_y);
-        array_add(placements, .{
-            position = .{x, y, z},
-            rotation = q,
-            scale = scale,
-        });
-        array_add(root_transforms,
-            make_translation_matrix4(.{x, y, z})
-            * rotation_matrix(Matrix4, q)
-            * make_scale_matrix4(.{scale, scale, scale}));
-        accepted += 1;
-    }
-}
-
-build_ground_plane_mesh :: (vertices: *[..]Scene_Vertex, indices: *[..]u32) {
+build_ground_plane_mesh :: (vertices: *[..]Scene_Vertex, indices: *[..]u32, ground: Scene_File.Scene_Procedural_Ground_Desc) {
     vertices.allocator = temp;
     indices.allocator = temp;
-    array_reserve(vertices, (GROUND_GRID_X + 1) * (GROUND_GRID_Z + 1));
-    array_reserve(indices, GROUND_GRID_X * GROUND_GRID_Z * 6);
+    array_reserve(vertices, (ground.render_grid_x + 1) * (ground.render_grid_z + 1));
+    array_reserve(indices, ground.render_grid_x * ground.render_grid_z * 6);
 
-    for z_step: 0..GROUND_GRID_Z {
-        v := cast(float) z_step / cast(float) GROUND_GRID_Z;
-        z := lerp(-GROUND_SIZE_Z * 0.5, GROUND_SIZE_Z * 0.5, v) + GROUND_CENTER_Z;
-        for x_step: 0..GROUND_GRID_X {
-            u := cast(float) x_step / cast(float) GROUND_GRID_X;
-            x := lerp(-GROUND_SIZE_X * 0.5, GROUND_SIZE_X * 0.5, u);
-            y := ground_height_at(x, z);
-            n := ground_normal_at(x, z);
+    for z_step: 0..ground.render_grid_z {
+        v := cast(float) z_step / cast(float) ground.render_grid_z;
+        z := lerp(-ground.size_z * 0.5, ground.size_z * 0.5, v) + ground.center_z;
+        for x_step: 0..ground.render_grid_x {
+            u := cast(float) x_step / cast(float) ground.render_grid_x;
+            x := lerp(-ground.size_x * 0.5, ground.size_x * 0.5, u);
+            y := ground_height_at(ground, x, z);
+            n := ground_normal_at(ground, x, z);
             array_add(vertices, .{
                 position = .{x, y, z, 1.0},
                 normal = .{n.x, n.y, n.z, 0.0},
@@ -932,9 +1341,9 @@ build_ground_plane_mesh :: (vertices: *[..]Scene_Vertex, indices: *[..]u32) {
         }
     }
 
-    stride := GROUND_GRID_X + 1;
-    for z_step: 0..GROUND_GRID_Z-1 {
-        for x_step: 0..GROUND_GRID_X-1 {
+    stride := ground.render_grid_x + 1;
+    for z_step: 0..ground.render_grid_z-1 {
+        for x_step: 0..ground.render_grid_x-1 {
             i0 := cast(u32) (z_step * stride + x_step);
             i1 := i0 + 1;
             i2 := i0 + cast(u32) stride;
@@ -945,17 +1354,17 @@ build_ground_plane_mesh :: (vertices: *[..]Scene_Vertex, indices: *[..]u32) {
     }
 }
 
-build_ground_height_samples :: (samples: *[..]float, grid_x: s64, grid_z: s64) {
+build_ground_height_samples :: (samples: *[..]float, grid_x: s64, grid_z: s64, ground: Scene_File.Scene_Procedural_Ground_Desc) {
     samples.allocator = temp;
     array_reserve(samples, (grid_x + 1) * (grid_z + 1));
 
     for z_step: 0..grid_z {
         v := cast(float) z_step / cast(float) grid_z;
-        z := lerp(-GROUND_SIZE_Z * 0.5, GROUND_SIZE_Z * 0.5, v) + GROUND_CENTER_Z;
+        z := lerp(-ground.size_z * 0.5, ground.size_z * 0.5, v) + ground.center_z;
         for x_step: 0..grid_x {
             u := cast(float) x_step / cast(float) grid_x;
-            x := lerp(-GROUND_SIZE_X * 0.5, GROUND_SIZE_X * 0.5, u);
-            array_add(samples, ground_height_at(x, z));
+            x := lerp(-ground.size_x * 0.5, ground.size_x * 0.5, u);
+            array_add(samples, ground_height_at(ground, x, z));
         }
     }
 }
@@ -983,22 +1392,21 @@ build_model_mesh_collider_shape :: (geo: Scene_Geo, model_index: s32) -> Physics
     return Physics.create_mesh_shape(verts, tris);
 }
 
-ground_height_at :: (x: float, z: float) -> float {
-    ridge := sin(x * 0.23 + z * 0.09) * 0.16;
-    swell := cos(z * 0.18 - x * 0.05) * 0.11;
-    warp := sin((x + z) * 0.11) * 0.07 + cos((x - z) * 0.07) * 0.05;
+ground_height_at :: (ground: Scene_File.Scene_Procedural_Ground_Desc, x: float, z: float) -> float {
+    ridge := sin(x * 0.23 + z * 0.09) * ground.ridge;
+    swell := cos(z * 0.18 - x * 0.05) * ground.swell;
+    warp := sin((x + z) * 0.11) * ground.warp + cos((x - z) * 0.07) * ground.warp;
     flatten := 1.0 - smoothstep(0.0, 6.0, abs(x) * 0.38);
     return ridge + swell + warp - flatten * 0.05;
 }
 
-ground_normal_at :: (x: float, z: float) -> Vector3 {
+ground_normal_at :: (desc: Scene_File.Scene_Procedural_Ground_Desc, x: float, z: float) -> Vector3 {
     eps := 0.15;
-    h_l := ground_height_at(x - eps, z);
-    h_r := ground_height_at(x + eps, z);
-    h_d := ground_height_at(x, z - eps);
-    h_u := ground_height_at(x, z + eps);
-    n := Vector3.{h_l - h_r, eps * 2.0, h_d - h_u};
-    return normalize(n);
+    h_l := ground_height_at(desc, x - eps, z);
+    h_r := ground_height_at(desc, x + eps, z);
+    h_d := ground_height_at(desc, x, z - eps);
+    h_u := ground_height_at(desc, x, z + eps);
+    return normalize({h_l - h_r, eps * 2.0, h_d - h_u});
 }
 
 hash01 :: (x: u32) -> float {
@@ -1049,12 +1457,17 @@ load_texture_rgba8 :: (path: string) -> Gpu_Texture, Gpu_Texture_View {
 #load "../character_controller.jai";
 #load "../SGPU_App_Common.jai";
 #load "../editor_camera.jai";
+#load "../ui/manip.jai";
+#load "../ui/toggle_widget.jai";
 #load "../shadowmap.jai";
 #load "../scene_geo.jai";
 #load "../scene_anim.jai";
+Scene_File :: #import,file "../scene_file.jai";
 Gizmo :: #import "Gizmo";
 Gizmo_Render :: #import "Gizmo_Render";
 Physics :: #import "Physics";
+ai :: #import "assimp";
+String :: #import "String";
 #import "Jai-Shader-Transpiler";
 ImGui :: #import "ImGui";
 Input :: #import "Input";

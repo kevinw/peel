@@ -71,7 +71,7 @@ init :: (ctx: *Gizmo_Context) {
     ctx.point_size = 8.0;
     ctx.arrow_head_size = 0.06;
     ctx.unit_circle_cache.allocator = context.allocator;
-    
+
     g_ctx = ctx;
 }
 
@@ -142,17 +142,17 @@ set_external_line_sink :: (
     ctx.line_thickness_sink = line_thickness;
 }
 
-clear_external_line_sink :: (ctx: *Gizmo_Context) {
-    ctx.max_lines = 0;
-    ctx.line_count = 0;
-    ctx.line_a_sink = .{};
-    ctx.line_b_sink = .{};
-    ctx.line_color_sink = .{};
-    ctx.line_thickness_sink = .{};
+clear_external_line_sink :: (using ctx: *Gizmo_Context) {
+    max_lines = 0;
+    line_count = 0;
+    line_a_sink = .{};
+    line_b_sink = .{};
+    line_color_sink = .{};
+    line_thickness_sink = .{};
 }
 
 set_external_triangle_sink :: (
-    ctx: *Gizmo_Context,
+    using ctx: *Gizmo_Context,
     triangle_a: []Vector3,
     triangle_b: []Vector3,
     triangle_c: []Vector3,
@@ -168,25 +168,25 @@ set_external_triangle_sink :: (
         return;
     }
 
-    ctx.max_triangles = count;
-    ctx.triangle_count = 0;
-    ctx.triangle_a_sink = triangle_a;
-    ctx.triangle_b_sink = triangle_b;
-    ctx.triangle_c_sink = triangle_c;
-    ctx.triangle_color_sink = triangle_color;
+    max_triangles = count;
+    triangle_count = 0;
+    triangle_a_sink = triangle_a;
+    triangle_b_sink = triangle_b;
+    triangle_c_sink = triangle_c;
+    triangle_color_sink = triangle_color;
 }
 
-clear_external_triangle_sink :: (ctx: *Gizmo_Context) {
-    ctx.max_triangles = 0;
-    ctx.triangle_count = 0;
-    ctx.triangle_a_sink = .{};
-    ctx.triangle_b_sink = .{};
-    ctx.triangle_c_sink = .{};
-    ctx.triangle_color_sink = .{};
+clear_external_triangle_sink :: (using ctx: *Gizmo_Context) {
+    max_triangles = 0;
+    triangle_count = 0;
+    triangle_a_sink = .{};
+    triangle_b_sink = .{};
+    triangle_c_sink = .{};
+    triangle_color_sink = .{};
 }
-    
 
-draw_line :: inline (ctx: *Gizmo_Context, a: Vector3, b: Vector3, color: u32 = 0, thickness: float = 0.0) {
+
+draw_line :: inline (ctx: *Gizmo_Context, a: Vector3, b: Vector3, color: u32 = 0, thickness: float = 0.0) #no_abc {
     line_color := color;
     if line_color == 0 line_color = ctx.default_color;
 
@@ -198,7 +198,6 @@ draw_line :: inline (ctx: *Gizmo_Context, a: Vector3, b: Vector3, color: u32 = 0
     ensure_line_sink_bound(ctx);
 
     if ctx.line_count >= ctx.max_lines {
-        log_error("max_lines hit");
         return;
     }
     i := ctx.line_count;
@@ -263,7 +262,7 @@ draw_triangle :: (
     color: u32 = 0,
     filled: bool = true,
     thickness: float = 0.0,
-) {
+) #no_abc {
     assert(ctx != null);
     tri_color := color;
     if tri_color == 0 tri_color = ctx.default_color;
@@ -280,7 +279,7 @@ draw_triangle :: (
         log_error("max_triangles hit: %", ctx.max_triangles);
         return;
     }
-        
+
     i := ctx.triangle_count;
     ctx.triangle_a_sink[i] = a;
     ctx.triangle_b_sink[i] = b;
@@ -298,7 +297,7 @@ draw_triangle :: (
     filled: bool = true,
     thickness: float = 0.0,
 ) {
-    draw_triangle(ctx, a, b, c, pack_color_rgba8(color), filled, thickness);
+    inline draw_triangle(ctx, a, b, c, pack_color_rgba8(color), filled, thickness);
 }
 
 draw_point :: (ctx: *Gizmo_Context, center: Vector3, color: u32 = 0, size: float = 0.0, thickness: float = 0.0) {

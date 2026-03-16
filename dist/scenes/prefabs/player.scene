@@ -1,0 +1,29 @@
+[1]
+scene "Player Prefab" {
+  asset "runner_lizard" {
+    model "./models/Lizard run.glb"
+  }
+  asset "hard_hat" {
+    model "./models/hard-hat/source/helm.obj"
+  }
+
+  node "PlayerBody" {
+    position 0 0 0
+    rotation_deg 0 0 0
+    scale 4.8 4.8 4.8
+    skinned_mesh_render "runner_lizard"
+    clip "Run"
+    behavior "Player_Controller" {
+      autopilot false
+      move_speed 4.15
+    }
+
+    node "Hard Hat" {
+      attach_node "head"
+      position 0 1.02 0.05
+      rotation_deg 20 -50 -90
+      scale 0.24 0.24 0.24
+      mesh_render "hard_hat"
+    }
+  }
+}
