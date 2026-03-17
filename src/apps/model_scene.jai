@@ -1033,7 +1033,7 @@ asset_import_scale :: (asset: Scene_File.Scene_Asset_Desc) -> Vector3 {
     return abs(scale);
 }
 
-decompose_matrix_trs :: (m: Matrix4) -> Vector3, Vector3, Vector3 {
+decompose_matrix_trs :: (m: Matrix4) -> (pos: Vector3, rot: Vector3, scl: Vector3) {
     ai_scale: ai.Vector3D;
     ai_rotation: ai.Vector3D;
     ai_position: ai.Vector3D;
@@ -1429,18 +1429,6 @@ load_texture_rgba8 :: (path: string) -> Gpu_Texture, Gpu_Texture_View {
 
     view := gpu_texture_view(texture);
     return texture, view;
-}
-
-make_trs_matrix :: (pos: Vector3, rot: Quaternion, scale: Vector3) -> Matrix4 {
-    return make_translation_matrix4(pos) *
-        rotation_matrix(Matrix4, rot) *
-        make_scale_matrix4(scale);
-}
-
-make_trs_matrix :: (pos: Vector3, rot: Quaternion, scale: float) -> Matrix4 {
-    return make_translation_matrix4(pos) *
-        rotation_matrix(Matrix4, rot) *
-        make_scale_matrix4(.{scale, scale, scale});
 }
 
 #load "../character_controller.jai";

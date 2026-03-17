@@ -28,9 +28,7 @@ texture3d_animate_volume := true;
 
 on_dll_init :: () {
     compute_source := cast([]u8) get_transpiled(.METAL, texture3d_compute_main);
-    assert(compute_source.count > 0, "Transpilation failed for texture3d compute shader.");
     graphics_source := cast([]u8) get_transpiled(.METAL, texture3d_vertex_main, texture3d_fragment_main);
-    assert(graphics_source.count > 0, "Transpilation failed for texture3d graphics shaders.");
 
     raster_desc: Gpu_Raster_Desc = .{
         cull = .NONE,

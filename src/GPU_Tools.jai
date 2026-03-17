@@ -114,3 +114,15 @@ gpu_delete :: (gpu_buffer: *Gpu_Buffer($T)) {
 cos :: (v: Vector3) -> Vector3 { return { cos(v.x), cos(v.y), cos(v.z) }; }
 sin :: (v: Vector3) -> Vector3 { return { sin(v.x), sin(v.y), sin(v.z) }; }
 vec4 :: (v3: Vector3, w: float) -> Vector4 { return { v3.x, v3.y, v3.z, w }; }
+
+make_trs_matrix :: inline (pos: Vector3, rot: Quaternion, scale: Vector3) -> Matrix4 {
+    return make_translation_matrix4(pos) *
+        rotation_matrix(Matrix4, rot) *
+        make_scale_matrix4(scale);
+}
+
+make_trs_matrix :: inline (pos: Vector3, rot: Quaternion, scale: float) -> Matrix4 {
+    return make_translation_matrix4(pos) *
+        rotation_matrix(Matrix4, rot) *
+        make_scale_matrix4(.{scale, scale, scale});
+}
