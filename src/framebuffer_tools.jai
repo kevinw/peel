@@ -129,7 +129,13 @@ fb_validate_swapchain_readback_non_black :: (view: Gpu_Texture_View, backend_lab
     return ok;
 }
 
-fb_dump_swapchain_thumbnail_jpeg :: (view: Gpu_Texture_View, output_path: string, thumb_width: u32 = DEFAULT_SNAPSHOT_WIDTH, thumb_height: u32 = DEFAULT_SNAPSHOT_HEIGHT) -> bool {
+fb_dump_swapchain_thumbnail_jpeg :: (
+    view: Gpu_Texture_View,
+    output_path: string,
+    thumb_width: u32 = DEFAULT_SNAPSHOT_WIDTH,
+    thumb_height: u32 = DEFAULT_SNAPSHOT_HEIGHT,
+    frame_num: s64
+) -> bool {
     width, height, ok := gpu_texture_view_size(view);
     assert(ok);
     if !ok return false;
@@ -194,7 +200,8 @@ fb_dump_swapchain_thumbnail_jpeg :: (view: Gpu_Texture_View, output_path: string
     if !success {
         log_error("fb_dump_swapchain_thumbnail_jpeg: failed to write JPEG file to '%'", output_path);
     } else {
-        log("PEEL_SNAPSHOT wrote thumbnail (%x%) to %", thumb_width, thumb_height, output_path);
+        abs_path := File.get_absolute_path(output_path);
+        log("PEEL_SNAPSHOT wrote thumbnail (%x%) (frame=%) to %", thumb_width, thumb_height, frame_num, ifx abs_path else output_path);
     }
     return success;
 }

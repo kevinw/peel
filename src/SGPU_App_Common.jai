@@ -97,8 +97,8 @@ app_swapchain_acquire :: () -> Gpu_Result, Gpu_Texture_View {
 
 app_update :: (update_ctx: *App_Update_Ctx) {
     auto_release_temp();
-    #if TRACY_PROFILER_ENABLED {
-        Tracy.FrameMark();
+    #if #exists(TRACY_PROFILER_ENABLED) {
+        #if TRACY_PROFILER_ENABLED Tracy.FrameMark();
     }
 
     #if OS == .MACOS {
@@ -634,6 +634,8 @@ SHR :: #import,file "shader_hot_reload.jai";
     #load "app_list.jai";
     #load "ui/app_browser.jai";
 }
-#if TRACY_PROFILER_ENABLED {
-    Tracy :: #import "Tracy"(IMPORT_MODE=.CLIENT);
+#if #exists(TRACY_PROFILER_ENABLED) {
+    #if TRACY_PROFILER_ENABLED {
+        Tracy :: #import "Tracy"(IMPORT_MODE=.CLIENT);
+    }
 }

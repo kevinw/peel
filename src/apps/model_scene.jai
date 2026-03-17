@@ -172,7 +172,7 @@ on_dll_init :: () {
     debug_shadow_source := cast([]u8) get_transpiled(.METAL, model_scene_debug_shadow_vertex_main, model_scene_debug_shadow_fragment_main);
 
     main_raster: Gpu_Raster_Desc = .{
-        cull = .CCW,
+        cull = .CW,
         depth_format = .D32_SFLOAT,
         color_targets = .[
             .{format = .B8G8R8A8_UNORM},
@@ -1288,10 +1288,10 @@ init_ground_plane :: (ground: Scene_File.Scene_Procedural_Ground_Desc) {
         light_dir = normalize(Vector3.{0.35, -1.0, 0.25}),
         camera_pos = scene_camera.position,
         sampler_index = cast(u32) ground_sampler - 1,
-        base_color_texture_index = cast(u32) ground_texture_view - 1,
-        normal_texture_index = cast(u32) ground_normal_texture_view - 1,
-        roughness_texture_index = cast(u32) ground_roughness_texture_view - 1,
-        ao_texture_index = cast(u32) ground_ao_texture_view - 1,
+        base_color_texture_index = gpu_texture_view_index(ground_texture_view),
+        normal_texture_index = gpu_texture_view_index(ground_normal_texture_view),
+        roughness_texture_index = gpu_texture_view_index(ground_roughness_texture_view),
+        ao_texture_index = gpu_texture_view_index(ground_ao_texture_view),
     };
     grass_grid_x := max(1, ground.render_grid_x * 4 / 3 * 3);
     grass_grid_z := max(1, ground.render_grid_z * 4 / 3 * 3);

@@ -19,6 +19,7 @@ Readback_Stats :: struct {
     snapshot_next_index: s64;
     snapshot_width: s64;
     snapshot_height: s64;
+    snapshot_run_dir: string;
     export_jpg_mode: bool;
     exported_jpg: bool;
     prev_valid: bool;
@@ -30,6 +31,7 @@ DEFAULT_SNAPSHOT_HEIGHT :u32 : 500;
 
 readback_stats_reset :: (state: *Readback_Stats, snapshot_default_w: s64 = DEFAULT_SNAPSHOT_WIDTH, snapshot_default_h: s64 = DEFAULT_SNAPSHOT_HEIGHT) {
     array_free(state.snapshot_frames);
+    free(state.snapshot_run_dir);
     state.* = .{
         snapshot_width  = max(1, snapshot_default_w),
         snapshot_height = max(1, snapshot_default_h),
@@ -68,6 +70,8 @@ readback_stats_init :: (state: *Readback_Stats, log_prefix: string, snapshot_def
     snapshot_h, snapshot_h_set := try_parse_env_int("PEEL_SNAPSHOT_H");
     if snapshot_h_set state.snapshot_height = max(1, snapshot_h);
 
+    state.snapshot_run_dir = snapshot_run_dir(APP_STEM);
+
 }
 
 readback_stats_needs_swapchain_readback :: (state: *Readback_Stats) -> bool {
@@ -105,12 +109,10 @@ readback_stats_advance_sample :: (using state: *Readback_Stats) -> bool {
     return stats_samples_done >= stats_max_samples;
 }
 
-readback_stats_dump_snapshot :: (using state: *Readback_Stats, view: Gpu_Texture_View, frame_num: s64, path_prefix: string, log_prefix: string) {
-    path := tprint("./%_frame_%.jpeg", path_prefix, frame_num);
-    dumped := fb_dump_swapchain_thumbnail_jpeg(view, path, cast(u32) snapshot_width, cast(u32) snapshot_height);
-    if dumped {
-        log("%_FRAMEBUFFER_SNAPSHOT frame=% path=%", log_prefix, frame_num, path);
-    }
+readback_stats_dump_snapshot :: (using state: *Readback_Stats, view: Gpu_Texture_View, frame_num: s64, path_prefix: string, log_prefix: string) -> bool {
+    dir := snapshot_output_dir(state);
+    path := tprint("%/%_frame_%.jpeg", dir, path_prefix, frame_num);
+    return fb_dump_swapchain_thumbnail_jpeg(view, path, cast(u32) snapshot_width, cast(u32) snapshot_height, frame_num);
 }
 
 
@@ -186,7 +188,7 @@ per_frame_debug :: (using readback_stats: *Readback_Stats, frame_num: s64, swapc
 
     if frame_num >= 2 && window_snapshot_mode {
         check_frame_buffer();
-        window_snapshot_path := tprint("./%_window_frame_%.jpeg", APP_NAME, frame_num);
+        window_snapshot_path := tprint("%/%_window_frame_%.jpeg", snapshot_output_dir(readback_stats), APP_STEM, frame_num);
         gpu_dump_to_bitmap(window_snapshot_path);
         log("WINDOW_SNAPSHOT frame=% path=%", frame_num, window_snapshot_path);
         window_snapshot_mode = false;
@@ -247,5 +249,21 @@ per_frame_debug :: (using readback_stats: *Readback_Stats, frame_num: s64, swapc
 #scope_file
 #import "Env_Vars";
 using,only(getenv) POSIX :: #import "POSIX";
+using,only(getpid) POSIX;
 String :: #import "String";
 using,only(to_lower_in_place, trim) _ :: #import "String";
+File :: #import "File";
+
+snapshot_output_dir :: (state: *Readback_Stats) -> string {
+    if state.snapshot_run_dir.count == 0 {
+        state.snapshot_run_dir = snapshot_run_dir(APP_STEM);
+    }
+    return state.snapshot_run_dir;
+}
+
+snapshot_run_dir :: (app_stem: string) -> string {
+    dir := copy_string(tprint("./diag/%_run_%", app_stem, getpid()));
+    ok := File.make_directory_if_it_does_not_exist(dir, true);
+    assert(ok, "Failed to create snapshot output directory '%'.", dir);
+    return dir;
+}

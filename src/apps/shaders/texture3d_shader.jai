@@ -13,6 +13,15 @@ Texture3D_Params :: struct {
     absorption: float;
     march_steps: float;
 
+    camera_pos: Vector3;
+    _pad1: float;
+    camera_forward: Vector3;
+    _pad2: float;
+    camera_right: Vector3;
+    _pad3: float;
+    camera_up: Vector3;
+    _pad4: float;
+
     resolution: Vector2;
     _pad0: Vector2;
 }
@@ -36,11 +45,11 @@ Texture3D_Fragment_In :: struct {
 
 texture3d_hash31 :: (x: u32, y: u32, z: u32) -> float {
     n := x * cast(u32) 1597334677 + y * cast(u32) 3812015801 + z * cast(u32) 2798796415;
-    n = n ~ (n >> 16);
+    n ^= n >> 16;
     n *= cast(u32) 2246822519;
-    n = n ~ (n >> 13);
+    n ^= n >> 13;
     n *= cast(u32) 3266489917;
-    n = n ~ (n >> 16);
+    n ^= n >> 16;
     scale := 1.0 / cast(float) 16777215;
     return cast(float) (n & cast(u32) 0x00ff_ffff) * scale;
 }
@@ -107,9 +116,23 @@ texture3d_compute_main :: (using in: Texture3D_Compute_In, params: *Texture3D_Pa
         a *= 0.5;
     }
 
-    layers := 0.5 + 0.5 * sin((p.y * 11.0 + p.x * 4.0 + p.z * 3.0) + t * 0.7);
-    band := smoothstep(0.15, 0.8, p.y);
-    density := clamp((n * 0.85 + layers * 0.35) * band - 0.28, 0.0, 1.0);
+    layers := 0.5 + 0.5 * sin((p.y * 9.0 + p.x * 4.0 + p.z * 3.0) + t * 0.7);
+    band := smoothstep(0.12, 0.28, p.y) * (1.0 - smoothstep(0.62, 0.84, p.y));
+
+    blob_falloff :: (q: Vector3, radius0: float, radius1: float, y_stretch: float) -> float {
+        radial := sqrt(q.x * q.x + q.y * q.y * y_stretch * y_stretch + q.z * q.z);
+        return 1.0 - smoothstep(radius0, radius1, radial);
+    }
+
+    blob_a := blob_falloff(p - Vector3.{0.35, 0.41, 0.43}, 0.02, 0.41, 1.18);
+    blob_b := blob_falloff(p - Vector3.{0.63, 0.48, 0.58}, 0.03, 0.37, 1.26);
+    blob_c := blob_falloff(p - Vector3.{0.48, 0.58, 0.36}, 0.01, 0.30, 1.12);
+    shape_mask := max(blob_a, max(blob_b * 0.95, blob_c * 0.85));
+    shape_mask = shape_mask * shape_mask;
+
+    wisps := 0.5 + 0.5 * sin((p.x * 9.0 - p.z * 7.0) + n * 5.0 + t * 0.35);
+    base_density := n * 0.72 + layers * 0.18 + wisps * 0.12;
+    density := clamp((base_density - 0.42) * 4.4 * band * shape_mask, 0.0, 1.0);
 
     texture_index := min(params[0].texture_index, 126);
     write_3d(texture_index, x, y, z, .{density, 0.0, 0.0, 0.0});
@@ -129,6 +152,16 @@ texture3d_vertex_main :: (using in: Texture3D_Vertex_In) -> Texture3D_Vertex_Out
 } @vertex_shader
 
 texture3d_fragment_main :: (using in: Texture3D_Fragment_In, params: *Texture3D_Params) -> struct { out_color: Vector4; } {
+    if (params[0].flags & cast(u32) 2) != 0 {
+        slice_z := 0.5 + 0.2 * sin(params[0].time * 0.45);
+        d := sample_3d(params[0].texture_index, params[0].sampler_index, .{uv.x, uv.y, slice_z}).x;
+        c := mix(Vector3.{0.02, 0.03, 0.05}, Vector3.{0.9, 0.94, 1.0}, clamp(d * 1.5, 0.0, 1.0));
+        return .{out_color = .{c.x, c.y, c.z, 1.0}};
+    }
+
+    sky_mix := clamp(uv.y * 0.8 + 0.2, 0.0, 1.0);
+    sky := mix(Vector3.{0.07, 0.09, 0.12}, Vector3.{0.16, 0.2, 0.28}, sky_mix);
+
     res := Vector2.{
         max(params[0].resolution.x, 1.0),
         max(params[0].resolution.y, 1.0),
@@ -136,16 +169,11 @@ texture3d_fragment_main :: (using in: Texture3D_Fragment_In, params: *Texture3D_
     uv_clip := uv * 2.0 - Vector2.{1.0, 1.0};
     uv_clip.x *= res.x / res.y;
 
-    t := params[0].time;
-    target := Vector3.{0.5, 0.52, 0.5};
-    ro := target + Vector3.{cos(t * 0.2) * 1.8, 0.45 + sin(t * 0.27) * 0.35, sin(t * 0.2) * 1.8};
-    forward := normalize(target - ro);
-    right := normalize(cross(Vector3.{0.0, 1.0, 0.0}, forward));
-    up := cross(forward, right);
+    ro := params[0].camera_pos;
+    forward := normalize(params[0].camera_forward);
+    right := normalize(params[0].camera_right);
+    up := normalize(params[0].camera_up);
     rd := normalize(forward + uv_clip.x * right * 0.9 + uv_clip.y * up * 0.9);
-
-    bg_mix := clamp(uv.y * 0.8 + 0.2, 0.0, 1.0);
-    sky := mix(Vector3.{0.07, 0.09, 0.12}, Vector3.{0.16, 0.2, 0.28}, bg_mix);
 
     eps :: 0.000001;
     inv_rd_x := texture3d_sign(rd.x) / max(abs(rd.x), eps);
@@ -165,25 +193,38 @@ texture3d_fragment_main :: (using in: Texture3D_Fragment_In, params: *Texture3D_
     tf_z := max(tmin_z, tmax_z);
     near_t := max(max(tn_x, tn_y), tn_z);
     far_t := min(min(tf_x, tf_y), tf_z);
-    if far_t <= max(near_t, 0.0) {
-        return .{out_color = .{sky.x, sky.y, sky.z, 1.0}};
+    final_color := sky;
+    if far_t > max(near_t, 0.0) {
+        start_t := max(near_t, 0.0);
+        span_t := max(far_t - start_t, 0.00001);
+        step_count := max(cast(s32) floor(params[0].march_steps), 8);
+        max_steps :: 128;
+        dt := span_t / cast(float) step_count;
+
+        accum := sky;
+        alpha: float = 0.0;
+
+        for i: 0..max_steps-1 {
+            if i >= step_count break;
+
+            t_sample := start_t + dt * (cast(float) i + 0.5);
+            p := ro + rd * t_sample;
+            d := sample_3d(params[0].texture_index, params[0].sampler_index, p).x;
+            density := max((d * params[0].density_scale - 0.015) * 14.0, 0.0);
+
+            if density > 0.0 {
+                step_alpha := clamp(density * params[0].absorption * dt * 1.8, 0.0, 0.28);
+                height_light := clamp(p.y, 0.0, 1.0);
+                cloud_col := mix(Vector3.{0.28, 0.36, 0.48}, Vector3.{0.88, 0.92, 0.98}, height_light);
+                remain := 1.0 - alpha;
+                blend := remain * step_alpha;
+                accum = accum * (1.0 - blend) + cloud_col * blend;
+                alpha += blend;
+            }
+        }
+
+        fog := smoothstep(0.005, 0.18, alpha);
+        final_color = mix(sky, accum, fog);
     }
-
-    t_cursor := max(near_t, 0.0);
-    t_span := max(far_t - t_cursor, 0.00001);
-    steps := max(cast(u32) params[0].march_steps, cast(u32) 8);
-    dt := t_span / cast(float) steps;
-
-    optical_depth := 0.0;
-    for i: 0..cast(s64) steps-1 {
-        p := ro + rd * (t_cursor + dt * (cast(float) i + 0.5));
-        d := sample_3d(params[0].texture_index, params[0].sampler_index, p).x * params[0].density_scale;
-        optical_depth += max(d, 0.0) * dt;
-    }
-
-    transmittance := exp(-optical_depth * params[0].absorption);
-    fog := clamp(1.0 - transmittance, 0.0, 1.0);
-    fog_color := mix(Vector3.{0.82, 0.88, 0.95}, Vector3.{0.12, 0.18, 0.26}, fog);
-    out_color := mix(sky, fog_color, fog);
-    return .{out_color = .{out_color.x, out_color.y, out_color.z, 1.0}};
+    return .{out_color = .{final_color.x, final_color.y, final_color.z, 1.0}};
 } @fragment_shader

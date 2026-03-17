@@ -96,7 +96,7 @@ shadow_map_update_view_proj :: (shadow: *Shadow_Map) {
 }
 
 shadow_map_binding :: (shadow: *Shadow_Map) -> Vector4 {
-    tex_idx := cast(float) (cast(u32) shadow.map_view - 1);
+    tex_idx := cast(float) gpu_texture_view_index(shadow.map_view);
     sampler_idx := cast(float) (cast(u32) shadow.sampler - 1);
     texel := 1.0 / cast(float) shadow.size;
     return .{tex_idx, sampler_idx, shadow.bias, texel};

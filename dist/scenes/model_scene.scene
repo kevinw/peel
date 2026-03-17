@@ -1,5 +1,8 @@
 [1]
 scene "Model Scene" {
+  asset "mask" {
+    model "./models/mask.glb"
+  }
   asset "teapot" {
     model "./models/teapot.obj"
   }
@@ -29,6 +32,9 @@ scene "Model Scene" {
   }
 
   node "Ground" {
+    position 0 0 0
+    rotation_deg 0 0 0
+    scale 1 1 1
     procedural_ground {
       size 48 46
       center_z -12
@@ -40,22 +46,22 @@ scene "Model Scene" {
       ao "./textures/Ground104_1K-JPG/Ground104_1K-JPG_AmbientOcclusion.jpg"
     }
   }
-
   node "Hero Lizard" {
-    position 4.9 0.0 -5.6
+    position 4.9 0 -5.6
     rotation_deg 0 180 0
     scale 5 5 5
     mesh_render "hero_lizard"
   }
-
   node "Player" {
     position -6.8 0 -9.5
     rotation_deg 0 180 0
     scale 0.01 0.01 0.01
     instance_scene "prefabs/player.scene"
   }
-
   node "Floating Teapots" {
+    position 0 0 0
+    rotation_deg 0 0 0
+    scale 1 1 1
     scatter_render {
       assets "teapot"
       count 8
@@ -65,11 +71,14 @@ scene "Model Scene" {
       y_range 10 16
       scale_range 0.18 0.34
       yaw_range_deg 0 360
+      ground_y_offset 0
       seed 1954238209
     }
   }
-
   node "Stone Field A" {
+    position 0 0 0
+    rotation_deg 0 0 0
+    scale 1 1 1
     scatter_render {
       assets "stone_1"
       count 80
@@ -77,14 +86,16 @@ scene "Model Scene" {
       x_range -20 20
       z_range -34 10
       y_range 0 0
-      scale_range 1.8 3.0
+      scale_range 1.8 3
       yaw_range_deg 0 360
       ground_y_offset 0.015
       seed 11
     }
   }
-
   node "Stone Field B" {
+    position 0 0 0
+    rotation_deg 0 0 0
+    scale 1 1 1
     scatter_render {
       assets "stone_2"
       count 10
@@ -92,14 +103,16 @@ scene "Model Scene" {
       x_range -20 20
       z_range -34 10
       y_range 0 0
-      scale_range 1.8 3.0
+      scale_range 1.8 3
       yaw_range_deg 0 360
       ground_y_offset 0.015
       seed 12
     }
   }
-
   node "Stone Field C" {
+    position 0 0 0
+    rotation_deg 0 0 0
+    scale 1 1 1
     scatter_render {
       assets "stone_3"
       count 10
@@ -107,14 +120,16 @@ scene "Model Scene" {
       x_range -20 20
       z_range -34 10
       y_range 0 0
-      scale_range 1.8 3.0
+      scale_range 1.8 3
       yaw_range_deg 0 360
       ground_y_offset 0.015
       seed 13
     }
   }
-
   node "Stone Field D" {
+    position 0 0 0
+    rotation_deg 0 0 0
+    scale 1 1 1
     scatter_render {
       assets "stone_4"
       count 5
@@ -122,14 +137,16 @@ scene "Model Scene" {
       x_range -20 20
       z_range -34 10
       y_range 0 0
-      scale_range 1.8 3.0
+      scale_range 1.8 3
       yaw_range_deg 0 360
       ground_y_offset 0.015
       seed 14
     }
   }
-
   node "Stone Field E" {
+    position 0 0 0
+    rotation_deg 0 0 0
+    scale 1 1 1
     scatter_render {
       assets "stone_5"
       count 50
@@ -137,10 +154,16 @@ scene "Model Scene" {
       x_range -20 20
       z_range -34 10
       y_range 0 0
-      scale_range 0.3 1.0
+      scale_range 0.3 1
       yaw_range_deg 0 360
       ground_y_offset 0.015
       seed 15
     }
+  }
+  node "mask" {
+    position -2.341213 2.097282 -5.371956
+    rotation_deg 0 0 0
+    scale 2 2 2
+    mesh_render "mask"
   }
 }

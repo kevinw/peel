@@ -75,3 +75,6 @@ dist/function_constants_test.dylib
 dist/model_scene
 dist/model_scene.dylib
 dist/physics_test.dylib
+dist/diag
+dist/crowd_nav
+dist/crowd_nav.dylib

@@ -65,7 +65,7 @@ on_dll_init :: () {
 
     pixel_params = gpu_alloc_buffer(Textured_Triangle_Pixel_Params);
     pixel_params.cpu.* = .{
-        texture_index = cast(u32) noise_texture_view - 1,
+        texture_index = gpu_texture_view_index(noise_texture_view),
         sampler_index = cast(u32) noise_sampler - 1,
         debug_mode = debug_mode,
         _pad = 0,

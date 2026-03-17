@@ -272,7 +272,7 @@ flux_write_render_payload :: (win_w: u32, win_h: u32) {
     light_center := Vector3.{0.0, 0.0, 0.0};
 
     use_b_as_src_f := ifx state.src_is_a then cast(float) 0.0 else cast(float) 1.0;
-    shadow_tex_idx := cast(float) (cast(u32) shadow_map_view - 1);
+    shadow_tex_idx := cast(float) gpu_texture_view_index(shadow_map_view);
     shadow_sampler_idx := cast(float) (cast(u32) shadow_sampler - 1);
     shadow_bias := cast(float) 0.0035;
     shadow_texel := 1.0 / cast(float) FLUX_SHADOW_MAP_SIZE;

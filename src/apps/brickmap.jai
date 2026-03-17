@@ -304,8 +304,8 @@ on_dll_init :: () {
         address_mode_u = .CLAMP_TO_EDGE, address_mode_v = .CLAMP_TO_EDGE, address_mode_w = .CLAMP_TO_EDGE,
     });
     assert(atlas_point_sampler != 0, "Brickmap atlas point sampler creation failed.");
-    params.cpu.atlas_texture_index = cast(u32) atlas_view - 1;
-    params.cpu.atlas_albedo_texture_index = cast(u32) atlas_albedo_view - 1;
+    params.cpu.atlas_texture_index = gpu_texture_view_index(atlas_view);
+    params.cpu.atlas_albedo_texture_index = gpu_texture_view_index(atlas_albedo_view);
     params.cpu.atlas_sampler_linear_index = cast(u32) atlas_linear_sampler - 1;
     params.cpu.atlas_sampler_point_index = cast(u32) atlas_point_sampler - 1;
     render_sampler = gpu_create_sampler(.{
@@ -717,7 +717,7 @@ tick :: () {
                 return;
             }
             params.cpu.resolution = .{cast(float) render_width, cast(float) render_height};
-            blit_params.cpu.source_texture_index = cast(u32) render_view - 1;
+            blit_params.cpu.source_texture_index = gpu_texture_view_index(render_view);
             blit_params.cpu.source_sampler_index = cast(u32) blit_sampler_handle() - 1;
             log_bindless_indices_once();
         }
@@ -1135,7 +1135,7 @@ ensure_render_target :: (win_w: s32, win_h: s32) -> bool {
 
     render_width = target_w;
     render_height = target_h;
-    blit_params.cpu.source_texture_index = cast(u32) render_view - 1;
+    blit_params.cpu.source_texture_index = gpu_texture_view_index(render_view);
     blit_params.cpu.source_sampler_index = cast(u32) blit_sampler_handle() - 1;
     // Runtime-created offscreen target must be committed into the residency set.
     gpu_commit_residency();

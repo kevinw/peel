@@ -16,6 +16,10 @@
     "command": "jai ~/src/peel/build.jai - src/apps/caustics_pool.jai -run -dll"
   },
   {
+    "label": "crowd_nav",
+    "command": "jai ~/src/peel/build.jai - src/apps/crowd_nav.jai -run -dll"
+  },
+  {
     "label": "fluid2d",
     "command": "jai ~/src/peel/build.jai - src/apps/fluid2d.jai -run -dll"
   },

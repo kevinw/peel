@@ -206,18 +206,18 @@ scene_geo_init_from_imported :: (geo: *Scene_Geo, imported: *Imported_Scene) {
         for imported.materials {
             material := it;
             assert(material.base_color_texture_index < geo.texture_views.count, "Imported texture index % out of range %.", material.base_color_texture_index, geo.texture_views.count);
-            material.base_color_texture_index = cast(u32) geo.texture_views[material.base_color_texture_index] - 1;
+            material.base_color_texture_index = gpu_texture_view_index(geo.texture_views[material.base_color_texture_index]);
             if material.normal_texture_index != SCENE_INVALID_TEXTURE_INDEX {
                 assert(material.normal_texture_index < geo.texture_views.count, "Imported normal texture index % out of range %.", material.normal_texture_index, geo.texture_views.count);
-                material.normal_texture_index = cast(u32) geo.texture_views[material.normal_texture_index] - 1;
+                material.normal_texture_index = gpu_texture_view_index(geo.texture_views[material.normal_texture_index]);
             }
             if material.roughness_texture_index != SCENE_INVALID_TEXTURE_INDEX {
                 assert(material.roughness_texture_index < geo.texture_views.count, "Imported roughness texture index % out of range %.", material.roughness_texture_index, geo.texture_views.count);
-                material.roughness_texture_index = cast(u32) geo.texture_views[material.roughness_texture_index] - 1;
+                material.roughness_texture_index = gpu_texture_view_index(geo.texture_views[material.roughness_texture_index]);
             }
             if material.ao_texture_index != SCENE_INVALID_TEXTURE_INDEX {
                 assert(material.ao_texture_index < geo.texture_views.count, "Imported AO texture index % out of range %.", material.ao_texture_index, geo.texture_views.count);
-                material.ao_texture_index = cast(u32) geo.texture_views[material.ao_texture_index] - 1;
+                material.ao_texture_index = gpu_texture_view_index(geo.texture_views[material.ao_texture_index]);
             }
             sampler := scene_geo_get_or_create_sampler(geo,
                 address_mode_from_assimp(cast(ai.TextureMapMode) material.address_mode_u),

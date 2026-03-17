@@ -395,7 +395,7 @@ tick :: () {
     params.cpu.object_count = cast(u32) redux_edit_count;
     fill_shader_params_from_scene();
 
-    blit_params.cpu.source_texture_index = cast(u32) render_view - 1;
+    blit_params.cpu.source_texture_index = gpu_texture_view_index(render_view);
     blit_params.cpu.source_sampler_index = cast(u32) blit_sampler_handle() - 1;
 
     main_queue := gpu_get_queue(.MAIN, 0);
