@@ -78,3 +78,4 @@ dist/physics_test.dylib
 dist/diag
 dist/crowd_nav
 dist/crowd_nav.dylib
+dist/hex_tactics
