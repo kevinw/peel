@@ -91,3 +91,21 @@ my_outer_func :: () -> int {
     my_inner_macro();
     my_inner_macro();
 }
+
+The simplest loops are over slices, and `it` and `it_index` are available in the loop body
+```
+func :: (my_collection: []s32) {
+  for my_collection {
+    log("element %: %", it_index, it);
+  }
+}
+```
+You can also name them:
+```
+for elem, elem_index: my_collection {
+  log("element %: %", elem_index, elem);
+}
+```
+
+Prefer `assert(my_condition, "my message: %", my_val)` over `assert(my_condition, tprint("my message: %", my_val))`.
+Prefer `print_to_builder(*string_builder, "my message: %", my_val)` over `append(*string_builder, tprint("my message: %", my_val))`.

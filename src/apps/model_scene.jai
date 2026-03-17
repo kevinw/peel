@@ -656,6 +656,7 @@ init_scene_geo_from_palette :: () {
 }
 
 rebuild_scene_runtime :: () {
+    auto_release_temp();
     clear_scene_runtime_resources();
 
     root_transforms: [..]Matrix4;
@@ -834,7 +835,7 @@ clear_scene_runtime_resources :: () {
 append_compiled_scatter_instances :: (instances_cpu: *[..]Scene_Instance, root_transforms: *[..]Matrix4, total_skin_matrix_count: *s64, collider_model_indices: *[..]s32, node_index: s32) {
     node := compiled_scene.nodes[node_index];
     random_seed(node.scatter.seed);
-    for 0..node.scatter.count-1 {
+    for 1..node.scatter.count {
         if node.scatter.assets.count == 0 break;
         asset_name := node.scatter.assets[cast(s64) (random_get_within_range(0.0, cast(float) node.scatter.assets.count))];
         asset_index := compiled_scene_find_asset_index_by_name_for_runtime(asset_name);
