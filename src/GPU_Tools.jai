@@ -79,3 +79,38 @@ gpu_begin_scoped_render_pass :: (cmd_buf: Gpu_Command_Buffer, desc: Gpu_Render_P
         then gpu_end_render_pass_with_transition(cmd_buf, transition_before, transition_after)
         else gpu_end_render_pass(cmd_buf);
 }
+
+//
+// some helper functions for deleting gpu resources
+//
+gpu_delete :: (sampler_ptr: *Gpu_Sampler) {
+    if sampler_ptr != null {
+        sampler := sampler_ptr.*;
+        if sampler != 0 {
+            gpu_free(sampler);
+        }
+        sampler_ptr.* = 0;
+    }
+}
+
+gpu_delete :: (gpu_view: *Gpu_View($T)) {
+    if gpu_view != null {
+        if gpu_view.cpu.data != null {
+            gpu_free(gpu_view.cpu.data);
+        }
+        gpu_view.* = {};
+    }
+}
+
+gpu_delete :: (gpu_buffer: *Gpu_Buffer($T)) {
+    if gpu_buffer != null {
+        if gpu_buffer.cpu != null {
+            gpu_free(gpu_buffer.cpu);
+        }
+        gpu_buffer.* = {};
+    }
+}
+
+cos :: (v: Vector3) -> Vector3 { return { cos(v.x), cos(v.y), cos(v.z) }; }
+sin :: (v: Vector3) -> Vector3 { return { sin(v.x), sin(v.y), sin(v.z) }; }
+vec4 :: (v3: Vector3, w: float) -> Vector4 { return { v3.x, v3.y, v3.z, w }; }

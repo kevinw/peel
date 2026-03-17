@@ -990,6 +990,7 @@ looks_like_skinned_asset :: (model_path: string) -> bool {
 
 is_supported_model_path :: (path: string) -> bool {
     lower := String.to_lower_copy(path);
+    defer free(lower);
     return String.ends_with(lower, ".obj") || String.ends_with(lower, ".fbx") || String.ends_with(lower, ".glb") || String.ends_with(lower, ".gltf");
 }
 

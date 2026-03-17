@@ -25,22 +25,6 @@ Running_Lizard_Attachment_Instance :: struct {
     attachment_offset: Matrix4;
 }
 
-Stone_Physics_Placement :: struct {
-    position: Vector3;
-    rotation: Quaternion;
-    scale: float;
-}
-
-Scene_Instance_CPU :: struct {
-    world: Matrix4;
-    tint: Vector4;
-    shadow_view_proj_0: Vector4;
-    shadow_view_proj_1: Vector4;
-    shadow_view_proj_2: Vector4;
-    shadow_view_proj_3: Vector4;
-    shadow_meta: Vector4;
-}
-
 Scene_Draw_Params_CPU :: struct {
     vertices: Gpu_Ptr;
     indices: Gpu_Ptr;
@@ -79,6 +63,8 @@ Ground_Draw_Params_CPU :: struct {
 graphics_pipeline: Gpu_Pipeline;
 ground_pipeline: Gpu_Pipeline;
 shadow_pipeline: Gpu_Pipeline;
+grass_pipeline: Gpu_Pipeline;
+grass_shadow_pipeline: Gpu_Pipeline;
 debug_shadow_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 scene_geo: Scene_Geo;
@@ -89,7 +75,7 @@ running_lizard_clip_index: s32 = -1;
 running_lizard_root: Matrix4 = Matrix4_Identity;
 running_lizard_scale: float = 1.0;
 running_lizard_ground_y: float = 0.5;
-scene_instances: Gpu_View(Scene_Instance_CPU);
+scene_instances: Gpu_View(Scene_Instance);
 scene_draw_params: Gpu_View(Scene_Draw_Params_CPU);
 scene_skin_matrices: Gpu_View(Vector4);
 scene_depth_texture: Gpu_Texture;
@@ -98,7 +84,7 @@ scene_depth_w: u32;
 scene_depth_h: u32;
 ground_vertices: Gpu_View(Scene_Vertex);
 ground_indices: Gpu_View(u32);
-ground_instance: Gpu_Buffer(Scene_Instance_CPU);
+ground_instance: Gpu_Buffer(Scene_Instance);
 ground_shadow_params: Gpu_Buffer(Scene_Draw_Params_CPU);
 ground_draw_params: Gpu_Buffer(Ground_Draw_Params_CPU);
 ground_texture: Gpu_Texture;
@@ -112,6 +98,10 @@ ground_ao_texture: Gpu_Texture;
 ground_ao_texture_view: Gpu_Texture_View;
 ground_index_count: u32;
 active_ground: Scene_File.Scene_Procedural_Ground_Desc;
+grass_draw_params: Gpu_Buffer(Grass_Draw_Params);
+grass_shadow_params: Gpu_Buffer(Grass_Draw_Params);
+grass_instance_count: u32;
+render_grass: bool = true;
 ground_physics_body: u32;
 ground_physics_body_valid: bool;
 stone_physics_bodies: [..]u32;
@@ -175,13 +165,11 @@ on_dll_init :: () {
     Physics.debug_draw_enabled = false;
 
     graphics_source := cast([]u8) get_transpiled(.METAL, model_scene_vertex_main, model_scene_fragment_main);
-    assert(graphics_source.count > 0, "Transpilation failed for model scene shaders.");
     ground_source := cast([]u8) get_transpiled(.METAL, ground_vertex_main, ground_fragment_main);
-    assert(ground_source.count > 0, "Transpilation failed for model scene ground shaders.");
     shadow_source := cast([]u8) get_transpiled(.METAL, model_scene_shadow_vertex_main, model_scene_shadow_fragment_main);
-    assert(shadow_source.count > 0, "Transpilation failed for model scene shadow shaders.");
+    grass_source := cast([]u8) get_transpiled(.METAL, model_scene_grass_vertex_main, model_scene_grass_fragment_main);
+    grass_shadow_source := cast([]u8) get_transpiled(.METAL, model_scene_grass_shadow_vertex_main, model_scene_grass_shadow_fragment_main);
     debug_shadow_source := cast([]u8) get_transpiled(.METAL, model_scene_debug_shadow_vertex_main, model_scene_debug_shadow_fragment_main);
-    assert(debug_shadow_source.count > 0, "Transpilation failed for model scene shadow debug shaders.");
 
     main_raster: Gpu_Raster_Desc = .{
         cull = .CCW,
@@ -197,15 +185,15 @@ on_dll_init :: () {
             .{format = .R32_SFLOAT},
         ],
     };
+    grass_main_raster := main_raster;
+    grass_main_raster.cull = .NONE;
 
-    graphics_pipeline = gpu_create_graphics_pipeline(graphics_source, main_raster);
-    assert(graphics_pipeline != 0, "Model scene graphics pipeline creation failed.");
-    ground_pipeline = gpu_create_graphics_pipeline(ground_source, main_raster);
-    assert(ground_pipeline != 0, "Model scene ground pipeline creation failed.");
-    shadow_pipeline = gpu_create_graphics_pipeline(shadow_source, shadow_raster);
-    assert(shadow_pipeline != 0, "Model scene shadow pipeline creation failed.");
+    graphics_pipeline     = gpu_create_graphics_pipeline(graphics_source, main_raster);
+    ground_pipeline       = gpu_create_graphics_pipeline(ground_source, main_raster);
+    shadow_pipeline       = gpu_create_graphics_pipeline(shadow_source, shadow_raster);
+    grass_pipeline        = gpu_create_graphics_pipeline(grass_source, grass_main_raster);
+    grass_shadow_pipeline = gpu_create_graphics_pipeline(grass_shadow_source, shadow_raster);
     debug_shadow_pipeline = gpu_create_graphics_pipeline(debug_shadow_source, main_raster);
-    assert(debug_shadow_pipeline != 0, "Model scene shadow debug pipeline creation failed.");
     shadow_map_init(*shadow_map);
 
     scene_palette_models = Scene_File.scan_scene_palette_models();
@@ -241,6 +229,8 @@ on_unload :: () {
     Gizmo_Render.deinit(*gizmo_render_ctx);
     Gizmo.deinit(*gizmo_ctx);
     if debug_shadow_pipeline != 0 gpu_free_pipeline(debug_shadow_pipeline);
+    if grass_shadow_pipeline != 0 gpu_free_pipeline(grass_shadow_pipeline);
+    if grass_pipeline != 0 gpu_free_pipeline(grass_pipeline);
     if shadow_pipeline != 0 gpu_free_pipeline(shadow_pipeline);
     if ground_pipeline != 0 gpu_free_pipeline(ground_pipeline);
     shadow_map_deinit(*shadow_map);
@@ -253,7 +243,6 @@ on_unload :: () {
 
 tick :: () {
     result, swapchain_image := app_swapchain_acquire();
-    assert(result == .SUCCESS);
     if !swapchain_image return;
 
     _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
@@ -285,6 +274,7 @@ tick :: () {
             if Checkbox("Physics Gizmos", *physics_gizmos_enabled) {
                 Physics.debug_draw_enabled = physics_gizmos_enabled;
             }
+            Checkbox("Render Grass", *render_grass);
             Checkbox("Show Shadow Debug", *show_shadow_debug);
             if animated_batches.count > 0 {
                 max_batch_index := cast(s32) animated_batches.count - 1;
@@ -438,11 +428,7 @@ tick :: () {
 
     if control_mode == .Player {
         player_focus := character_controller_position(*running_lizard_controller) + .{0.0, 0.95, 0.0};
-        orbit_dir := Vector3.{
-            sin(orbit_yaw) * cos(orbit_pitch),
-            sin(orbit_pitch),
-            -cos(orbit_yaw) * cos(orbit_pitch),
-        };
+        orbit_dir := Vector3.{ sin(orbit_yaw) * cos(orbit_pitch), sin(orbit_pitch), -cos(orbit_yaw) * cos(orbit_pitch) };
         normalize(*orbit_dir, fallback = .{0.0, -0.25, 1.0});
         scene_camera.position = player_focus - orbit_dir * orbit_distance;
         editor_camera_set_look_at(*scene_camera, player_focus);
@@ -501,16 +487,10 @@ tick :: () {
     }
 
     for *scene_instances.cpu {
-        it.shadow_view_proj_0 = shadow_map.view_proj.v[0];
-        it.shadow_view_proj_1 = shadow_map.view_proj.v[1];
-        it.shadow_view_proj_2 = shadow_map.view_proj.v[2];
-        it.shadow_view_proj_3 = shadow_map.view_proj.v[3];
+        it.shadow_view_proj = shadow_map.view_proj;
         it.shadow_meta = shadow_binding;
     }
-    ground_instance.cpu.shadow_view_proj_0 = shadow_map.view_proj.v[0];
-    ground_instance.cpu.shadow_view_proj_1 = shadow_map.view_proj.v[1];
-    ground_instance.cpu.shadow_view_proj_2 = shadow_map.view_proj.v[2];
-    ground_instance.cpu.shadow_view_proj_3 = shadow_map.view_proj.v[3];
+    ground_instance.cpu.shadow_view_proj = shadow_map.view_proj;
     ground_instance.cpu.shadow_meta = shadow_binding;
 
     for *scene_draw_params.cpu {
@@ -524,6 +504,18 @@ tick :: () {
     ground_draw_params.cpu.view_proj = view_proj;
     ground_draw_params.cpu.camera_pos = scene_camera.position;
     ground_draw_params.cpu.light_dir = shadow_map.light_dir;
+    if grass_draw_params.cpu != null {
+        lizard_pos := character_controller_position(*running_lizard_controller);
+        grass_shadow_params.cpu.view_proj = view_proj;
+        grass_shadow_params.cpu.shadow_view_proj = shadow_map.view_proj;
+        grass_shadow_params.cpu.camera_pos = scene_camera.position;
+        grass_shadow_params.cpu.light_dir = shadow_map.light_dir;
+        grass_shadow_params.cpu.shadow_meta = shadow_binding;
+        grass_shadow_params.cpu.ground_size_center_z_time = .{active_ground.size_x, active_ground.size_z, active_ground.center_z, cast(float) time};
+        grass_shadow_params.cpu.ground_shape = .{active_ground.ridge, active_ground.swell, active_ground.warp, 0.0};
+        grass_shadow_params.cpu.player_pos_radius = .{lizard_pos.x, lizard_pos.y, lizard_pos.z, 1.9};
+        grass_draw_params.cpu.* = grass_shadow_params.cpu.*;
+    }
 
     Gizmo_Render.gizmo_render_set_view_projection(*gizmo_render_ctx, view_proj);
 
@@ -531,7 +523,6 @@ tick :: () {
 
     main_queue := gpu_get_queue(.MAIN, 0);
     result=, cmd_buff := gpu_start_command_recording(main_queue);
-    assert(result == .SUCCESS);
 
     {
         saved_shadow_skin_counts: [..]u32;
@@ -559,12 +550,15 @@ tick :: () {
         gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .LESS, depth_mode = .READ | .WRITE});
         gpu_set_pipeline(cmd_buff, shadow_pipeline);
         draw_result := gpu_draw_instanced_direct(cmd_buff, ground_shadow_params.gpu, ground_index_count, 1);
-        assert(draw_result == .SUCCESS, "Model scene ground shadow draw failed.");
+        if render_grass && grass_shadow_params.cpu != null && grass_instance_count > 0 {
+            gpu_set_pipeline(cmd_buff, grass_shadow_pipeline);
+            draw_result = gpu_draw_instanced_direct(cmd_buff, grass_shadow_params.gpu, 6, grass_instance_count);
+            gpu_set_pipeline(cmd_buff, shadow_pipeline);
+        }
         for batch: scene_batches {
             mesh := scene_geo.meshes[batch.mesh_index];
             params_gpu := scene_draw_params.gpu + (it_index * size_of(Scene_Draw_Params_CPU)).(Gpu_Ptr);
             draw_result = gpu_draw_instanced_direct(cmd_buff, params_gpu, mesh.index_count, batch.instance_count);
-            assert(draw_result == .SUCCESS, "Model scene shadow draw failed.");
         }
     }
 
@@ -591,7 +585,10 @@ tick :: () {
         gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .LESS, depth_mode = .READ | .WRITE});
         gpu_set_pipeline(cmd_buff, ground_pipeline);
         draw_result := gpu_draw_instanced_direct(cmd_buff, ground_draw_params.gpu, ground_index_count, 1);
-        assert(draw_result == .SUCCESS, "Model scene ground draw failed.");
+        if render_grass && grass_draw_params.cpu != null && grass_instance_count > 0 {
+            gpu_set_pipeline(cmd_buff, grass_pipeline);
+            draw_result = gpu_draw_instanced_direct(cmd_buff, grass_draw_params.gpu, 6, grass_instance_count);
+        }
 
         gpu_set_pipeline(cmd_buff, graphics_pipeline);
 
@@ -599,19 +596,16 @@ tick :: () {
             mesh := scene_geo.meshes[batch.mesh_index];
             params_gpu := scene_draw_params.gpu + (it_index * size_of(Scene_Draw_Params_CPU)).(Gpu_Ptr);
             draw_result = gpu_draw_instanced_direct(cmd_buff, params_gpu, mesh.index_count, batch.instance_count);
-            assert(draw_result == .SUCCESS, "Model scene draw failed.");
         }
 
         if physics_gizmos_enabled {
             draw_result := Gizmo_Render.gizmo_render_draw(*gizmo_render_ctx, cmd_buff, *gizmo_ctx, viewport, depth_mode = .TEST);
-            assert(draw_result == .SUCCESS, "Physics gizmo draw failed.");
         }
 
         if show_shadow_debug {
             gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
             gpu_set_pipeline(cmd_buff, debug_shadow_pipeline);
             draw_result := gpu_draw_instanced_direct(cmd_buff, scene_draw_params.gpu, 6, 1);
-            assert(draw_result == .SUCCESS, "Model scene shadow debug draw failed.");
         }
     }
 
@@ -629,11 +623,7 @@ ensure_scene_depth_target :: (width: u32, height: u32) {
         format = .D32_SFLOAT,
         usage = .DEPTH_STENCIL_ATTACHMENT,
     });
-    assert(res == .SUCCESS);
-    assert(scene_depth_texture != 0, "Model scene depth texture creation failed.");
-
     scene_depth_view = gpu_texture_view(scene_depth_texture);
-    assert(scene_depth_view != 0, "Model scene depth view creation failed.");
     scene_depth_w = width;
     scene_depth_h = height;
     gpu_commit_residency();
@@ -641,11 +631,7 @@ ensure_scene_depth_target :: (width: u32, height: u32) {
 
 append_lizard_physics_gizmos :: () {
     lizard_pos := character_controller_position(*running_lizard_controller);
-    lizard_forward := Vector3.{
-        sin(running_lizard_controller.facing_yaw),
-        0.0,
-        cos(running_lizard_controller.facing_yaw),
-    };
+    lizard_forward := Vector3.{ sin(running_lizard_controller.facing_yaw), 0.0, cos(running_lizard_controller.facing_yaw) };
     Gizmo.draw_sphere(*gizmo_ctx, lizard_pos + .{0.0, 0.45, 0.0}, 0.42, color = .{0.98, 0.84, 0.22, 0.95}, thickness = 1.75);
     Gizmo.draw_arrow(*gizmo_ctx,
         lizard_pos + .{0.0, 0.45, 0.0},
@@ -674,7 +660,7 @@ rebuild_scene_runtime :: () {
 
     root_transforms: [..]Matrix4;
     root_transforms.allocator = temp;
-    instances_cpu: [..]Scene_Instance_CPU;
+    instances_cpu: [..]Scene_Instance;
     instances_cpu.allocator = temp;
     collider_model_indices: [..]s32;
     collider_model_indices.allocator = temp;
@@ -739,15 +725,15 @@ rebuild_scene_runtime :: () {
     if ground_enabled init_ground_plane(active_ground);
 
     arena_bytes :=
-        max(cast(s64) 1, instances_cpu.count) * size_of(Scene_Instance_CPU) +
+        max(cast(s64) 1, instances_cpu.count) * size_of(Scene_Instance) +
         max(cast(s64) 1, scene_batches.count) * size_of(Scene_Draw_Params_CPU) +
         max(cast(s64) 1, total_skin_matrix_count * 4) * size_of(Vector4) +
         1024;
     gpu_arena = gpu_make_arena(arena_bytes, label = "model scene arena");
     assert(gpu_arena.cpu != null, "Model scene arena creation failed.");
 
-    scene_instances = gpu_alloc_view(*gpu_arena, Scene_Instance_CPU, instances_cpu.count);
-    if instances_cpu.count > 0 memcpy(scene_instances.cpu.data, instances_cpu.data, instances_cpu.count * size_of(Scene_Instance_CPU));
+    scene_instances = gpu_alloc_view(*gpu_arena, Scene_Instance, instances_cpu.count);
+    if instances_cpu.count > 0 memcpy(scene_instances.cpu.data, instances_cpu.data, instances_cpu.count * size_of(Scene_Instance));
 
     if total_skin_matrix_count > 0 scene_skin_matrices = gpu_alloc_view(*gpu_arena, Vector4, total_skin_matrix_count * 4);
 
@@ -758,7 +744,7 @@ rebuild_scene_runtime :: () {
             vertices = scene_geo.vertices.gpu,
             indices = scene_geo.indices.gpu + (mesh.first_index * size_of(u32)).(Gpu_Ptr),
             materials = scene_geo.materials.gpu,
-            instances = scene_instances.gpu + (batch.first_instance * size_of(Scene_Instance_CPU)).(Gpu_Ptr),
+            instances = scene_instances.gpu + (batch.first_instance * size_of(Scene_Instance)).(Gpu_Ptr),
             skin_matrices = 0,
             view_proj = Matrix4_Identity,
             light_dir = normalize(Vector3.{0.35, -1.0, 0.25}),
@@ -805,20 +791,24 @@ clear_scene_runtime_resources :: () {
     scene_depth_w = 0;
     scene_depth_h = 0;
 
+
+
     if ground_ao_texture_view != 0 gpu_free_texture_view(ground_ao_texture_view);
     if ground_ao_texture != 0 gpu_free(ground_ao_texture);
-    if ground_sampler != 0 gpu_free(ground_sampler);
+    gpu_delete(*ground_sampler);
+    gpu_delete(*grass_draw_params);
+    gpu_delete(*grass_shadow_params);
     if ground_roughness_texture_view != 0 gpu_free_texture_view(ground_roughness_texture_view);
     if ground_roughness_texture != 0 gpu_free(ground_roughness_texture);
     if ground_normal_texture_view != 0 gpu_free_texture_view(ground_normal_texture_view);
     if ground_normal_texture != 0 gpu_free(ground_normal_texture);
     if ground_texture_view != 0 gpu_free_texture_view(ground_texture_view);
     if ground_texture != 0 gpu_free(ground_texture);
-    if ground_draw_params.cpu != null gpu_free(cast(*void) ground_draw_params.cpu);
-    if ground_shadow_params.cpu != null gpu_free(cast(*void) ground_shadow_params.cpu);
-    if ground_instance.cpu != null gpu_free(cast(*void) ground_instance.cpu);
-    if ground_indices.cpu.data != null gpu_free(cast(*void) ground_indices.cpu.data);
-    if ground_vertices.cpu.data != null gpu_free(cast(*void) ground_vertices.cpu.data);
+    gpu_delete(*ground_draw_params);
+    gpu_delete(*ground_shadow_params);
+    gpu_delete(*ground_instance);
+    gpu_delete(*ground_indices);
+    gpu_delete(*ground_vertices);
     ground_texture = 0;
     ground_texture_view = 0;
     ground_normal_texture = 0;
@@ -827,12 +817,7 @@ clear_scene_runtime_resources :: () {
     ground_roughness_texture_view = 0;
     ground_ao_texture = 0;
     ground_ao_texture_view = 0;
-    ground_sampler = 0;
-    ground_vertices = .{};
-    ground_indices = .{};
-    ground_instance = .{};
-    ground_shadow_params = .{};
-    ground_draw_params = .{};
+    grass_instance_count = 0;
     ground_index_count = 0;
 
     if gpu_arena.cpu != null gpu_free_arena(gpu_arena);
@@ -846,7 +831,7 @@ clear_scene_runtime_resources :: () {
     array_reset(*scene_batches);
 }
 
-append_compiled_scatter_instances :: (instances_cpu: *[..]Scene_Instance_CPU, root_transforms: *[..]Matrix4, total_skin_matrix_count: *s64, collider_model_indices: *[..]s32, node_index: s32) {
+append_compiled_scatter_instances :: (instances_cpu: *[..]Scene_Instance, root_transforms: *[..]Matrix4, total_skin_matrix_count: *s64, collider_model_indices: *[..]s32, node_index: s32) {
     node := compiled_scene.nodes[node_index];
     random_seed(node.scatter.seed);
     for 0..node.scatter.count-1 {
@@ -870,11 +855,8 @@ append_compiled_scatter_instances :: (instances_cpu: *[..]Scene_Instance_CPU, ro
         q: Quaternion;
         set_from_axis_and_angle(*q, .{0.0, 1.0, 0.0}, yaw_deg * PI / 180.0);
 
-        scatter_world :=
-            node.world
-            * make_translation_matrix4(.{x, y, z})
-            * rotation_matrix(Matrix4, q)
-            * make_scale_matrix4(.{model_scale, model_scale, model_scale})
+        scatter_world := node.world
+            * make_trs_matrix(.{x, y, z}, q, model_scale)
             * compiled_asset_import_matrix(asset);
 
         array_reset(root_transforms);
@@ -901,7 +883,7 @@ get_or_create_collider_base_shape :: (collider_model_indices: *[..]s32, model_in
     return shape;
 }
 
-init_player_from_compiled_node :: (instances_cpu: *[..]Scene_Instance_CPU, total_skin_matrix_count: *s64, node_index: s32) -> float, float {
+init_player_from_compiled_node :: (instances_cpu: *[..]Scene_Instance, total_skin_matrix_count: *s64, node_index: s32) -> float, float {
     node := compiled_scene.nodes[node_index];
     running_lizard_compiled_root_node_index = node_index;
     assert(node.asset_index >= 0, "Player controller node '%' is missing an asset.", node.name);
@@ -941,10 +923,11 @@ init_player_from_compiled_node :: (instances_cpu: *[..]Scene_Instance_CPU, total
             array_add(instances_cpu, .{
                 world = running_lizard_root,
                 tint = .{1.0, 1.0, 1.0, 1.0},
-                shadow_view_proj_0 = .{1.0, 0.0, 0.0, 0.0},
-                shadow_view_proj_1 = .{0.0, 1.0, 0.0, 0.0},
-                shadow_view_proj_2 = .{0.0, 0.0, 1.0, 0.0},
-                shadow_view_proj_3 = .{0.0, 0.0, 0.0, 1.0},
+                shadow_view_proj = Matrix4_Identity,
+                //shadow_view_proj_0 = .{1.0, 0.0, 0.0, 0.0},
+                //shadow_view_proj_1 = .{0.0, 1.0, 0.0, 0.0},
+                //shadow_view_proj_2 = .{0.0, 0.0, 1.0, 0.0},
+                //shadow_view_proj_3 = .{0.0, 0.0, 0.0, 1.0},
             });
             array_add(*running_lizard_instances, .{
                 instance_index = instance_index,
@@ -980,9 +963,7 @@ init_player_from_compiled_node :: (instances_cpu: *[..]Scene_Instance_CPU, total
                     }
                 }
                 attachment_offset :=
-                    make_translation_matrix4(attachment_node.local_position)
-                    * rotation_matrix(Matrix4, quat_from_euler_deg(attachment_node.local_rotation_deg))
-                    * make_scale_matrix4(attachment_node.local_scale)
+                    make_trs_matrix(attachment_node.local_position, quat_from_euler_deg(attachment_node.local_rotation_deg), attachment_node.local_scale)
                     * compiled_asset_import_matrix(compiled_scene.assets[attachment_node.asset_index]);
                 attachment_model := scene_geo.models[attachment_model_index];
                 for geo_node_index: attachment_model.node_start .. attachment_model.node_start + attachment_model.node_count - 1 {
@@ -999,10 +980,7 @@ init_player_from_compiled_node :: (instances_cpu: *[..]Scene_Instance_CPU, total
                         array_add(instances_cpu, .{
                             world = running_lizard_root * attachment_offset * scene_geo.nodes[geo_node_index].world,
                             tint = .{1.0, 1.0, 1.0, 1.0},
-                            shadow_view_proj_0 = .{1.0, 0.0, 0.0, 0.0},
-                            shadow_view_proj_1 = .{0.0, 1.0, 0.0, 0.0},
-                            shadow_view_proj_2 = .{0.0, 0.0, 1.0, 0.0},
-                            shadow_view_proj_3 = .{0.0, 0.0, 0.0, 1.0},
+                            shadow_view_proj = Matrix4_Identity,
                         });
                         array_add(*running_lizard_attachment_instances, .{
                             instance_index = instance_index,
@@ -1061,9 +1039,9 @@ decompose_matrix_trs :: (m: Matrix4) -> Vector3, Vector3, Vector3 {
     temp_m := m;
     ai.Matrix4DecomposeIntoScalingEulerAnglesPosition(cast(*ai.Matrix4x4) *temp_m, *ai_scale, *ai_rotation, *ai_position);
     return
-        .{ai_position.x, ai_position.y, ai_position.z},
-        Vector3.{ai_rotation.x, ai_rotation.y, ai_rotation.z} * (180.0 / PI),
-        .{ai_scale.x, ai_scale.y, ai_scale.z};
+        cast,force(Vector3) ai_position,
+        cast,force(Vector3) ai_rotation * (180.0 / PI),
+        cast,force(Vector3) ai_scale;
 }
 
 quat_from_euler_deg :: (deg: Vector3) -> Quaternion {
@@ -1129,7 +1107,7 @@ scene_apply_manip_back_to_doc :: () {
     obj := scene_manip_objects[selected];
     doc_node := *scene_doc.nodes[node_index];
 
-    world := make_translation_matrix4(obj.position) * rotation_matrix(Matrix4, obj.rotation) * make_scale_matrix4(obj.scale);
+    world := make_trs_matrix(obj.position, obj.rotation, obj.scale);
     parent_world := Matrix4_Identity;
     if doc_node.parent_index >= 0 {
         parent_compiled_index := find_compiled_node_for_source(scene_doc.source_path, scene_doc.nodes[doc_node.parent_index].name);
@@ -1274,9 +1252,11 @@ init_ground_plane :: (ground: Scene_File.Scene_Procedural_Ground_Desc) {
 
     ground_vertices = gpu_alloc_view(Scene_Vertex, ground_vertices_cpu.count, label = "model scene ground vertices");
     ground_indices = gpu_alloc_view(u32, ground_indices_cpu.count, label = "model scene ground indices");
-    ground_instance = gpu_alloc_buffer(Scene_Instance_CPU, label = "model scene ground instance");
+    ground_instance = gpu_alloc_buffer(Scene_Instance, label = "model scene ground instance");
     ground_shadow_params = gpu_alloc_buffer(Scene_Draw_Params_CPU, label = "model scene ground shadow params");
     ground_draw_params = gpu_alloc_buffer(Ground_Draw_Params_CPU, label = "model scene ground params");
+    grass_shadow_params = gpu_alloc_buffer(Grass_Draw_Params, label = "model scene grass shadow params");
+    grass_draw_params = gpu_alloc_buffer(Grass_Draw_Params, label = "model scene grass params");
 
     memcpy(ground_vertices.cpu.data, ground_vertices_cpu.data, ground_vertices_cpu.count * size_of(Scene_Vertex));
     memcpy(ground_indices.cpu.data, ground_indices_cpu.data, ground_indices_cpu.count * size_of(u32));
@@ -1284,10 +1264,7 @@ init_ground_plane :: (ground: Scene_File.Scene_Procedural_Ground_Desc) {
     ground_instance.cpu.* = .{
         world = Matrix4_Identity,
         tint = .{1.0, 1.0, 1.0, 1.0},
-        shadow_view_proj_0 = .{1.0, 0.0, 0.0, 0.0},
-        shadow_view_proj_1 = .{0.0, 1.0, 0.0, 0.0},
-        shadow_view_proj_2 = .{0.0, 0.0, 1.0, 0.0},
-        shadow_view_proj_3 = .{0.0, 0.0, 0.0, 1.0},
+        shadow_view_proj = Matrix4_Identity,
     };
     ground_shadow_params.cpu.* = .{
         vertices = ground_vertices.gpu,
@@ -1296,7 +1273,7 @@ init_ground_plane :: (ground: Scene_File.Scene_Procedural_Ground_Desc) {
         instances = ground_instance.gpu,
         skin_matrices = 0,
         view_proj = Matrix4_Identity,
-        light_dir = normalize(Vector3.{0.35, -1.0, 0.25}),
+        light_dir = normalize(.{0.35, -1.0, 0.25}),
         camera_pos = scene_camera.position,
         material_index = 0,
         sampler_index = cast(u32) ground_sampler - 1,
@@ -1315,6 +1292,21 @@ init_ground_plane :: (ground: Scene_File.Scene_Procedural_Ground_Desc) {
         roughness_texture_index = cast(u32) ground_roughness_texture_view - 1,
         ao_texture_index = cast(u32) ground_ao_texture_view - 1,
     };
+    grass_grid_x := max(1, ground.render_grid_x * 4 / 3 * 3);
+    grass_grid_z := max(1, ground.render_grid_z * 4 / 3 * 3);
+    grass_instance_count = cast(u32) grass_grid_x * cast(u32) grass_grid_z;
+    grass_shadow_params.cpu.* = .{
+        view_proj = Matrix4_Identity,
+        shadow_view_proj = Matrix4_Identity,
+        light_dir = normalize(Vector3.{0.35, -1.0, 0.25}),
+        camera_pos = scene_camera.position,
+        shadow_meta = .{0.0, 0.0, 0.0, 0.0},
+        ground_size_center_z_time = .{ground.size_x, ground.size_z, ground.center_z, 0.0},
+        ground_shape = .{ground.ridge, ground.swell, ground.warp, 0.0},
+        grass_grid_height_width = .{cast(float) grass_grid_x, cast(float) grass_grid_z, 0.33, 0.24},
+        player_pos_radius = .{0.0, 0.0, 0.0, 1.9},
+    };
+    grass_draw_params.cpu.* = grass_shadow_params.cpu.*;
     ground_index_count = cast(u32) ground_indices.cpu.count;
 }
 
@@ -1421,37 +1413,33 @@ load_texture_rgba8 :: (path: string) -> Gpu_Texture, Gpu_Texture_View {
     defer stbi_image_free(pixels);
 
     assert(pixels != null && width > 0 && height > 0, tprint("Failed to load texture: %", path));
-
     texture_result, texture := gpu_create_texture(.{
         dimensions = .[cast(u32) width, cast(u32) height, 1],
-        format = .B8G8R8A8_UNORM,
+        format = .R8G8B8A8_UNORM,
         usage = .SAMPLED | .TRANSFER_DST,
     });
-    assert(texture_result == .SUCCESS, tprint("Texture creation failed for %: %", path, texture_result));
-    assert(texture != 0, tprint("Texture handle invalid for %", path));
 
     bgra_pixels: [..]u8;
     bgra_pixels.allocator = temp;
     array_resize(*bgra_pixels, cast(s64) width * cast(s64) height * 4);
     memcpy(bgra_pixels.data, pixels, bgra_pixels.count);
-    i := 0;
-    while i < bgra_pixels.count {
-        r := bgra_pixels[i + 0];
-        g := bgra_pixels[i + 1];
-        b := bgra_pixels[i + 2];
-        a := bgra_pixels[i + 3];
-        bgra_pixels[i + 0] = b;
-        bgra_pixels[i + 1] = g;
-        bgra_pixels[i + 2] = r;
-        bgra_pixels[i + 3] = a;
-        i += 4;
-    }
+
     gpu_copy_to_texture(texture, bgra_pixels.data);
 
     view := gpu_texture_view(texture);
-    assert(view != 0, tprint("Texture view creation failed for %", path));
-
     return texture, view;
+}
+
+make_trs_matrix :: (pos: Vector3, rot: Quaternion, scale: Vector3) -> Matrix4 {
+    return make_translation_matrix4(pos) *
+        rotation_matrix(Matrix4, rot) *
+        make_scale_matrix4(scale);
+}
+
+make_trs_matrix :: (pos: Vector3, rot: Quaternion, scale: float) -> Matrix4 {
+    return make_translation_matrix4(pos) *
+        rotation_matrix(Matrix4, rot) *
+        make_scale_matrix4(.{scale, scale, scale});
 }
 
 #load "../character_controller.jai";

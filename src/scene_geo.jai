@@ -326,7 +326,7 @@ scene_geo_model_bounds :: (geo: *Scene_Geo, model_index: s32) -> Scene_Bounds {
 
 scene_geo_append_model_instances :: (
     batches: *[..]Draw_Batch,
-    instances: *[..]Scene_Instance_CPU,
+    instances: *[..]Scene_Instance,
     geo: *Scene_Geo,
     model_index: s32,
     root_transforms: []Matrix4,
@@ -356,30 +356,30 @@ scene_geo_append_model_instances :: (
     }
 }
 
-imported_scene_deinit :: (scene: *Imported_Scene) {
-    array_free(scene.vertices);
-    array_free(scene.indices);
-    array_free(scene.materials);
-    for it: scene.textures {
+imported_scene_deinit :: (using scene: *Imported_Scene) {
+    array_free(vertices);
+    array_free(indices);
+    array_free(materials);
+    for textures {
         if it.key.count != 0 free(it.key);
         array_free(it.pixels);
     }
-    array_free(scene.textures);
-    array_free(scene.meshes);
-    array_free(scene.nodes);
-    for scene.node_names if it.count != 0 free(it);
-    array_free(scene.node_names);
-    array_free(scene.node_bind_transforms);
-    array_free(scene.node_mesh_refs);
-    array_free(scene.mesh_skin_bones);
-    array_free(scene.anim_position_keys);
-    array_free(scene.anim_rotation_keys);
-    array_free(scene.anim_scale_keys);
-    array_free(scene.anim_channels);
-    for it: scene.anim_clips if it.name.count != 0 free(it.name);
-    array_free(scene.anim_clips);
-    for it: scene.models if it.name.count != 0 free(it.name);
-    array_free(scene.models);
+    array_free(textures);
+    array_free(meshes);
+    array_free(nodes);
+    for node_names if it.count != 0 free(it);
+    array_free(node_names);
+    array_free(node_bind_transforms);
+    array_free(node_mesh_refs);
+    array_free(mesh_skin_bones);
+    array_free(anim_position_keys);
+    array_free(anim_rotation_keys);
+    array_free(anim_scale_keys);
+    array_free(anim_channels);
+    for anim_clips if it.name.count != 0 free(it.name);
+    array_free(anim_clips);
+    for scene.models if it.name.count != 0 free(it.name);
+    array_free(models);
     scene.* = .{};
 }
 
@@ -411,9 +411,10 @@ imported_scene_load_cached :: (scene: *Imported_Scene, model_paths: []string) {
 compute_model_bounds_from_geo :: (geo: *Scene_Geo, model_index: s32) -> Scene_Bounds {
     model := geo.models[model_index];
 
-    bounds: Scene_Bounds;
-    bounds.min = .{1000000.0, 1000000.0, 1000000.0};
-    bounds.max = .{-1000000.0, -1000000.0, -1000000.0};
+    bounds: Scene_Bounds = {
+        min = .{1000000.0, 1000000.0, 1000000.0},
+        max = .{-1000000.0, -1000000.0, -1000000.0},
+    };
 
     for node_index: model.node_start .. model.node_start + model.node_count - 1 {
         node := geo.nodes[node_index];

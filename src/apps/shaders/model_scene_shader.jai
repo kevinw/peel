@@ -1,14 +1,11 @@
 #import "Jai-Shader-Transpiler";
-#import,file "../../../modules/Jai-Shader-Transpiler/modules/ShaderFuncs/module.jai";
+#import "Jai-Shader-Transpiler/modules/ShaderFuncs";
 #import "Math";
 
 Scene_Instance :: struct {
     world: Matrix4;
     tint: Vector4;
-    shadow_view_proj_0: Vector4;
-    shadow_view_proj_1: Vector4;
-    shadow_view_proj_2: Vector4;
-    shadow_view_proj_3: Vector4;
+    shadow_view_proj: Matrix4;
     shadow_meta: Vector4;
 }
 
@@ -45,6 +42,20 @@ Ground_Draw_Params :: struct {
     roughness_texture_index: u32;
     ao_texture_index: u32;
     _pad2: u32;
+}
+
+Grass_Draw_Params :: struct {
+    view_proj: Matrix4;
+    shadow_view_proj: Matrix4;
+    light_dir: Vector3;
+    _pad0: float;
+    camera_pos: Vector3;
+    _pad1: float;
+    shadow_meta: Vector4;
+    ground_size_center_z_time: Vector4;
+    ground_shape: Vector4;
+    grass_grid_height_width: Vector4;
+    player_pos_radius: Vector4;
 }
 
 Model_Scene_Vertex_In :: struct {
@@ -111,6 +122,37 @@ Ground_Fragment_In :: struct {
     uv: Vector2;
     shadow_uvz: Vector3;
     shadow_meta: Vector4;
+}
+
+Grass_Vertex_In :: struct {
+    vertex_id: u32; @SV_VertexID
+    instance_id: u32; @SV_InstanceID
+}
+
+Grass_Vertex_Out :: struct {
+    gl_Position: Vector4; @position
+    world_pos: Vector3;
+    normal: Vector3;
+    blade_t: float;
+    shadow_uvz: Vector3;
+    shadow_meta: Vector4;
+}
+
+Grass_Fragment_In :: struct {
+    world_pos: Vector3;
+    normal: Vector3;
+    blade_t: float;
+    shadow_uvz: Vector3;
+    shadow_meta: Vector4;
+}
+
+Grass_Shadow_Vertex_Out :: struct {
+    gl_Position: Vector4; @position
+    depth01: float;
+}
+
+Grass_Shadow_Fragment_In :: struct {
+    depth01: float;
 }
 
 model_scene_vertex_main :: (using in: Model_Scene_Vertex_In, params: *Scene_Draw_Params) -> Model_Scene_Vertex_Out {
@@ -386,7 +428,162 @@ ground_fragment_main :: (using in: Ground_Fragment_In, params: *Ground_Draw_Para
     return .{color.x, color.y, color.z, tex.w};
 } @fragment_shader
 
+model_scene_grass_shadow_vertex_main :: (using in: Grass_Vertex_In, params: *Grass_Draw_Params) -> Grass_Shadow_Vertex_Out {
+    using out: Grass_Shadow_Vertex_Out;
+    blade_t := grass_blade_vt(vertex_id);
+    world_pos := grass_blade_world_pos(vertex_id, instance_id, blade_t, params);
+    clip := params.shadow_view_proj * Vector4.{world_pos.x, world_pos.y, world_pos.z, 1.0};
+    gl_Position = clip;
+    depth01 = clamp(clip.z, 0.0, 1.0);
+    return out;
+} @vertex_shader
+
+model_scene_grass_shadow_fragment_main :: (using in: Grass_Shadow_Fragment_In, params: *Grass_Draw_Params) -> struct { out_color: Vector4; } {
+    _ = params;
+    d := clamp(depth01, 0.0, 1.0);
+    return .{out_color = .{d, d, d, 1.0}};
+} @fragment_shader
+
+model_scene_grass_vertex_main :: (using in: Grass_Vertex_In, params: *Grass_Draw_Params) -> Grass_Vertex_Out {
+    using out: Grass_Vertex_Out;
+    blade_t = grass_blade_vt(vertex_id);
+    world_pos = grass_blade_world_pos(vertex_id, instance_id, blade_t, params);
+    clip := params.view_proj * Vector4.{world_pos.x, world_pos.y, world_pos.z, 1.0};
+    gl_Position = clip;
+    shadow_clip := params.shadow_view_proj * Vector4.{world_pos.x, world_pos.y, world_pos.z, 1.0};
+    shadow_uvz = .{shadow_clip.x * 0.5 + 0.5, shadow_clip.y * 0.5 + 0.5, shadow_clip.z};
+    shadow_meta = params.shadow_meta;
+    normal = grass_blade_normal(instance_id, world_pos, blade_t, params);
+    return out;
+} @vertex_shader
+
+model_scene_grass_fragment_main :: (using in: Grass_Fragment_In, params: *Grass_Draw_Params) -> Vector4 @SV_Target0 {
+    N := normalize(normal);
+    L := normalize(-params.light_dir);
+    V := normalize(params.camera_pos - world_pos);
+    H := normalize(L + V);
+    ndl := max(dot(N, L), 0.0);
+    ndh := max(dot(N, H), 0.0);
+    shadow := model_scene_shadow_visibility(shadow_meta, shadow_uvz);
+
+    root_col := Vector3.{0.22, 0.18, 0.08};
+    tip_col := Vector3.{0.74, 0.67, 0.31};
+    tint_noise := grass_hash01_f(world_pos.x * 0.17 + world_pos.z * 0.11 + 17.4);
+    cool := Vector3.{0.92, 0.98, 1.03};
+    warm := Vector3.{1.08, 1.02, 0.91};
+    base := mix(root_col, tip_col, blade_t) * mix(cool, warm, tint_noise);
+
+    ambient := 0.22;
+    diffuse := ambient + ndl * 0.72 * shadow;
+    specular := pow(ndh, 14.0) * 0.03 * shadow;
+    rim := pow(1.0 - max(dot(N, V), 0.0), 2.3) * 0.08;
+    color := base * diffuse + Vector3.{1.0, 0.97, 0.9} * specular + base * rim;
+    return .{color.x, color.y, color.z, 1.0};
+} @fragment_shader
+
 #scope_file
+
+grass_hash01_f :: (x: float) -> float {
+    v := sin(x * cast(float) 12.9898 + cast(float) 78.233) * cast(float) 43758.5453;
+    return v - floor(v);
+}
+
+grass_hash01_2 :: (x: float, y: float, phase: float) -> float {
+    v := sin(x * cast(float) 127.1 + y * cast(float) 311.7 + phase * cast(float) 74.7) * cast(float) 43758.5453;
+    return v - floor(v);
+}
+
+grass_ground_height :: (params: *Grass_Draw_Params, x: float, z: float) -> float {
+    ridge := sin(x * cast(float) 0.23 + z * cast(float) 0.09) * params.ground_shape.x;
+    swell := cos(z * cast(float) 0.18 - x * cast(float) 0.05) * params.ground_shape.y;
+    warp_scale := params.ground_shape.z;
+    warp := sin((x + z) * cast(float) 0.11) * warp_scale + cos((x - z) * cast(float) 0.07) * warp_scale;
+    flatten := 1.0 - smoothstep(0.0, 6.0, abs(x) * cast(float) 0.38);
+    return ridge + swell + warp - flatten * cast(float) 0.05;
+}
+
+grass_tip_dir :: (instance_id: u32, blade_t: float, params: *Grass_Draw_Params) -> Vector3 {
+    t := params.ground_size_center_z_time.w;
+    yaw := grass_hash01_2(cast(float) instance_id, cast(float) 1.7, cast(float) 0.23) * cast(float) 6.28318530718;
+    bend_phase := grass_hash01_2(cast(float) instance_id, cast(float) 9.1, cast(float) 0.61) * cast(float) 6.28318530718;
+    wind := sin(t * cast(float) 1.4 + bend_phase) * cast(float) 0.16 + cos(t * cast(float) 0.73 + bend_phase * cast(float) 1.7) * cast(float) 0.09;
+    base_dir := normalize(Vector3.{sin(yaw) * cast(float) 0.2, 1.0, cos(yaw) * cast(float) 0.2});
+    wind_dir := normalize(Vector3.{0.7, 0.0, 0.3});
+    return normalize(base_dir + wind_dir * wind * blade_t * blade_t);
+}
+
+grass_blade_vt :: (vertex_id: u32) -> float {
+    if vertex_id == 0 return 0.0;
+    if vertex_id == 1 return 0.0;
+    if vertex_id == 2 return 1.0;
+    if vertex_id == 3 return 0.0;
+    if vertex_id == 4 return 1.0;
+    return 1.0;
+}
+
+grass_blade_vx :: (vertex_id: u32) -> float {
+    if vertex_id == 0 return -1.0;
+    if vertex_id == 1 return 1.0;
+    if vertex_id == 2 return -0.28;
+    if vertex_id == 3 return 1.0;
+    if vertex_id == 4 return 0.28;
+    return -0.28;
+}
+
+grass_blade_world_pos :: (vertex_id: u32, instance_id: u32, vt: float, params: *Grass_Draw_Params) -> Vector3 {
+    grid_x := max(cast(u32) params.grass_grid_height_width.x, 1);
+    grid_z := max(cast(u32) params.grass_grid_height_width.y, 1);
+    gx := instance_id % grid_x;
+    gz := instance_id / grid_x;
+    fx := ifx grid_x > 1 then cast(float) gx / cast(float) (grid_x - 1) else 0.5;
+    fz := ifx grid_z > 1 then cast(float) gz / cast(float) (grid_z - 1) else 0.5;
+
+    size_x := params.ground_size_center_z_time.x;
+    size_z := params.ground_size_center_z_time.y;
+    center_z := params.ground_size_center_z_time.z;
+    jitter := params.grass_grid_height_width.z;
+    x := lerp(-size_x * 0.5, size_x * 0.5, fx);
+    z := lerp(-size_z * 0.5, size_z * 0.5, fz) + center_z;
+    cell_x := size_x / max(cast(float) grid_x, 1.0);
+    cell_z := size_z / max(cast(float) grid_z, 1.0);
+    x += (grass_hash01_2(cast(float) gx, cast(float) gz, cast(float) 0.11) * 2.0 - 1.0) * cell_x * jitter;
+    z += (grass_hash01_2(cast(float) gx, cast(float) gz, cast(float) 0.67) * 2.0 - 1.0) * cell_z * jitter;
+
+    base_y := grass_ground_height(params, x, z);
+    blade_height := mix(params.grass_grid_height_width.w * cast(float) 0.7, params.grass_grid_height_width.w * cast(float) 1.3, grass_hash01_2(cast(float) gx, cast(float) gz, cast(float) 0.31));
+    blade_width := max(blade_height * 0.11, 0.012);
+    yaw := grass_hash01_2(cast(float) gx, cast(float) gz, cast(float) 0.83) * cast(float) 6.28318530718;
+    right := Vector3.{cos(yaw), 0.0, sin(yaw)};
+    vx := grass_blade_vx(vertex_id);
+
+    pos := Vector3.{x, base_y, z} + right * (vx * blade_width) + .{0.0, vt * blade_height, 0.0};
+
+    player_pos := params.player_pos_radius.xyz;
+    player_radius := max(params.player_pos_radius.w, 0.001);
+    delta := Vector2.{x - player_pos.x, z - player_pos.z};
+    dist := sqrt(max(dot(delta, delta), 0.0));
+    if dist < player_radius {
+        affect := 1.0 - dist / player_radius;
+        if dist > 1.0e-4 {
+            away := delta / dist;
+            pos.x += away.x * affect * affect * 0.55 * vt;
+            pos.z += away.y * affect * affect * 0.55 * vt;
+        }
+        pos.y -= affect * affect * vt * blade_height * 0.85;
+    }
+
+    tip_dir := grass_tip_dir(instance_id, vt, params);
+    pos += tip_dir * (vt * vt * 0.06);
+    return pos;
+}
+
+grass_blade_normal :: (instance_id: u32, world_pos: Vector3, blade_t: float, params: *Grass_Draw_Params) -> Vector3 {
+    up_dir := Vector3.{0.0, 1.0, 0.0};
+    cam_to_blade := normalize(params.camera_pos - world_pos);
+    side := normalize(cross(up_dir, cam_to_blade));
+    tip_dir := grass_tip_dir(instance_id, blade_t, params);
+    return normalize(cross(side, tip_dir));
+}
 
 load_skin_matrix :: (rows: *Vector4, bone_index: u32) -> Matrix4 {
     row_start := bone_index * 4;
@@ -423,10 +620,5 @@ model_scene_shadow_visibility :: (shadow_meta: Vector4, shadow_uvz: Vector3) -> 
 }
 
 load_shadow_view_proj :: (instance: Scene_Instance) -> Matrix4 {
-    return .{
-        instance.shadow_view_proj_0.x, instance.shadow_view_proj_0.y, instance.shadow_view_proj_0.z, instance.shadow_view_proj_0.w,
-        instance.shadow_view_proj_1.x, instance.shadow_view_proj_1.y, instance.shadow_view_proj_1.z, instance.shadow_view_proj_1.w,
-        instance.shadow_view_proj_2.x, instance.shadow_view_proj_2.y, instance.shadow_view_proj_2.z, instance.shadow_view_proj_2.w,
-        instance.shadow_view_proj_3.x, instance.shadow_view_proj_3.y, instance.shadow_view_proj_3.z, instance.shadow_view_proj_3.w,
-    };
+    return instance.shadow_view_proj;
 }
