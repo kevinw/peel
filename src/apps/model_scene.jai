@@ -34,6 +34,7 @@ Scene_Draw_Params_CPU :: struct {
     view_proj: Matrix4;
     light_dir: Vector3;
     _pad0: float;
+    sun_params: Vector4;
     camera_pos: Vector3;
     _pad1: float;
     material_index: u32;
@@ -50,6 +51,7 @@ Ground_Draw_Params_CPU :: struct {
     view_proj: Matrix4;
     light_dir: Vector3;
     _pad0: float;
+    sun_params: Vector4;
     camera_pos: Vector3;
     _pad1: float;
     sampler_index: u32;
@@ -60,12 +62,28 @@ Ground_Draw_Params_CPU :: struct {
     _pad2: u32;
 }
 
+Model_Scene_Sky_Params_CPU :: struct {
+    camera_right_proj_x: Vector4;
+    camera_up_proj_y: Vector4;
+    camera_forward_time_of_day: Vector4;
+    light_dir_sun_strength: Vector4;
+}
+
+Grass_Shadow_Params_CPU :: struct {
+    shadow_view_proj: Matrix4;
+    ground_size_center_z_time: Vector4;
+    ground_shape: Vector4;
+    grass_grid_height_width: Vector4;
+    player_pos_radius: Vector4;
+}
+
 graphics_pipeline: Gpu_Pipeline;
 ground_pipeline: Gpu_Pipeline;
 shadow_pipeline: Gpu_Pipeline;
 grass_pipeline: Gpu_Pipeline;
 grass_shadow_pipeline: Gpu_Pipeline;
 debug_shadow_pipeline: Gpu_Pipeline;
+sky_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 scene_geo: Scene_Geo;
 shadow_map: Shadow_Map;
@@ -99,7 +117,8 @@ ground_ao_texture_view: Gpu_Texture_View;
 ground_index_count: u32;
 active_ground: Scene_File.Scene_Procedural_Ground_Desc;
 grass_draw_params: Gpu_Buffer(Grass_Draw_Params);
-grass_shadow_params: Gpu_Buffer(Grass_Draw_Params);
+grass_shadow_params: Gpu_Buffer(Grass_Shadow_Params_CPU);
+sky_draw_params: Gpu_Buffer(Model_Scene_Sky_Params_CPU);
 grass_instance_count: u32;
 render_grass: bool = true;
 ground_physics_body: u32;
@@ -128,6 +147,8 @@ physics_gizmos_enabled: bool;
 show_shadow_debug: bool;
 physics_g_was_down: bool;
 control_mode: enum { Player; Editor; } = .Player;
+model_scene_sun_strength: float = 1.0;
+model_scene_time_of_day: float = 0.32;
 p_was_down: bool;
 orbit_yaw: float = 0.0;
 orbit_pitch: float = -0.32;
@@ -170,6 +191,7 @@ on_dll_init :: () {
     grass_source := cast([]u8) get_transpiled(.METAL, model_scene_grass_vertex_main, model_scene_grass_fragment_main);
     grass_shadow_source := cast([]u8) get_transpiled(.METAL, model_scene_grass_shadow_vertex_main, model_scene_grass_shadow_fragment_main);
     debug_shadow_source := cast([]u8) get_transpiled(.METAL, model_scene_debug_shadow_vertex_main, model_scene_debug_shadow_fragment_main);
+    sky_source := cast([]u8) get_transpiled(.METAL, model_scene_sky_vertex_main, model_scene_sky_fragment_main);
 
     main_raster: Gpu_Raster_Desc = .{
         cull = .CW,
@@ -194,7 +216,9 @@ on_dll_init :: () {
     grass_pipeline        = gpu_create_graphics_pipeline(grass_source, grass_main_raster);
     grass_shadow_pipeline = gpu_create_graphics_pipeline(grass_shadow_source, shadow_raster);
     debug_shadow_pipeline = gpu_create_graphics_pipeline(debug_shadow_source, main_raster);
+    sky_pipeline          = gpu_create_graphics_pipeline(sky_source, grass_main_raster);
     shadow_map_init(*shadow_map);
+    sky_draw_params = gpu_alloc_buffer(Model_Scene_Sky_Params_CPU, label = "model scene sky params");
 
     scene_palette_models = Scene_File.scan_scene_palette_models();
     scene_manip_objects.allocator = context.allocator;
@@ -228,6 +252,8 @@ on_unload :: () {
     Physics.deinit();
     Gizmo_Render.deinit(*gizmo_render_ctx);
     Gizmo.deinit(*gizmo_ctx);
+    gpu_delete(*sky_draw_params);
+    if sky_pipeline != 0 gpu_free_pipeline(sky_pipeline);
     if debug_shadow_pipeline != 0 gpu_free_pipeline(debug_shadow_pipeline);
     if grass_shadow_pipeline != 0 gpu_free_pipeline(grass_shadow_pipeline);
     if grass_pipeline != 0 gpu_free_pipeline(grass_pipeline);
@@ -276,6 +302,8 @@ tick :: () {
             }
             Checkbox("Render Grass", *render_grass);
             Checkbox("Show Shadow Debug", *show_shadow_debug);
+            SliderFloat("Sun Strength", *model_scene_sun_strength, 0.0, 3.0, "%.2f");
+            SliderFloat("Time of Day", *model_scene_time_of_day, 0.0, 1.0, "%.2f");
             if animated_batches.count > 0 {
                 max_batch_index := cast(s32) animated_batches.count - 1;
             }
@@ -434,13 +462,18 @@ tick :: () {
         editor_camera_set_look_at(*scene_camera, player_focus);
     }
 
+    cam_forward, cam_right, cam_up: Vector3;
+    editor_camera_basis(*scene_camera, *cam_forward, *cam_right, *cam_up);
     view := editor_camera_make_view(*scene_camera);
     aspect := ifx win_h > 0 then cast(float) win_w / cast(float) win_h else 1.0;
     proj := make_projection_matrix(PI / 3.2, aspect, 0.05, 250.0);
     view_proj := proj * view;
     viewport := Vector2.{max(1.0, cast(float) win_w), max(1.0, cast(float) win_h)};
 
-    shadow_map.light_dir = normalize(Vector3.{0.35, -1.0, 0.25});
+    model_scene_time_of_day = clamp(model_scene_time_of_day, 0.0, 1.0);
+    model_scene_sun_strength = clamp(model_scene_sun_strength, 0.0, 3.0);
+    sun_dir := model_scene_sun_direction(model_scene_time_of_day);
+    shadow_map.light_dir = -sun_dir;
     shadow_map.center = .{0.0, 2.0, -12.0};
     shadow_map.extent = 18.0;
     shadow_map.distance = 20.0;
@@ -449,6 +482,15 @@ tick :: () {
     shadow_map.bias = 0.0035;
     shadow_map_update_view_proj(*shadow_map);
     shadow_binding := shadow_map_binding(*shadow_map);
+
+    if sky_draw_params.cpu != null {
+        sky_draw_params.cpu.* = .{
+            camera_right_proj_x = .{cam_right.x, cam_right.y, cam_right.z, proj._11},
+            camera_up_proj_y = .{cam_up.x, cam_up.y, cam_up.z, proj._22},
+            camera_forward_time_of_day = .{cam_forward.x, cam_forward.y, cam_forward.z, model_scene_time_of_day},
+            light_dir_sun_strength = .{shadow_map.light_dir.x, shadow_map.light_dir.y, shadow_map.light_dir.z, model_scene_sun_strength},
+        };
+    }
 
     running_lizard_root = character_controller_root_matrix(*running_lizard_controller, running_lizard_scale);
     scene_anim_sample(
@@ -497,24 +539,32 @@ tick :: () {
         it.view_proj = view_proj;
         it.camera_pos = scene_camera.position;
         it.light_dir = shadow_map.light_dir;
+        it.sun_params = .{model_scene_sun_strength, model_scene_time_of_day, 0.0, 0.0};
     }
     ground_shadow_params.cpu.view_proj = view_proj;
     ground_shadow_params.cpu.camera_pos = scene_camera.position;
     ground_shadow_params.cpu.light_dir = shadow_map.light_dir;
+    ground_shadow_params.cpu.sun_params = .{model_scene_sun_strength, model_scene_time_of_day, 0.0, 0.0};
     ground_draw_params.cpu.view_proj = view_proj;
     ground_draw_params.cpu.camera_pos = scene_camera.position;
     ground_draw_params.cpu.light_dir = shadow_map.light_dir;
+    ground_draw_params.cpu.sun_params = .{model_scene_sun_strength, model_scene_time_of_day, 0.0, 0.0};
     if grass_draw_params.cpu != null {
         lizard_pos := character_controller_position(*running_lizard_controller);
-        grass_shadow_params.cpu.view_proj = view_proj;
         grass_shadow_params.cpu.shadow_view_proj = shadow_map.view_proj;
-        grass_shadow_params.cpu.camera_pos = scene_camera.position;
-        grass_shadow_params.cpu.light_dir = shadow_map.light_dir;
-        grass_shadow_params.cpu.shadow_meta = shadow_binding;
         grass_shadow_params.cpu.ground_size_center_z_time = .{active_ground.size_x, active_ground.size_z, active_ground.center_z, cast(float) time};
         grass_shadow_params.cpu.ground_shape = .{active_ground.ridge, active_ground.swell, active_ground.warp, 0.0};
         grass_shadow_params.cpu.player_pos_radius = .{lizard_pos.x, lizard_pos.y, lizard_pos.z, 1.9};
-        grass_draw_params.cpu.* = grass_shadow_params.cpu.*;
+        grass_draw_params.cpu.shadow_view_proj = grass_shadow_params.cpu.shadow_view_proj;
+        grass_draw_params.cpu.ground_size_center_z_time = grass_shadow_params.cpu.ground_size_center_z_time;
+        grass_draw_params.cpu.ground_shape = grass_shadow_params.cpu.ground_shape;
+        grass_draw_params.cpu.grass_grid_height_width = grass_shadow_params.cpu.grass_grid_height_width;
+        grass_draw_params.cpu.player_pos_radius = grass_shadow_params.cpu.player_pos_radius;
+        grass_draw_params.cpu.view_proj = view_proj;
+        grass_draw_params.cpu.camera_pos = scene_camera.position;
+        grass_draw_params.cpu.light_dir = shadow_map.light_dir;
+        grass_draw_params.cpu.sun_params = .{model_scene_sun_strength, model_scene_time_of_day, 0.0, 0.0};
+        grass_draw_params.cpu.shadow_meta = shadow_binding;
     }
 
     Gizmo_Render.gizmo_render_set_view_projection(*gizmo_render_ctx, view_proj);
@@ -578,10 +628,15 @@ tick :: () {
                     view = swapchain_image,
                     load_op = .CLEAR,
                     store_op = .STORE,
-                    clear_color._float = .[0.06, 0.08, 0.11, 1.0],
+                    clear_color._float = .[0.01, 0.01, 0.015, 1.0],
                 },
             ],
         }, .COLOR_ATTACHMENT_WRITE, .COLOR_ATTACHMENT_WRITE);
+        gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
+        gpu_set_pipeline(cmd_buff, sky_pipeline);
+        if sky_draw_params.cpu != null {
+            draw_result := gpu_draw_instanced_direct(cmd_buff, sky_draw_params.gpu, 6, 1);
+        }
         gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .LESS, depth_mode = .READ | .WRITE});
         gpu_set_pipeline(cmd_buff, ground_pipeline);
         draw_result := gpu_draw_instanced_direct(cmd_buff, ground_draw_params.gpu, ground_index_count, 1);
@@ -749,6 +804,7 @@ rebuild_scene_runtime :: () {
             skin_matrices = 0,
             view_proj = Matrix4_Identity,
             light_dir = normalize(Vector3.{0.35, -1.0, 0.25}),
+            sun_params = .{model_scene_sun_strength, model_scene_time_of_day, 0.0, 0.0},
             camera_pos = scene_camera.position,
             material_index = mesh.material_index,
             sampler_index = 0,
@@ -1256,7 +1312,7 @@ init_ground_plane :: (ground: Scene_File.Scene_Procedural_Ground_Desc) {
     ground_instance = gpu_alloc_buffer(Scene_Instance, label = "model scene ground instance");
     ground_shadow_params = gpu_alloc_buffer(Scene_Draw_Params_CPU, label = "model scene ground shadow params");
     ground_draw_params = gpu_alloc_buffer(Ground_Draw_Params_CPU, label = "model scene ground params");
-    grass_shadow_params = gpu_alloc_buffer(Grass_Draw_Params, label = "model scene grass shadow params");
+    grass_shadow_params = gpu_alloc_buffer(Grass_Shadow_Params_CPU, label = "model scene grass shadow params");
     grass_draw_params = gpu_alloc_buffer(Grass_Draw_Params, label = "model scene grass params");
 
     memcpy(ground_vertices.cpu.data, ground_vertices_cpu.data, ground_vertices_cpu.count * size_of(Scene_Vertex));
@@ -1275,6 +1331,7 @@ init_ground_plane :: (ground: Scene_File.Scene_Procedural_Ground_Desc) {
         skin_matrices = 0,
         view_proj = Matrix4_Identity,
         light_dir = normalize(.{0.35, -1.0, 0.25}),
+        sun_params = .{model_scene_sun_strength, model_scene_time_of_day, 0.0, 0.0},
         camera_pos = scene_camera.position,
         material_index = 0,
         sampler_index = cast(u32) ground_sampler - 1,
@@ -1286,6 +1343,7 @@ init_ground_plane :: (ground: Scene_File.Scene_Procedural_Ground_Desc) {
         instances = ground_instance.gpu,
         view_proj = Matrix4_Identity,
         light_dir = normalize(Vector3.{0.35, -1.0, 0.25}),
+        sun_params = .{model_scene_sun_strength, model_scene_time_of_day, 0.0, 0.0},
         camera_pos = scene_camera.position,
         sampler_index = cast(u32) ground_sampler - 1,
         base_color_texture_index = gpu_texture_view_index(ground_texture_view),
@@ -1297,17 +1355,24 @@ init_ground_plane :: (ground: Scene_File.Scene_Procedural_Ground_Desc) {
     grass_grid_z := max(1, ground.render_grid_z * 4 / 3 * 3);
     grass_instance_count = cast(u32) grass_grid_x * cast(u32) grass_grid_z;
     grass_shadow_params.cpu.* = .{
-        view_proj = Matrix4_Identity,
         shadow_view_proj = Matrix4_Identity,
-        light_dir = normalize(Vector3.{0.35, -1.0, 0.25}),
-        camera_pos = scene_camera.position,
-        shadow_meta = .{0.0, 0.0, 0.0, 0.0},
         ground_size_center_z_time = .{ground.size_x, ground.size_z, ground.center_z, 0.0},
         ground_shape = .{ground.ridge, ground.swell, ground.warp, 0.0},
         grass_grid_height_width = .{cast(float) grass_grid_x, cast(float) grass_grid_z, 0.33, 0.24},
         player_pos_radius = .{0.0, 0.0, 0.0, 1.9},
     };
-    grass_draw_params.cpu.* = grass_shadow_params.cpu.*;
+    grass_draw_params.cpu.* = .{
+        view_proj = Matrix4_Identity,
+        shadow_view_proj = Matrix4_Identity,
+        light_dir = normalize(Vector3.{0.35, -1.0, 0.25}),
+        sun_params = .{model_scene_sun_strength, model_scene_time_of_day, 0.0, 0.0},
+        camera_pos = scene_camera.position,
+        shadow_meta = .{0.0, 0.0, 0.0, 0.0},
+        ground_size_center_z_time = grass_shadow_params.cpu.ground_size_center_z_time,
+        ground_shape = grass_shadow_params.cpu.ground_shape,
+        grass_grid_height_width = grass_shadow_params.cpu.grass_grid_height_width,
+        player_pos_radius = grass_shadow_params.cpu.player_pos_radius,
+    };
     ground_index_count = cast(u32) ground_indices.cpu.count;
 }
 
@@ -1400,6 +1465,14 @@ ground_normal_at :: (desc: Scene_File.Scene_Procedural_Ground_Desc, x: float, z:
     h_d := ground_height_at(desc, x, z - eps);
     h_u := ground_height_at(desc, x, z + eps);
     return normalize({h_l - h_r, eps * 2.0, h_d - h_u});
+}
+
+model_scene_sun_direction :: (time_of_day: float) -> Vector3 {
+    tau := cast(float) 6.28318530718;
+    phase := (time_of_day - 0.25) * tau;
+    elevation := sin(phase) * cast(float) 0.92;
+    horizontal := sqrt(max(1.0 - elevation * elevation, 0.0001));
+    return normalize(Vector3.{cos(phase) * horizontal, elevation, sin(phase) * horizontal * 0.55});
 }
 
 hash01 :: (x: u32) -> float {

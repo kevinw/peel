@@ -18,6 +18,7 @@ Scene_Draw_Params :: struct {
     view_proj: Matrix4;
     light_dir: Vector3;
     _pad0: float;
+    sun_params: Vector4;
     camera_pos: Vector3;
     _pad1: float;
     material_index: u32;
@@ -34,6 +35,7 @@ Ground_Draw_Params :: struct {
     view_proj: Matrix4;
     light_dir: Vector3;
     _pad0: float;
+    sun_params: Vector4;
     camera_pos: Vector3;
     _pad1: float;
     sampler_index: u32;
@@ -49,6 +51,7 @@ Grass_Draw_Params :: struct {
     shadow_view_proj: Matrix4;
     light_dir: Vector3;
     _pad0: float;
+    sun_params: Vector4;
     camera_pos: Vector3;
     _pad1: float;
     shadow_meta: Vector4;
@@ -56,6 +59,21 @@ Grass_Draw_Params :: struct {
     ground_shape: Vector4;
     grass_grid_height_width: Vector4;
     player_pos_radius: Vector4;
+}
+
+Grass_Shadow_Params :: struct {
+    shadow_view_proj: Matrix4;
+    ground_size_center_z_time: Vector4;
+    ground_shape: Vector4;
+    grass_grid_height_width: Vector4;
+    player_pos_radius: Vector4;
+}
+
+Model_Scene_Sky_Params :: struct {
+    camera_right_proj_x: Vector4;
+    camera_up_proj_y: Vector4;
+    camera_forward_time_of_day: Vector4;
+    light_dir_sun_strength: Vector4;
 }
 
 Model_Scene_Vertex_In :: struct {
@@ -99,6 +117,15 @@ Model_Scene_Debug_Vertex_Out :: struct {
 }
 
 Model_Scene_Debug_Fragment_In :: struct {
+    uv: Vector2;
+}
+
+Model_Scene_Sky_Vertex_Out :: struct {
+    gl_Position: Vector4; @position
+    uv: Vector2;
+}
+
+Model_Scene_Sky_Fragment_In :: struct {
     uv: Vector2;
 }
 
@@ -329,6 +356,79 @@ model_scene_debug_shadow_fragment_main :: (using in: Model_Scene_Debug_Fragment_
     return .{out_color = .{d, d, d, 1.0}};
 } @fragment_shader
 
+model_scene_sky_base_color :: (view_dir: Vector3, sun_dir: Vector3) -> Vector3 {
+    upness := clamp(view_dir.y * 0.5 + 0.5, 0.0, 1.0);
+    sun_dot := dot(view_dir, sun_dir);
+    toward_sun := clamp((sun_dot + 0.15) / 1.15, 0.0, 1.0);
+    away_from_sun := 1.0 - toward_sun;
+    horizon := pow(1.0 - clamp(view_dir.y, 0.0, 1.0), 2.0);
+    sun_elevation := clamp(sun_dir.y, -1.0, 1.0);
+    day_t := clamp(sun_elevation * 0.85 + 0.33, 0.0, 1.0);
+    twilight_t := 1.0 - clamp(abs(sun_elevation) * 3.0, 0.0, 1.0);
+
+    night_zenith := Vector3.{0.006, 0.008, 0.016};
+    night_horizon := Vector3.{0.015, 0.012, 0.012};
+    day_zenith := Vector3.{0.17, 0.34, 0.74};
+    day_horizon := Vector3.{0.68, 0.76, 0.92};
+    zenith_col := mix(night_zenith, day_zenith, day_t);
+    horizon_col := mix(night_horizon, day_horizon, day_t);
+    base := mix(horizon_col, zenith_col, upness);
+    base = base * mix(0.84, 1.0 - horizon * 0.2, day_t);
+
+    sunset_orange := Vector3.{1.16, 0.45, 0.13};
+    twilight_blue := Vector3.{0.10, 0.18, 0.38};
+    base += sunset_orange * (horizon * twilight_t * toward_sun * 0.58);
+    base += twilight_blue * (twilight_t * away_from_sun * (0.14 + upness * 0.34));
+    return base;
+}
+
+model_scene_sky_color :: (view_dir: Vector3, sun_dir: Vector3, sun_strength: float) -> Vector3 {
+    sun_dot := dot(view_dir, sun_dir);
+    sun_amount := clamp(sun_dot, 0.0, 1.0);
+    sun_elevation := clamp(sun_dir.y, -1.0, 1.0);
+    twilight_t := 1.0 - clamp(abs(sun_elevation) * 3.0, 0.0, 1.0);
+    day_t := clamp(sun_elevation * 0.85 + 0.33, 0.0, 1.0);
+    base := model_scene_sky_base_color(view_dir, sun_dir);
+
+    sun_glow := pow(sun_amount, 18.0) * 0.38;
+    sun_core := pow(sun_amount, 140.0);
+    warm_day := Vector3.{1.0, 0.77, 0.47};
+    warm_twilight := Vector3.{1.25, 0.52, 0.18};
+    warm := mix(warm_day, warm_twilight, twilight_t);
+    glow_scale := max(sun_strength, 0.0) * mix(0.35, 1.0, day_t + twilight_t * 0.45);
+
+    return base + warm * (sun_glow + sun_core * 1.25) * glow_scale;
+}
+
+model_scene_apply_atmosphere :: (color: Vector3, world_pos: Vector3, camera_pos: Vector3, sun_dir: Vector3) -> Vector3 {
+    view_vec := world_pos - camera_pos;
+    dist := sqrt(max(dot(view_vec, view_vec), 0.0));
+    fog := 1.0 - exp(-dist * 0.028);
+    fog = clamp(fog, 0.0, 0.7);
+    view_dir := normalize(view_vec);
+    sky_col := model_scene_sky_base_color(view_dir, sun_dir);
+    return mix(color, sky_col, fog);
+}
+
+model_scene_indirect_light :: (N: Vector3, sun_dir: Vector3, sun_strength: float, shadow: float) -> Vector3 {
+    upness := clamp(N.y * 0.5 + 0.5, 0.0, 1.0);
+    horizonness := 1.0 - abs(N.y);
+    sun_elevation := clamp(sun_dir.y, -1.0, 1.0);
+    twilight_t := 1.0 - clamp(abs(sun_elevation) * 3.0, 0.0, 1.0);
+
+    sky_zenith := model_scene_sky_base_color(Vector3.{0.0, 1.0, 0.0}, sun_dir);
+    sky_horizon := model_scene_sky_base_color(normalize(Vector3.{0.0, 0.08, 1.0}), sun_dir);
+    sky_fill := mix(sky_horizon, sky_zenith, upness) * (0.34 + horizonness * 0.08);
+
+    ground_day := Vector3.{0.20, 0.18, 0.11};
+    ground_twilight := Vector3.{0.28, 0.16, 0.08};
+    ground_bounce := mix(ground_day, ground_twilight, twilight_t);
+    ground_fill := ground_bounce * (1.0 - upness) * (0.18 + sun_strength * 0.12);
+
+    indirect_shadow := mix(0.82, 1.0, shadow);
+    return (sky_fill + ground_fill) * indirect_shadow;
+}
+
 model_scene_fragment_main :: (using in: Model_Scene_Fragment_In, params: *Scene_Draw_Params) -> Vector4 @SV_Target0 {
     material := params.materials[params.material_index];
     tex := sample_2d(material.base_color_texture_index, material.sampler_index, uv);
@@ -357,20 +457,26 @@ model_scene_fragment_main :: (using in: Model_Scene_Fragment_In, params: *Scene_
     if material.roughness_texture_index != SCENE_INVALID_TEXTURE_INDEX {
         roughness = sample_2d(material.roughness_texture_index, material.sampler_index, uv).y;
     }
-    L := normalize(-params.light_dir);
+    sun_dir := normalize(-params.light_dir);
+    sun_strength := max(params.sun_params.x, 0.0);
+    L := sun_dir;
     V := normalize(params.camera_pos - world_pos);
     H := normalize(L + V);
-    ndl := max(dot(N, L), 0.0);
+    ndl_raw := dot(N, L);
+    ndl := max(ndl_raw, 0.0);
     ndh := max(dot(N, H), 0.0);
-    ambient := 0.18 * mix(0.62, 1.0, ao);
     local_shadow_meta := shadow_meta;
     local_shadow_uvz := shadow_uvz;
     shadow := model_scene_shadow_visibility(local_shadow_meta, local_shadow_uvz);
-    diffuse := ambient + ndl * 0.78 * shadow;
+    indirect := model_scene_indirect_light(N, sun_dir, sun_strength, shadow) * mix(0.62, 1.0, ao);
+    wrapped_ndl := clamp((ndl_raw + 0.28) / 1.28, 0.0, 1.0);
+    diffuse := wrapped_ndl * 0.74 * shadow * sun_strength;
     spec_power := mix(48.0, 5.0, clamp(roughness, 0.0, 1.0));
     spec_strength := mix(0.18, 0.035, clamp(roughness, 0.0, 1.0));
-    specular := pow(ndh, spec_power) * spec_strength * shadow;
-    color := base_rgb * diffuse + Vector3.{1.0, 0.97, 0.92} * specular;
+    sun_col := mix(Vector3.{1.0, 0.96, 0.9}, Vector3.{1.16, 0.62, 0.32}, 1.0 - clamp(abs(sun_dir.y) * 2.2, 0.0, 1.0));
+    specular := pow(ndh, spec_power) * spec_strength * shadow * sun_strength;
+    color := base_rgb * indirect + base_rgb * diffuse + sun_col * specular;
+    color = model_scene_apply_atmosphere(color, world_pos, params.camera_pos, sun_dir);
     return .{color.x, color.y, color.z, tex.w * tint.w};
 } @fragment_shader
 
@@ -413,22 +519,28 @@ ground_fragment_main :: (using in: Ground_Fragment_In, params: *Ground_Draw_Para
     n_ts := Vector3.{n_sample.x * 2.0 - 1.0, n_sample.y * 2.0 - 1.0, n_sample.z * 2.0 - 1.0};
     N = normalize(tangent * n_ts.x + bitangent * n_ts.y + N * max(n_ts.z, 0.0));
 
-    L := normalize(-params.light_dir);
+    sun_dir := normalize(-params.light_dir);
+    sun_strength := max(params.sun_params.x, 0.0);
+    L := sun_dir;
     V := normalize(params.camera_pos - world_pos);
     H := normalize(L + V);
-    ndl := max(dot(N, L), 0.0);
+    ndl_raw := dot(N, L);
+    ndl := max(ndl_raw, 0.0);
     ndh := max(dot(N, H), 0.0);
-    ambient := 0.18 * mix(0.62, 1.0, ao);
     shadow := model_scene_shadow_visibility(shadow_meta, shadow_uvz);
-    diffuse := ambient + ndl * 0.78 * shadow;
+    indirect := model_scene_indirect_light(N, sun_dir, sun_strength, shadow) * mix(0.62, 1.0, ao);
+    wrapped_ndl := clamp((ndl_raw + 0.24) / 1.24, 0.0, 1.0);
+    diffuse := wrapped_ndl * 0.74 * shadow * sun_strength;
     spec_power := mix(48.0, 5.0, clamp(roughness, 0.0, 1.0));
     spec_strength := mix(0.18, 0.035, clamp(roughness, 0.0, 1.0));
-    specular := pow(ndh, spec_power) * spec_strength * shadow;
-    color := base_rgb * diffuse + Vector3.{1.0, 0.97, 0.92} * specular;
+    sun_col := mix(Vector3.{1.0, 0.96, 0.9}, Vector3.{1.16, 0.62, 0.32}, 1.0 - clamp(abs(sun_dir.y) * 2.2, 0.0, 1.0));
+    specular := pow(ndh, spec_power) * spec_strength * shadow * sun_strength;
+    color := base_rgb * indirect + base_rgb * diffuse + sun_col * specular;
+    color = model_scene_apply_atmosphere(color, world_pos, params.camera_pos, sun_dir);
     return .{color.x, color.y, color.z, tex.w};
 } @fragment_shader
 
-model_scene_grass_shadow_vertex_main :: (using in: Grass_Vertex_In, params: *Grass_Draw_Params) -> Grass_Shadow_Vertex_Out {
+model_scene_grass_shadow_vertex_main :: (using in: Grass_Vertex_In, params: *Grass_Shadow_Params) -> Grass_Shadow_Vertex_Out {
     using out: Grass_Shadow_Vertex_Out;
     blade_t := grass_blade_vt(vertex_id);
     world_pos := grass_blade_world_pos(vertex_id, instance_id, blade_t, params);
@@ -438,7 +550,7 @@ model_scene_grass_shadow_vertex_main :: (using in: Grass_Vertex_In, params: *Gra
     return out;
 } @vertex_shader
 
-model_scene_grass_shadow_fragment_main :: (using in: Grass_Shadow_Fragment_In, params: *Grass_Draw_Params) -> struct { out_color: Vector4; } {
+model_scene_grass_shadow_fragment_main :: (using in: Grass_Shadow_Fragment_In, params: *Grass_Shadow_Params) -> struct { out_color: Vector4; } {
     _ = params;
     d := clamp(depth01, 0.0, 1.0);
     return .{out_color = .{d, d, d, 1.0}};
@@ -459,10 +571,13 @@ model_scene_grass_vertex_main :: (using in: Grass_Vertex_In, params: *Grass_Draw
 
 model_scene_grass_fragment_main :: (using in: Grass_Fragment_In, params: *Grass_Draw_Params) -> Vector4 @SV_Target0 {
     N := normalize(normal);
-    L := normalize(-params.light_dir);
+    sun_dir := normalize(-params.light_dir);
+    sun_strength := max(params.sun_params.x, 0.0);
+    L := sun_dir;
     V := normalize(params.camera_pos - world_pos);
     H := normalize(L + V);
-    ndl := max(dot(N, L), 0.0);
+    ndl_raw := dot(N, L);
+    ndl := max(ndl_raw, 0.0);
     ndh := max(dot(N, H), 0.0);
     shadow := model_scene_shadow_visibility(shadow_meta, shadow_uvz);
 
@@ -473,12 +588,43 @@ model_scene_grass_fragment_main :: (using in: Grass_Fragment_In, params: *Grass_
     warm := Vector3.{1.08, 1.02, 0.91};
     base := mix(root_col, tip_col, blade_t) * mix(cool, warm, tint_noise);
 
-    ambient := 0.22;
-    diffuse := ambient + ndl * 0.72 * shadow;
-    specular := pow(ndh, 14.0) * 0.03 * shadow;
+    indirect := model_scene_indirect_light(N, sun_dir, sun_strength, shadow);
+    wrapped_ndl := clamp((ndl_raw + 0.32) / 1.32, 0.0, 1.0);
+    diffuse := wrapped_ndl * 0.7 * shadow * sun_strength;
+    specular := pow(ndh, 14.0) * 0.03 * shadow * sun_strength;
     rim := pow(1.0 - max(dot(N, V), 0.0), 2.3) * 0.08;
-    color := base * diffuse + Vector3.{1.0, 0.97, 0.9} * specular + base * rim;
+    sun_col := mix(Vector3.{1.0, 0.96, 0.9}, Vector3.{1.16, 0.62, 0.32}, 1.0 - clamp(abs(sun_dir.y) * 2.2, 0.0, 1.0));
+    color := base * indirect + base * diffuse + sun_col * specular + base * rim;
+    color = model_scene_apply_atmosphere(color, world_pos, params.camera_pos, sun_dir);
     return .{color.x, color.y, color.z, 1.0};
+} @fragment_shader
+
+model_scene_sky_vertex_main :: (using in: Model_Scene_Vertex_In, params: *Model_Scene_Sky_Params) -> Model_Scene_Sky_Vertex_Out {
+    using out: Model_Scene_Sky_Vertex_Out;
+    _ = params;
+    if vertex_id == 0 { gl_Position = .{-1.0, -1.0, 0.0, 1.0}; uv = .{0.0, 0.0}; }
+    else if vertex_id == 1 { gl_Position = .{1.0, -1.0, 0.0, 1.0}; uv = .{1.0, 0.0}; }
+    else if vertex_id == 2 { gl_Position = .{1.0, 1.0, 0.0, 1.0}; uv = .{1.0, 1.0}; }
+    else if vertex_id == 3 { gl_Position = .{-1.0, -1.0, 0.0, 1.0}; uv = .{0.0, 0.0}; }
+    else if vertex_id == 4 { gl_Position = .{1.0, 1.0, 0.0, 1.0}; uv = .{1.0, 1.0}; }
+    else { gl_Position = .{-1.0, 1.0, 0.0, 1.0}; uv = .{0.0, 1.0}; }
+    return out;
+} @vertex_shader
+
+model_scene_sky_fragment_main :: (using in: Model_Scene_Sky_Fragment_In, params: *Model_Scene_Sky_Params) -> struct { out_color: Vector4; } {
+    cam_right := Vector3.{params.camera_right_proj_x.x, params.camera_right_proj_x.y, params.camera_right_proj_x.z};
+    cam_up := Vector3.{params.camera_up_proj_y.x, params.camera_up_proj_y.y, params.camera_up_proj_y.z};
+    cam_forward := Vector3.{params.camera_forward_time_of_day.x, params.camera_forward_time_of_day.y, params.camera_forward_time_of_day.z};
+    proj_x := params.camera_right_proj_x.w;
+    proj_y := params.camera_up_proj_y.w;
+    sun_dir := normalize(Vector3.{-params.light_dir_sun_strength.x, -params.light_dir_sun_strength.y, -params.light_dir_sun_strength.z});
+    sun_strength := max(params.light_dir_sun_strength.w, 0.0);
+
+    ndc_x := uv.x * 2.0 - 1.0;
+    ndc_y := uv.y * 2.0 - 1.0;
+    view_dir := normalize(cam_forward + cam_right * (ndc_x / max(proj_x, 0.0001)) + cam_up * (ndc_y / max(proj_y, 0.0001)));
+    color := model_scene_sky_color(view_dir, sun_dir, sun_strength);
+    return .{out_color = .{color.x, color.y, color.z, 1.0}};
 } @fragment_shader
 
 #scope_file
@@ -493,7 +639,7 @@ grass_hash01_2 :: (x: float, y: float, phase: float) -> float {
     return v - floor(v);
 }
 
-grass_ground_height :: (params: *Grass_Draw_Params, x: float, z: float) -> float {
+grass_ground_height :: (params: *$T, x: float, z: float) -> float {
     ridge := sin(x * cast(float) 0.23 + z * cast(float) 0.09) * params.ground_shape.x;
     swell := cos(z * cast(float) 0.18 - x * cast(float) 0.05) * params.ground_shape.y;
     warp_scale := params.ground_shape.z;
@@ -502,7 +648,7 @@ grass_ground_height :: (params: *Grass_Draw_Params, x: float, z: float) -> float
     return ridge + swell + warp - flatten * cast(float) 0.05;
 }
 
-grass_tip_dir :: (instance_id: u32, blade_t: float, params: *Grass_Draw_Params) -> Vector3 {
+grass_tip_dir :: (instance_id: u32, blade_t: float, params: *$T) -> Vector3 {
     t := params.ground_size_center_z_time.w;
     yaw := grass_hash01_2(cast(float) instance_id, cast(float) 1.7, cast(float) 0.23) * cast(float) 6.28318530718;
     bend_phase := grass_hash01_2(cast(float) instance_id, cast(float) 9.1, cast(float) 0.61) * cast(float) 6.28318530718;
@@ -530,7 +676,7 @@ grass_blade_vx :: (vertex_id: u32) -> float {
     return -0.28;
 }
 
-grass_blade_world_pos :: (vertex_id: u32, instance_id: u32, vt: float, params: *Grass_Draw_Params) -> Vector3 {
+grass_blade_world_pos :: (vertex_id: u32, instance_id: u32, vt: float, params: *$T) -> Vector3 {
     grid_x := max(cast(u32) params.grass_grid_height_width.x, 1);
     grid_z := max(cast(u32) params.grass_grid_height_width.y, 1);
     gx := instance_id % grid_x;
