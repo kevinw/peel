@@ -18,6 +18,9 @@ Hex_Tactics_Model :: struct {
     tiles: [..]Hex_Tile;
 }
 
+Hex_Tactics_Mesh_Params_CPU  :: CPU_Struct(Hex_Tactics_Mesh_Params);
+Hex_Tactics_Grass_Params_CPU :: CPU_Struct(Hex_Tactics_Grass_Params);
+
 Hex_Tactics_Render_Buffers :: struct {
     vertices: Gpu_View(Hex_Tactics_Vertex);
     indices: Gpu_View(u32);
@@ -27,29 +30,6 @@ Hex_Tactics_Render_Buffers :: struct {
     sky_params: Gpu_Buffer(Hex_Tactics_Sky_Params_CPU);
     index_count: u32;
     grass_count: u32;
-}
-
-Hex_Tactics_Mesh_Params_CPU :: struct {
-    vertices: Gpu_Ptr;
-    indices: Gpu_Ptr;
-    view_proj: Matrix4;
-    light_dir: Vector3;
-    _pad0: float;
-    sun_params: Vector4;
-    camera_pos: Vector3;
-    _pad1: float;
-}
-
-Hex_Tactics_Grass_Params_CPU :: struct {
-    instances: Gpu_Ptr;
-    view_proj: Matrix4;
-    light_dir: Vector3;
-    _pad0: float;
-    sun_params: Vector4;
-    camera_pos: Vector3;
-    _pad1: float;
-    time: float;
-    _pad2: Vector3;
 }
 
 Hex_Tactics_Sky_Params_CPU :: struct {
@@ -108,11 +88,11 @@ hex_tactics_ui :: () {
 
 on_dll_init :: () {
     graphics_source := cast([]u8) get_transpiled(.METAL, hex_tactics_mesh_vertex_main, hex_tactics_mesh_fragment_main);
-    grass_source := cast([]u8) get_transpiled(.METAL, hex_tactics_grass_vertex_main, hex_tactics_grass_fragment_main);
-    sky_source := cast([]u8) get_transpiled(.METAL, hex_tactics_sky_vertex_main, hex_tactics_sky_fragment_main);
+    grass_source    := cast([]u8) get_transpiled(.METAL, hex_tactics_grass_vertex_main, hex_tactics_grass_fragment_main);
+    sky_source      := cast([]u8) get_transpiled(.METAL, hex_tactics_sky_vertex_main, hex_tactics_sky_fragment_main);
 
     raster_desc: Gpu_Raster_Desc = .{
-        cull = .CW,
+        cull = .CCW,
         depth_format = .D32_SFLOAT,
         color_targets = .[
             .{format = .B8G8R8A8_UNORM},
@@ -123,12 +103,9 @@ on_dll_init :: () {
     sky_raster := raster_desc;
     sky_raster.cull = .NONE;
 
-    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, hex_tactics_mesh_vertex_main, hex_tactics_mesh_fragment_main);
-    assert(graphics_ok, "Hex tactics graphics pipeline creation failed.");
-    grass_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *grass_pipeline, grass_source, grass_raster, .METAL, hex_tactics_grass_vertex_main, hex_tactics_grass_fragment_main);
-    assert(grass_ok, "Hex tactics grass pipeline creation failed.");
-    sky_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *sky_pipeline, sky_source, sky_raster, .METAL, hex_tactics_sky_vertex_main, hex_tactics_sky_fragment_main);
-    assert(sky_ok, "Hex tactics sky pipeline creation failed.");
+    SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, hex_tactics_mesh_vertex_main, hex_tactics_mesh_fragment_main);
+    SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *grass_pipeline, grass_source, grass_raster, .METAL, hex_tactics_grass_vertex_main, hex_tactics_grass_fragment_main);
+    SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *sky_pipeline, sky_source, sky_raster, .METAL, hex_tactics_sky_vertex_main, hex_tactics_sky_fragment_main);
 
     hex_tactics_model_init(*hex_tactics_model);
     hex_tactics_rebuild_render(*hex_tactics_model, *hex_tactics_render);
@@ -149,9 +126,9 @@ on_unload :: () {
     hex_tactics_render_deinit(*hex_tactics_render);
     if hex_tactics_depth_view != 0 gpu_free_texture_view(hex_tactics_depth_view);
     if hex_tactics_depth_texture != 0 gpu_free(hex_tactics_depth_texture);
-    if sky_pipeline != 0 gpu_free_pipeline(sky_pipeline);
-    if grass_pipeline != 0 gpu_free_pipeline(grass_pipeline);
-    if graphics_pipeline != 0 gpu_free_pipeline(graphics_pipeline);
+    gpu_delete(*sky_pipeline);
+    gpu_delete(*grass_pipeline);
+    gpu_delete(*graphics_pipeline);
 } @on_unload
 
 tick :: () {
@@ -251,18 +228,15 @@ tick :: () {
 
     gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
     gpu_set_pipeline(cmd_buff, sky_pipeline);
-    sky_result := gpu_draw_instanced_direct(cmd_buff, hex_tactics_render.sky_params.gpu, 6, 1);
-    assert(sky_result == .SUCCESS, tprint("Hex tactics sky draw failed: %", sky_result));
+    gpu_draw_instanced_direct(cmd_buff, hex_tactics_render.sky_params.gpu, 6, 1);
 
     gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .LESS, depth_mode = .READ | .WRITE});
     gpu_set_pipeline(cmd_buff, graphics_pipeline);
-    mesh_result := gpu_draw_instanced_direct(cmd_buff, hex_tactics_render.mesh_params.gpu, hex_tactics_render.index_count, 1);
-    assert(mesh_result == .SUCCESS, tprint("Hex tactics mesh draw failed: %", mesh_result));
+    gpu_draw_instanced_direct(cmd_buff, hex_tactics_render.mesh_params.gpu, hex_tactics_render.index_count, 1);
 
     if hex_tactics_render.grass_count > 0 {
         gpu_set_pipeline(cmd_buff, grass_pipeline);
-        grass_result := gpu_draw_instanced_direct(cmd_buff, hex_tactics_render.grass_params.gpu, 6, hex_tactics_render.grass_count);
-        assert(grass_result == .SUCCESS, tprint("Hex tactics grass draw failed: %", grass_result));
+        gpu_draw_instanced_direct(cmd_buff, hex_tactics_render.grass_params.gpu, 6, hex_tactics_render.grass_count);
     }
 
     submit_and_present_with_ui(cmd_buff);
@@ -323,7 +297,7 @@ hex_tactics_rebuild_render :: (model: *Hex_Tactics_Model, render: *Hex_Tactics_R
 
     for model.tiles {
         center := hex_tactics_tile_center(model.*, it.q, it.r);
-        hex_tactics_append_tile_mesh(*vertices_cpu, *indices_cpu, center, it.height, it.material_kind, model.tile_radius);
+        append_tile_mesh(*vertices_cpu, *indices_cpu, center, it.height, it.material_kind, model.tile_radius);
         if cast(u32) (it.flags & .GRASS) != 0 {
             hex_tactics_append_tile_grass(*grass_cpu, center, it.height, model.tile_radius, it.q, it.r);
         }
@@ -371,7 +345,7 @@ hex_tactics_ensure_depth_target :: (width: u32, height: u32) {
     gpu_commit_residency();
 }
 
-hex_tactics_append_tile_mesh :: (vertices: *[..]Hex_Tactics_Vertex, indices: *[..]u32, center: Vector3, height: float, material_kind: u32, tile_radius: float) {
+append_tile_mesh :: (vertices: *[..]Hex_Tactics_Vertex, indices: *[..]u32, center: Vector3, height: float, material_kind: u32, tile_radius: float) {
     side_base_y := -0.16;
     bevel_drop := 0.12;
     inner_scale := 0.84;
@@ -402,11 +376,11 @@ hex_tactics_append_tile_mesh :: (vertices: *[..]Hex_Tactics_Vertex, indices: *[.
 
     for 0..5 {
         next := (it + 1) % 6;
-        hex_tactics_push_tri(indices, center_top, inner_ring[it], inner_ring[next]);
-        hex_tactics_push_tri(indices, inner_ring[it], outer_ring[it], outer_ring[next]);
-        hex_tactics_push_tri(indices, inner_ring[it], outer_ring[next], inner_ring[next]);
-        hex_tactics_push_tri(indices, outer_ring[it], bottom_ring[it], bottom_ring[next]);
-        hex_tactics_push_tri(indices, outer_ring[it], bottom_ring[next], outer_ring[next]);
+        push_tri(indices, center_top, inner_ring[it], inner_ring[next]);
+        push_tri(indices, inner_ring[it], outer_ring[it], outer_ring[next]);
+        push_tri(indices, inner_ring[it], outer_ring[next], inner_ring[next]);
+        push_tri(indices, outer_ring[it], bottom_ring[it], bottom_ring[next]);
+        push_tri(indices, outer_ring[it], bottom_ring[next], outer_ring[next]);
     }
 }
 
@@ -454,7 +428,7 @@ hex_tactics_push_vertex :: (vertices: *[..]Hex_Tactics_Vertex, pos: Vector3, nor
     return idx;
 }
 
-hex_tactics_push_tri :: (indices: *[..]u32, a: u32, b: u32, c: u32) {
+push_tri :: (indices: *[..]u32, a: u32, b: u32, c: u32) {
     array_add(indices, a);
     array_add(indices, b);
     array_add(indices, c);

@@ -36,6 +36,10 @@
     "command": "jai ~/src/peel/build.jai - src/apps/gizmos_test.jai -run -dll"
   },
   {
+    "label": "hex_tactics",
+    "command": "jai ~/src/peel/build.jai - src/apps/hex_tactics.jai -run -dll"
+  },
+  {
     "label": "model_scene",
     "command": "jai ~/src/peel/build.jai - src/apps/model_scene.jai -run -dll"
   },
