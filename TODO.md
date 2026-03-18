@@ -62,3 +62,4 @@ Sebastian Aaltonen
 - https://www.rastergrid.com/blog/gpu-tech/2026/03/vulkan-memory-barriers-and-image-layouts-explained/
 - https://irradiance.ca/posts/microshadowing-part2/
 - https://imadrahmoune.com/pbr/
+- https://x.com/miketuritzin/status/2018752653053030463
