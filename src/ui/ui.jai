@@ -18,6 +18,7 @@ ui_opts: struct {
         show: bool = true;
         search_text: string;
     }
+    show_imgui_demo: bool;
 };
 
 ui_init :: () {
@@ -127,8 +128,12 @@ ui_render :: (cmd_buff: Gpu_Command_Buffer, ui_render_frame_info: *UI_Render_Fra
         }
         ImGui.ImplMetal4_NewFrame(pass);
 
-        ShowDemoWindow(null);
-        call_event_functions(.ui);
+        {
+            if ui_opts.show_imgui_demo ShowDemoWindow(*ui_opts.show_imgui_demo);
+            if ui_opts.globals.show    inspect_globals(*ui_opts.globals.show);
+            call_event_functions(.ui);
+        }
+
         Render();
 
         if !skip_render {

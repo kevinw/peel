@@ -705,11 +705,20 @@ grass_blade_world_pos :: (vertex_id: u32, instance_id: u32, vt: float, params: *
     pos := Vector3.{x, base_y, z} + right * (vx * blade_width) + .{0.0, vt * blade_height, 0.0};
 
     player_pos := params.player_pos_radius.xyz;
+    player_yaw := params.player_pos_radius.y;
     player_radius := max(params.player_pos_radius.w, 0.001);
     delta := Vector2.{x - player_pos.x, z - player_pos.z};
-    dist := sqrt(max(dot(delta, delta), 0.0));
-    if dist < player_radius {
-        affect := 1.0 - dist / player_radius;
+    forward_2d := Vector2.{sin(player_yaw), cos(player_yaw)};
+    side_2d := Vector2.{forward_2d.y, -forward_2d.x};
+    ellipse_major := player_radius * 1.9;
+    ellipse_minor := player_radius * 0.78;
+    local_forward := dot(delta, forward_2d);
+    local_side := dot(delta, side_2d);
+    ellipse_dist2 := (local_forward * local_forward) / max(ellipse_major * ellipse_major, 0.0001) +
+        (local_side * local_side) / max(ellipse_minor * ellipse_minor, 0.0001);
+    if ellipse_dist2 < 1.0 {
+        affect := 1.0 - sqrt(max(ellipse_dist2, 0.0));
+        dist := sqrt(max(dot(delta, delta), 0.0));
         if dist > 1.0e-4 {
             away := delta / dist;
             pos.x += away.x * affect * affect * 0.55 * vt;

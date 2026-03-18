@@ -144,12 +144,10 @@ tick :: () {
         hex_tactics_ensure_depth_target(cast(u32) win_w, cast(u32) win_h);
     }
     io := ImGui.GetIO();
-    left_down := (Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_LEFT] & .DOWN) != 0;
-    left_pressed := (Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_LEFT] & .START) != 0;
-    right_down := (Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_RIGHT] & .DOWN) != 0;
-    alt_down := (Input.input_button_states[Input.Key_Code.ALT] & .DOWN) != 0;
+    right_down := input_down(.MOUSE_BUTTON_RIGHT);
+    alt_down := input_down(.ALT);
 
-    orbit_start := alt_down && left_pressed && !io.WantCaptureMouse && !right_down && mouse_ok;
+    orbit_start := alt_down && input_pressed(.MOUSE_BUTTON_LEFT) && !io.WantCaptureMouse && !right_down && mouse_ok;
     if orbit_start {
         hex_tactics_orbit_prev_mouse = .{cast(float) mx, cast(float) my};
         hex_tactics_orbit_have_prev_mouse = true;
@@ -158,7 +156,7 @@ tick :: () {
     }
 
     if hex_tactics_orbit_drag_active {
-        if !alt_down || !left_down || io.WantCaptureMouse || !mouse_ok {
+        if !alt_down || !input_down(.MOUSE_BUTTON_LEFT) || io.WantCaptureMouse || !mouse_ok {
             hex_tactics_orbit_drag_active = false;
             hex_tactics_orbit_have_prev_mouse = false;
         } else {
@@ -310,16 +308,16 @@ hex_tactics_rebuild_render :: (model: *Hex_Tactics_Model, render: *Hex_Tactics_R
     gpu_arena = gpu_make_arena(arena_bytes, label = "hex tactics arena");
     assert(gpu_arena.cpu != null, "Hex tactics arena creation failed.");
 
-    render.vertices = gpu_alloc_view(*gpu_arena, Hex_Tactics_Vertex, vertices_cpu.count);
-    render.indices = gpu_alloc_view(*gpu_arena, u32, indices_cpu.count);
+    render.vertices        = gpu_alloc_view(*gpu_arena, Hex_Tactics_Vertex, vertices_cpu.count);
+    render.indices         = gpu_alloc_view(*gpu_arena, u32, indices_cpu.count);
     render.grass_instances = gpu_alloc_view(*gpu_arena, Hex_Tactics_Grass_Instance, grass_cpu.count);
-    render.mesh_params = gpu_alloc_buffer(*gpu_arena, Hex_Tactics_Mesh_Params_CPU);
-    render.grass_params = gpu_alloc_buffer(*gpu_arena, Hex_Tactics_Grass_Params_CPU);
-    render.sky_params = gpu_alloc_buffer(*gpu_arena, Hex_Tactics_Sky_Params_CPU);
+    render.mesh_params     = gpu_alloc_buffer(*gpu_arena, Hex_Tactics_Mesh_Params_CPU);
+    render.grass_params    = gpu_alloc_buffer(*gpu_arena, Hex_Tactics_Grass_Params_CPU);
+    render.sky_params      = gpu_alloc_buffer(*gpu_arena, Hex_Tactics_Sky_Params_CPU);
 
     if vertices_cpu.count > 0 memcpy(render.vertices.cpu.data, vertices_cpu.data, vertices_cpu.count * size_of(Hex_Tactics_Vertex));
-    if indices_cpu.count > 0 memcpy(render.indices.cpu.data, indices_cpu.data, indices_cpu.count * size_of(u32));
-    if grass_cpu.count > 0 memcpy(render.grass_instances.cpu.data, grass_cpu.data, grass_cpu.count * size_of(Hex_Tactics_Grass_Instance));
+    if indices_cpu.count > 0  memcpy(render.indices.cpu.data, indices_cpu.data, indices_cpu.count * size_of(u32));
+    if grass_cpu.count > 0    memcpy(render.grass_instances.cpu.data, grass_cpu.data, grass_cpu.count * size_of(Hex_Tactics_Grass_Instance));
 
     render.index_count = cast(u32) indices_cpu.count;
     render.grass_count = cast(u32) grass_cpu.count;
@@ -385,24 +383,24 @@ append_tile_mesh :: (vertices: *[..]Hex_Tactics_Vertex, indices: *[..]u32, cente
 }
 
 hex_tactics_append_tile_grass :: (instances: *[..]Hex_Tactics_Grass_Instance, center: Vector3, height: float, tile_radius: float, q: s32, r: s32) {
-    cluster_count := 3 + cast(s32) floor(hash01_from_s32(q * 37 + r * 53 + 13) * 3.0);
+    cluster_count := 3 + cast(s32) floor(hash01_from_s32(q * 37 + r * 53 + 13) * 145.0);
     for 0..cluster_count-1 {
         seed := cast(float) (q * 173 + r * 97 + cast(s32) it * 29);
         angle := hash01_f(seed * 0.71) * PI * 2.0;
-        radius := hash01_f(seed * 1.17) * tile_radius * 0.45;
+        radius := hash01_f(seed * 1.17) * tile_radius * 0.65;
         pos := center + .{cos(angle) * radius, height - 0.01, sin(angle) * radius};
         tint_noise := hash01_f(seed * 0.41);
         tint := mix(Vector4.{0.78, 0.72, 0.46, 1.0}, Vector4.{0.58, 0.70, 0.26, 1.0}, tint_noise);
         array_add(instances, .{
-            base = .{pos.x, pos.y, pos.z, 0.42 + hash01_f(seed * 0.93) * 0.34},
+            base = .{pos.x, pos.y, pos.z, 0.02 + hash01_f(seed * 0.93) * 0.24},
             tint = tint,
         });
     }
 }
 
-hex_tactics_tile_center :: (model: Hex_Tactics_Model, q: s32, r: s32) -> Vector3 {
-    x := model.tile_radius * 1.7320508 * (cast(float) q + cast(float) r * 0.5);
-    z := model.tile_radius * 1.5 * cast(float) r;
+hex_tactics_tile_center :: (using model: Hex_Tactics_Model, q: s32, r: s32) -> Vector3 {
+    x := tile_radius * 1.7320508 * (cast(float) q + cast(float) r * 0.5);
+    z := tile_radius * 1.5 * cast(float) r;
     return .{x, 0.0, z};
 }
 
@@ -420,9 +418,9 @@ hex_tactics_material_params :: (kind: u32, height: float) -> Vector4, Vector4, f
 hex_tactics_push_vertex :: (vertices: *[..]Hex_Tactics_Vertex, pos: Vector3, normal: Vector3, color: Vector4, material: Vector4) -> u32 {
     idx := cast(u32) vertices.count;
     array_add(vertices, .{
-        pos = .{pos.x, pos.y, pos.z, 1.0},
-        normal = .{normal.x, normal.y, normal.z, 0.0},
-        color = color,
+        pos      = vec4(pos, 1),
+        normal   = vec4(normal, 0),
+        color    = color,
         material = material,
     });
     return idx;

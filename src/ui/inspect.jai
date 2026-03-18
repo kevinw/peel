@@ -1,51 +1,48 @@
 
-inspect_globals :: () {
-    if !ui_opts.globals.show return;
-    if Begin("Globals", *ui_opts.globals.show, .NoFocusOnAppearing) {
-        using ui_opts.globals;
+inspect_globals :: (show_window: *bool) {
+    using ui_opts.globals;
 
-        // Search input text box
-        Text("Search");
-        SameLine();
-        InputText("##Search", *search_text, .None, null, null);
+    if show_window != null && show_window.* == false return;
 
-        Separator();
+    defer End();
+    if !Begin("Globals", show_window, .NoFocusOnAppearing) return;
 
-        table_node_id :s32 = 44328;
+    Text("Search"); SameLine();
+    InputText("##Search", *search_text, .None, null, null);
+    Separator();
 
-        if BeginTable("##properties", 2, .Resizable | .ScrollY) {
-            defer EndTable();
-            PushID(table_node_id);
-            defer PopID();
+    table_node_id: s32 = 44328;
+    if BeginTable("##properties", 2, .Resizable | .ScrollY) {
+        defer EndTable();
+        PushID(table_node_id);
+        defer PopID();
 
-            TableSetupColumn("", .WidthFixed);
-            TableSetupColumn("", .WidthStretch, 3.0);
+        TableSetupColumn("", .WidthFixed);
+        TableSetupColumn("", .WidthStretch, 3.0);
 
-            auto_release_temp();
-            globals: [..]Global_Entry;
-            globals.allocator = temp;
-            #if GLOBALS_RELOAD_PLUGIN_INCLUDED get_all_globals(*globals);
+        auto_release_temp();
+        globals: [..]Global_Entry;
+        globals.allocator = temp;
+        #if GLOBALS_RELOAD_PLUGIN_INCLUDED get_all_globals(*globals);
 
-            for globals {
-                // filter
-                if search_text &&
-                    String.find_index_from_left(it.name, search_text) == -1 &&
-                    String.find_index_from_left(it.module_name, search_text) == -1 continue;
+        for globals {
+            // filter
+            if search_text &&
+                String.find_index_from_left(it.name, search_text) == -1 &&
+                String.find_index_from_left(it.module_name, search_text) == -1 continue;
 
-                label: string;
-                if it.module_name label = tprint("%.%", it.module_name, it.name);
-                else label = it.name;
-                struct_table_row(label, source_code_location=it.source_code_location);
+            label: string;
+            if it.module_name label = tprint("%.%", it.module_name, it.name);
+            else label = it.name;
+            struct_table_row(label, source_code_location=it.source_code_location);
 
-                inspect(
-                    name=temp_c_string(it.name),
-                    data=it.data,
-                    info=it.ti,
-                    opts=.{ show_name = false, in_table = true });
-            }
+            inspect(
+                name=temp_c_string(it.name),
+                data=it.data,
+                info=it.ti,
+                opts=.{ show_name = false, in_table = true });
         }
     }
-    End();
 }
 
 struct_table_row :: (field_desc_name: string, source_code_location: Source_Code_Location = .{}) {

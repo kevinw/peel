@@ -54,3 +54,11 @@ Sebastian Aaltonen
 - Bloom (HDR, very wide kernel)
 - Post: ACES tonemap, color grading LUT, vignette
 - Temporal AA (custom)
+
+# watch
+- Visibility Buffer and Deferred Rendering in DOOM: The Dark Ages https://www.youtube.com/watch?v=fXakIV1OFes
+
+# read
+- https://www.rastergrid.com/blog/gpu-tech/2026/03/vulkan-memory-barriers-and-image-layouts-explained/
+- https://irradiance.ca/posts/microshadowing-part2/
+- https://imadrahmoune.com/pbr/

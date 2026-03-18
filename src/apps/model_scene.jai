@@ -507,7 +507,7 @@ tick :: () {
         grass_shadow_params.shadow_view_proj = shadow_map.view_proj;
         grass_shadow_params.ground_size_center_z_time = .{active_ground.size_x, active_ground.size_z, active_ground.center_z, cast(float) time};
         grass_shadow_params.ground_shape = .{active_ground.ridge, active_ground.swell, active_ground.warp, 0.0};
-        grass_shadow_params.player_pos_radius = .{lizard_pos.x, lizard_pos.y, lizard_pos.z, 1.9};
+        grass_shadow_params.player_pos_radius = .{lizard_pos.x, running_lizard_controller.facing_yaw, lizard_pos.z, 1.9};
         grass_draw_params.shadow_view_proj = grass_shadow_params.cpu.shadow_view_proj;
         grass_draw_params.ground_size_center_z_time = grass_shadow_params.cpu.ground_size_center_z_time;
         grass_draw_params.ground_shape = grass_shadow_params.cpu.ground_shape;

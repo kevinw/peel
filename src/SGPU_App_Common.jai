@@ -163,28 +163,21 @@ app_update :: (update_ctx: *App_Update_Ctx) {
             case .QUIT;
                 app_quit_requested = true;
             case .KEYBOARD;
-                #if !SINGLE_BINARY {
-                    if key_code == .ESCAPE && key_pressed {
-                        app_ui_enabled = true;
-                        app_browser_open = !app_browser_open;
-                        log("Toggling app browser with ESCAPE key: %", app_browser_open);
-                        continue;
+                if !ui_has_keyboard && key_pressed {
+                    if key_code == {
+                    case .F1;
+                        toggle_all_ui();
+                    case .F2;
+                        ui_opts.globals.show ^= true;
+                        app_ui_enabled |= ui_opts.globals.show;
+                    case .ESCAPE;
+                        #if !SINGLE_BINARY {
+                            app_browser_open = !app_browser_open;
+                            app_ui_enabled |= app_browser_open;
+                        }
+                    case #char "R";
+                        update_ctx.app_return_flags |= .Reload;
                     }
-                }
-
-                if key_code == .F1 && key_pressed {
-                    app_ui_enabled = !app_ui_enabled;
-                    if !app_ui_enabled {
-                        app_browser_open = false;
-                        ui_cancel_pending_frame(*current_ui_render_frame);
-                    }
-                    continue;
-                }
-
-                if ui_has_keyboard continue;
-
-                if key_code == #char "R" && key_pressed {
-                    update_ctx.app_return_flags |= .Reload;
                 }
         }
     }
@@ -460,6 +453,14 @@ host_init :: (init_ctx: Init_Ctx) -> bool {
 dummy_on_resize :: () {  } @on_window_resize
 shader_reload_on_ui :: () { SHR.shader_hot_reload_imgui(*shader_reload_ctx, ui_get_monospace_font()); } @on_ui
 
+input_down :: inline (code: Input.Key_Code) -> bool {
+    return (Input.input_button_states[code] & .DOWN) != 0;
+}
+
+input_pressed :: inline (code: Input.Key_Code) -> bool {
+    return (Input.input_button_states[code] & .START) != 0;
+}
+
 #scope_file
 
 app_should_render_ui :: () -> bool {
@@ -637,5 +638,13 @@ SHR :: #import,file "shader_hot_reload.jai";
 #if #exists(TRACY_PROFILER_ENABLED) {
     #if TRACY_PROFILER_ENABLED {
         Tracy :: #import "Tracy"(IMPORT_MODE=.CLIENT);
+    }
+}
+
+toggle_all_ui :: () {
+    app_ui_enabled = !app_ui_enabled;
+    if !app_ui_enabled {
+        app_browser_open = false;
+        ui_cancel_pending_frame(*current_ui_render_frame);
     }
 }
