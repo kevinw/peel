@@ -1,7 +1,7 @@
 #scope_export
 
 SCENE_FILE_VERSION :: 1;
-SCENE_COMPILED_CACHE_VERSION :: 2;
+SCENE_COMPILED_CACHE_VERSION :: 3;
 SCENE_COMPILED_CACHE_MAGIC : u32 : 0x53434e45; // SCNE
 
 Scene_Render_Kind :: enum {
@@ -1071,74 +1071,8 @@ scene_indent :: (count: s64) -> string {
 compiled_scene_serialize :: (builder: *[..]u8, scene: Compiled_Scene) -> bool {
     scene_cache_put(builder, SCENE_COMPILED_CACHE_MAGIC);
     scene_cache_put(builder, SCENE_COMPILED_CACHE_VERSION);
-    scene_cache_put_string(builder, scene.root_scene_path);
-
-    scene_cache_put(builder, cast(u32) scene.assets.count);
-    for scene.assets {
-        scene_cache_put_string(builder, it.name);
-        scene_cache_put_string(builder, it.model_path);
-        scene_cache_put_string(builder, it.import_settings_path);
-        scene_cache_put(builder, it.import_settings.scale);
-        scene_cache_put(builder, it.import_settings.rotation_deg);
-    }
-
-    scene_cache_put(builder, cast(u32) scene.nodes.count);
-    for scene.nodes {
-        scene_cache_put_string(builder, it.name);
-        scene_cache_put_string(builder, it.source_path);
-        scene_cache_put(builder, cast(u32) it.source_kind);
-        scene_cache_put(builder, it.parent_index);
-        scene_cache_put(builder, it.first_child_index);
-        scene_cache_put(builder, it.next_sibling_index);
-        scene_cache_put(builder, it._pad0);
-        scene_cache_put(builder, it.local_position);
-        scene_cache_put(builder, it._pad1);
-        scene_cache_put(builder, it.local_rotation_deg);
-        scene_cache_put(builder, it._pad2);
-        scene_cache_put(builder, it.local_scale);
-        scene_cache_put(builder, it._pad3);
-        scene_cache_put(builder, it.world);
-        scene_cache_put(builder, cast(u32) it.render_kind);
-        scene_cache_put(builder, it.asset_index);
-        scene_cache_put_string(builder, it.clip_name);
-        scene_cache_put_string(builder, it.attach_node_name);
-        scene_cache_put(builder, it.ground.enabled);
-        scene_cache_put(builder, it.ground.size_x);
-        scene_cache_put(builder, it.ground.size_z);
-        scene_cache_put(builder, it.ground.center_z);
-        scene_cache_put(builder, it.ground.render_grid_x);
-        scene_cache_put(builder, it.ground.render_grid_z);
-        scene_cache_put(builder, it.ground.physics_grid_x);
-        scene_cache_put(builder, it.ground.physics_grid_z);
-        scene_cache_put_string(builder, it.ground.base_color_path);
-        scene_cache_put_string(builder, it.ground.normal_path);
-        scene_cache_put_string(builder, it.ground.roughness_path);
-        scene_cache_put_string(builder, it.ground.ao_path);
-        scene_cache_put(builder, it.ground.ridge);
-        scene_cache_put(builder, it.ground.swell);
-        scene_cache_put(builder, it.ground.warp);
-        scene_cache_put(builder, it.scatter.enabled);
-        scene_cache_put(builder, cast(u32) it.scatter.mode);
-        scene_cache_put(builder, it.scatter.count);
-        scene_cache_put(builder, it.scatter.x_min);
-        scene_cache_put(builder, it.scatter.x_max);
-        scene_cache_put(builder, it.scatter.z_min);
-        scene_cache_put(builder, it.scatter.z_max);
-        scene_cache_put(builder, it.scatter.y_min);
-        scene_cache_put(builder, it.scatter.y_max);
-        scene_cache_put(builder, it.scatter.scale_min);
-        scene_cache_put(builder, it.scatter.scale_max);
-        scene_cache_put(builder, it.scatter.yaw_min_deg);
-        scene_cache_put(builder, it.scatter.yaw_max_deg);
-        scene_cache_put(builder, it.scatter.ground_y_offset);
-        scene_cache_put(builder, it.scatter.seed);
-        scene_cache_put(builder, cast(u32) it.scatter.assets.count);
-        for it.scatter.assets scene_cache_put_string(builder, it);
-        scene_cache_put_string(builder, it.behavior.type_name);
-        scene_cache_put(builder, it.behavior.autopilot);
-        scene_cache_put(builder, it.behavior.move_speed);
-    }
-    return true;
+    scene_cache_put(builder, compiled_scene_cache_type_hash(type_info(Compiled_Scene)));
+    return scene_cache_put_reflected(builder, *scene, type_info(Compiled_Scene));
 }
 
 compiled_scene_deserialize :: (scene: *Compiled_Scene, source_in: string) -> bool, bool {
@@ -1148,86 +1082,10 @@ compiled_scene_deserialize :: (scene: *Compiled_Scene, source_in: string) -> boo
     if !scene_cache_get(*source, *magic) return false, false;
     if !scene_cache_get(*source, *version) return false, false;
     if magic != SCENE_COMPILED_CACHE_MAGIC || version != SCENE_COMPILED_CACHE_VERSION return false, false;
-    if !scene_cache_get_string(*source, *scene.root_scene_path) return false, false;
-
-    asset_count: u32;
-    if !scene_cache_get(*source, *asset_count) return false, false;
-    for 0..cast(s64) asset_count-1 {
-        asset := array_add(*scene.assets);
-        if !scene_cache_get_string(*source, *asset.name) return false, false;
-        if !scene_cache_get_string(*source, *asset.model_path) return false, false;
-        if !scene_cache_get_string(*source, *asset.import_settings_path) return false, false;
-        if !scene_cache_get(*source, *asset.import_settings.scale) return false, false;
-        if !scene_cache_get(*source, *asset.import_settings.rotation_deg) return false, false;
-    }
-
-    node_count: u32;
-    if !scene_cache_get(*source, *node_count) return false, false;
-    for 0..cast(s64) node_count-1 {
-        node := array_add(*scene.nodes);
-        if !scene_cache_get_string(*source, *node.name) return false, false;
-        if !scene_cache_get_string(*source, *node.source_path) return false, false;
-        source_kind_u32: u32;
-        render_kind_u32: u32;
-        scatter_mode_u32: u32;
-        if !scene_cache_get(*source, *source_kind_u32) return false, false;
-        node.source_kind = cast(Scene_Node_Source) source_kind_u32;
-        if !scene_cache_get(*source, *node.parent_index) return false, false;
-        if !scene_cache_get(*source, *node.first_child_index) return false, false;
-        if !scene_cache_get(*source, *node.next_sibling_index) return false, false;
-        if !scene_cache_get(*source, *node._pad0) return false, false;
-        if !scene_cache_get(*source, *node.local_position) return false, false;
-        if !scene_cache_get(*source, *node._pad1) return false, false;
-        if !scene_cache_get(*source, *node.local_rotation_deg) return false, false;
-        if !scene_cache_get(*source, *node._pad2) return false, false;
-        if !scene_cache_get(*source, *node.local_scale) return false, false;
-        if !scene_cache_get(*source, *node._pad3) return false, false;
-        if !scene_cache_get(*source, *node.world) return false, false;
-        if !scene_cache_get(*source, *render_kind_u32) return false, false;
-        node.render_kind = cast(Scene_Render_Kind) render_kind_u32;
-        if !scene_cache_get(*source, *node.asset_index) return false, false;
-        if !scene_cache_get_string(*source, *node.clip_name) return false, false;
-        if !scene_cache_get_string(*source, *node.attach_node_name) return false, false;
-        if !scene_cache_get(*source, *node.ground.enabled) return false, false;
-        if !scene_cache_get(*source, *node.ground.size_x) return false, false;
-        if !scene_cache_get(*source, *node.ground.size_z) return false, false;
-        if !scene_cache_get(*source, *node.ground.center_z) return false, false;
-        if !scene_cache_get(*source, *node.ground.render_grid_x) return false, false;
-        if !scene_cache_get(*source, *node.ground.render_grid_z) return false, false;
-        if !scene_cache_get(*source, *node.ground.physics_grid_x) return false, false;
-        if !scene_cache_get(*source, *node.ground.physics_grid_z) return false, false;
-        if !scene_cache_get_string(*source, *node.ground.base_color_path) return false, false;
-        if !scene_cache_get_string(*source, *node.ground.normal_path) return false, false;
-        if !scene_cache_get_string(*source, *node.ground.roughness_path) return false, false;
-        if !scene_cache_get_string(*source, *node.ground.ao_path) return false, false;
-        if !scene_cache_get(*source, *node.scatter.enabled) return false, false;
-        if !scene_cache_get(*source, *scatter_mode_u32) return false, false;
-        node.scatter.mode = cast(Scene_Scatter_Mode) scatter_mode_u32;
-        if !scene_cache_get(*source, *node.scatter.count) return false, false;
-        if !scene_cache_get(*source, *node.scatter.x_min) return false, false;
-        if !scene_cache_get(*source, *node.scatter.x_max) return false, false;
-        if !scene_cache_get(*source, *node.scatter.z_min) return false, false;
-        if !scene_cache_get(*source, *node.scatter.z_max) return false, false;
-        if !scene_cache_get(*source, *node.scatter.y_min) return false, false;
-        if !scene_cache_get(*source, *node.scatter.y_max) return false, false;
-        if !scene_cache_get(*source, *node.scatter.scale_min) return false, false;
-        if !scene_cache_get(*source, *node.scatter.scale_max) return false, false;
-        if !scene_cache_get(*source, *node.scatter.yaw_min_deg) return false, false;
-        if !scene_cache_get(*source, *node.scatter.yaw_max_deg) return false, false;
-        if !scene_cache_get(*source, *node.scatter.ground_y_offset) return false, false;
-        if !scene_cache_get(*source, *node.scatter.seed) return false, false;
-        asset_name_count: u32;
-        if !scene_cache_get(*source, *asset_name_count) return false, false;
-        node.scatter.assets.allocator = context.allocator;
-        for 0..cast(s64) asset_name_count-1 {
-            asset_name: string;
-            if !scene_cache_get_string(*source, *asset_name) return false, false;
-            array_add(*node.scatter.assets, asset_name);
-        }
-        if !scene_cache_get_string(*source, *node.behavior.type_name) return false, false;
-        if !scene_cache_get(*source, *node.behavior.autopilot) return false, false;
-        if !scene_cache_get(*source, *node.behavior.move_speed) return false, false;
-    }
+    schema_hash: u64;
+    if !scene_cache_get(*source, *schema_hash) return false, false;
+    if schema_hash != compiled_scene_cache_type_hash(type_info(Compiled_Scene)) return false, false;
+    if !scene_cache_get_reflected(*source, scene, type_info(Compiled_Scene)) return false, false;
     return true, source.count == 0;
 }
 
@@ -1270,6 +1128,198 @@ scene_cache_get_string :: (source: *string, out: *string) -> bool {
     source.data += count;
     source.count -= count;
     return true;
+}
+
+compiled_scene_cache_type_hash :: (info: *Type_Info) -> u64 {
+    builder: String_Builder;
+    builder.allocator = temp;
+    compiled_scene_cache_append_type_signature(*builder, info);
+    signature := builder_to_string(*builder,, temp);
+    return Hash.fnv1a_hash(signature.data, signature.count);
+}
+
+compiled_scene_cache_append_type_signature :: (builder: *String_Builder, info: *Type_Info) {
+    assert(info != null);
+    print_to_builder(builder, "%|%|", info.type, info.runtime_size);
+    if info.type == {
+    case .STRING;
+        append(builder, "string|");
+    case .ARRAY;
+        arr := cast(*Type_Info_Array) info;
+        print_to_builder(builder, "array|%|%|", arr.array_count, arr.array_type);
+        compiled_scene_cache_append_type_signature(builder, arr.element_type);
+    case .STRUCT;
+        st := cast(*Type_Info_Struct) info;
+        print_to_builder(builder, "struct|%|", st.name);
+        highest_offset := -1;
+        for member: st.members {
+            if member.flags & .CONSTANT continue;
+            if member.offset_in_bytes < 0 continue;
+            if member.offset_in_bytes <= highest_offset continue;
+            highest_offset = member.offset_in_bytes;
+            print_to_builder(builder, "%|%|", member.name, member.offset_in_bytes);
+            compiled_scene_cache_append_type_signature(builder, member.type);
+        }
+    case;
+        ;
+    }
+}
+
+scene_cache_type_is_blob_serializable :: (info: *Type_Info) -> bool {
+    assert(info != null);
+    if info.type == {
+    case .STRING; return false;
+    case .POINTER; return false;
+    case .ARRAY;
+        arr := cast(*Type_Info_Array) info;
+        if arr.array_count == -1 return false;
+        return scene_cache_type_is_blob_serializable(arr.element_type);
+    case .STRUCT;
+        st := cast(*Type_Info_Struct) info;
+        highest_offset := -1;
+        for member: st.members {
+            if member.flags & .CONSTANT continue;
+            if member.offset_in_bytes < 0 continue;
+            if member.offset_in_bytes <= highest_offset continue;
+            highest_offset = member.offset_in_bytes;
+            if !scene_cache_type_is_blob_serializable(member.type) return false;
+        }
+        return true;
+    case;
+        return true;
+    }
+}
+
+scene_cache_put_reflected :: (builder: *[..]u8, data: *void, info: *Type_Info) -> bool {
+    assert(info != null);
+    if info.type == {
+    case .STRING;
+        scene_cache_put_string(builder, (cast(*string) data).*);
+        return true;
+    case .ARRAY;
+        arr := cast(*Type_Info_Array) info;
+        elem_size := arr.element_type.runtime_size;
+        assert(elem_size >= 0, "Unsupported array element type in reflected scene cache put.");
+        stride := elem_size;
+        if arr.array_count == -1 {
+            count := cast(u32) (cast(*s64) data).*;
+            scene_cache_put(builder, count);
+            data_ptr := (cast(**u8) (data + 8)).*;
+            if count == 0 return true;
+            if scene_cache_type_is_blob_serializable(arr.element_type) {
+                offset := builder.count;
+                byte_count := stride * cast(s64) count;
+                array_resize(builder, offset + byte_count);
+                memcpy(builder.data + offset, data_ptr, byte_count);
+                return true;
+            }
+            for 0..cast(s64) count-1 {
+                if !scene_cache_put_reflected(builder, data_ptr + it * stride, arr.element_type) return false;
+            }
+            return true;
+        }
+
+        if scene_cache_type_is_blob_serializable(arr.element_type) {
+            offset := builder.count;
+            byte_count := stride * arr.array_count;
+            array_resize(builder, offset + byte_count);
+            memcpy(builder.data + offset, data, byte_count);
+            return true;
+        }
+        for 0..arr.array_count-1 {
+            if !scene_cache_put_reflected(builder, data + it * stride, arr.element_type) return false;
+        }
+        return true;
+    case .STRUCT;
+        st := cast(*Type_Info_Struct) info;
+        highest_offset := -1;
+        for member: st.members {
+            if member.flags & .CONSTANT continue;
+            if member.offset_in_bytes < 0 continue;
+            if member.offset_in_bytes <= highest_offset continue;
+            highest_offset = member.offset_in_bytes;
+            if !scene_cache_put_reflected(builder, data + member.offset_in_bytes, member.type) return false;
+        }
+        return true;
+    case;
+        offset := builder.count;
+        array_resize(builder, offset + info.runtime_size);
+        memcpy(builder.data + offset, data, info.runtime_size);
+        return true;
+    }
+}
+
+scene_cache_get_reflected :: (source: *string, data: *void, info: *Type_Info) -> bool {
+    assert(info != null);
+    if info.type == {
+    case .STRING;
+        return scene_cache_get_string(source, cast(*string) data);
+    case .ARRAY;
+        arr := cast(*Type_Info_Array) info;
+        elem_size := arr.element_type.runtime_size;
+        assert(elem_size >= 0, "Unsupported array element type in reflected scene cache get.");
+        stride := elem_size;
+        if arr.array_count == -1 {
+            count_u32: u32;
+            if !scene_cache_get(source, *count_u32) return false;
+            count := cast(s64) count_u32;
+            count_ptr := cast(*s64) data;
+            data_ptr_ptr := cast(**u8) (data + 8);
+            alloc_ptr := cast(*s64) (data + 16);
+            count_ptr.* = count;
+            data_ptr_ptr.* = null;
+            alloc_ptr.* = count;
+            if count == 0 return true;
+
+            byte_count := stride * count;
+            memory := cast(*u8) alloc(byte_count);
+            assert(memory != null, "Reflected scene cache alloc failed.");
+            memset(memory, 0, byte_count);
+            data_ptr_ptr.* = memory;
+
+            if scene_cache_type_is_blob_serializable(arr.element_type) {
+                if source.count < byte_count return false;
+                memcpy(memory, source.data, byte_count);
+                source.data += byte_count;
+                source.count -= byte_count;
+                return true;
+            }
+            for 0..count-1 {
+                if !scene_cache_get_reflected(source, memory + it * stride, arr.element_type) return false;
+            }
+            return true;
+        }
+
+        if scene_cache_type_is_blob_serializable(arr.element_type) {
+            byte_count := stride * arr.array_count;
+            if source.count < byte_count return false;
+            memcpy(data, source.data, byte_count);
+            source.data += byte_count;
+            source.count -= byte_count;
+            return true;
+        }
+        for 0..arr.array_count-1 {
+            if !scene_cache_get_reflected(source, data + it * stride, arr.element_type) return false;
+        }
+        return true;
+    case .STRUCT;
+        st := cast(*Type_Info_Struct) info;
+        highest_offset := -1;
+        for member: st.members {
+            if member.flags & .CONSTANT continue;
+            if member.offset_in_bytes < 0 continue;
+            if member.offset_in_bytes <= highest_offset continue;
+            highest_offset = member.offset_in_bytes;
+            if !scene_cache_get_reflected(source, data + member.offset_in_bytes, member.type) return false;
+        }
+        return true;
+    case;
+        if source.count < info.runtime_size return false;
+        memcpy(data, source.data, info.runtime_size);
+        source.data += info.runtime_size;
+        source.count -= info.runtime_size;
+        return true;
+    }
 }
 
 find_workspace_root_for_cache :: () -> string {

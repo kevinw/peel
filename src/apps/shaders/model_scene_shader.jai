@@ -738,8 +738,8 @@ grass_blade_world_pos :: (vertex_id: u32, instance_id: u32, vt: float, params: *
     delta := Vector2.{x - player_pos.x, z - player_pos.z};
     forward_2d := Vector2.{sin(player_yaw), cos(player_yaw)};
     side_2d := Vector2.{forward_2d.y, -forward_2d.x};
-    ellipse_major := player_radius * 1.9;
-    ellipse_minor := player_radius * 0.78;
+    ellipse_major := player_radius * 1.7;
+    ellipse_minor := player_radius * 0.48;
     local_forward := dot(delta, forward_2d);
     local_side := dot(delta, side_2d);
     ellipse_dist2 := (local_forward * local_forward) / max(ellipse_major * ellipse_major, 0.0001) +

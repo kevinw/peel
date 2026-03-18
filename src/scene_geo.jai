@@ -508,7 +508,7 @@ compute_model_bounds_from_geo :: (geo: *Scene_Geo, model_index: s32) -> Scene_Bo
 
 Hash_Table :: #import "Hash_Table";
 using,only(Table, table_find, table_reset, table_set) _ :: Hash_Table;
-IMPORTED_SCENE_CACHE_VERSION : u32 : 12;
+IMPORTED_SCENE_CACHE_VERSION : u32 : 13;
 IMPORTED_SCENE_CACHE_MAGIC : u32 : 0x53474d44; // SGMD
 
 imported_scene_cache_path :: (model_paths: []string) -> string {
@@ -528,59 +528,8 @@ imported_scene_cache_path :: (model_paths: []string) -> string {
 imported_scene_serialize :: (builder: *[..]u8, scene: Imported_Scene) -> bool {
     cache_put(builder, IMPORTED_SCENE_CACHE_MAGIC);
     cache_put(builder, IMPORTED_SCENE_CACHE_VERSION);
-    cache_put_array(builder, scene.vertices);
-    cache_put_array(builder, scene.indices);
-    cache_put_array(builder, scene.materials);
-    cache_put_array(builder, scene.meshes);
-    cache_put_array(builder, scene.nodes);
-    cache_put(builder, cast(u32) scene.node_names.count);
-    for scene.node_names cache_put_string(builder, it);
-    cache_put_array(builder, scene.node_bind_transforms);
-    cache_put_array(builder, scene.node_mesh_refs);
-    cache_put_array(builder, scene.mesh_skin_bones);
-    cache_put_array(builder, scene.morph_targets);
-    cache_put(builder, cast(u32) scene.morph_target_names.count);
-    for scene.morph_target_names cache_put_string(builder, it);
-    cache_put_array(builder, scene.morph_vertex_deltas);
-    cache_put_array(builder, scene.anim_position_keys);
-    cache_put_array(builder, scene.anim_rotation_keys);
-    cache_put_array(builder, scene.anim_scale_keys);
-    cache_put_array(builder, scene.anim_channels);
-    cache_put_array(builder, scene.anim_morph_keys);
-    cache_put_array(builder, scene.anim_morph_channels);
-
-    cache_put(builder, cast(u32) scene.textures.count);
-    for scene.textures {
-        cache_put_string(builder, it.key);
-        cache_put(builder, it.width);
-        cache_put(builder, it.height);
-        cache_put_bytes(builder, it.pixels);
-    }
-
-    cache_put(builder, cast(u32) scene.models.count);
-    for scene.models {
-        cache_put_string(builder, it.name);
-        cache_put(builder, it.root_node_index);
-        cache_put(builder, it._pad0);
-        cache_put(builder, it.node_start);
-        cache_put(builder, it.node_count);
-        cache_put(builder, it.mesh_start);
-        cache_put(builder, it.mesh_count);
-        cache_put(builder, it.anim_clip_start);
-        cache_put(builder, it.anim_clip_count);
-    }
-
-    cache_put(builder, cast(u32) scene.anim_clips.count);
-    for scene.anim_clips {
-        cache_put_string(builder, it.name);
-        cache_put(builder, it.duration);
-        cache_put(builder, it.ticks_per_second);
-        cache_put(builder, it.channel_start);
-        cache_put(builder, it.channel_count);
-        cache_put(builder, it.morph_channel_start);
-        cache_put(builder, it.morph_channel_count);
-    }
-    return true;
+    cache_put(builder, geo_cache_type_hash(type_info(Imported_Scene)));
+    return geo_cache_put_reflected(builder, *scene, type_info(Imported_Scene));
 }
 
 imported_scene_deserialize :: (scene: *Imported_Scene, source_in: string) -> bool, bool {
@@ -590,80 +539,10 @@ imported_scene_deserialize :: (scene: *Imported_Scene, source_in: string) -> boo
     if !cache_get(*source, *magic) return false, false;
     if !cache_get(*source, *version) return false, false;
     if magic != IMPORTED_SCENE_CACHE_MAGIC || version != IMPORTED_SCENE_CACHE_VERSION return false, false;
-
-    if !cache_get_array(*source, *scene.vertices) return false, false;
-    if !cache_get_array(*source, *scene.indices) return false, false;
-    if !cache_get_array(*source, *scene.materials) return false, false;
-    if !cache_get_array(*source, *scene.meshes) return false, false;
-    if !cache_get_array(*source, *scene.nodes) return false, false;
-    node_name_count: u32;
-    if !cache_get(*source, *node_name_count) return false, false;
-    for 0..cast(s64) node_name_count-1 {
-        node_name: string;
-        if !cache_get_string(*source, *node_name) return false, false;
-        array_add(*scene.node_names, node_name);
-    }
-    if !cache_get_array(*source, *scene.node_bind_transforms) return false, false;
-    if !cache_get_array(*source, *scene.node_mesh_refs) return false, false;
-    if !cache_get_array(*source, *scene.mesh_skin_bones) return false, false;
-    if !cache_get_array(*source, *scene.morph_targets) return false, false;
-    morph_target_name_count: u32;
-    if !cache_get(*source, *morph_target_name_count) return false, false;
-    for 0..cast(s64) morph_target_name_count-1 {
-        morph_target_name: string;
-        if !cache_get_string(*source, *morph_target_name) return false, false;
-        array_add(*scene.morph_target_names, morph_target_name);
-    }
-    if !cache_get_array(*source, *scene.morph_vertex_deltas) return false, false;
-    if !cache_get_array(*source, *scene.anim_position_keys) return false, false;
-    if !cache_get_array(*source, *scene.anim_rotation_keys) return false, false;
-    if !cache_get_array(*source, *scene.anim_scale_keys) return false, false;
-    if !cache_get_array(*source, *scene.anim_channels) return false, false;
-    if !cache_get_array(*source, *scene.anim_morph_keys) return false, false;
-    if !cache_get_array(*source, *scene.anim_morph_channels) return false, false;
-
-    texture_count: u32;
-    if !cache_get(*source, *texture_count) return false, false;
-    for 0..cast(s64) texture_count-1 {
-        texture: Imported_Texture;
-        texture.pixels.allocator = context.allocator;
-        if !cache_get_string(*source, *texture.key) return false, false;
-        if !cache_get(*source, *texture.width) return false, false;
-        if !cache_get(*source, *texture.height) return false, false;
-        if !cache_get_bytes(*source, *texture.pixels) return false, false;
-        array_add(*scene.textures, texture);
-    }
-
-    model_count: u32;
-    if !cache_get(*source, *model_count) return false, false;
-    for 0..cast(s64) model_count-1 {
-        model: Scene_Model;
-        if !cache_get_string(*source, *model.name) return false, false;
-        if !cache_get(*source, *model.root_node_index) return false, false;
-        if !cache_get(*source, *model._pad0) return false, false;
-        if !cache_get(*source, *model.node_start) return false, false;
-        if !cache_get(*source, *model.node_count) return false, false;
-        if !cache_get(*source, *model.mesh_start) return false, false;
-        if !cache_get(*source, *model.mesh_count) return false, false;
-        if !cache_get(*source, *model.anim_clip_start) return false, false;
-        if !cache_get(*source, *model.anim_clip_count) return false, false;
-        array_add(*scene.models, model);
-    }
-
-    clip_count: u32;
-    if !cache_get(*source, *clip_count) return false, false;
-    for 0..cast(s64) clip_count-1 {
-        clip: Scene_Anim_Clip;
-        if !cache_get_string(*source, *clip.name) return false, false;
-        if !cache_get(*source, *clip.duration) return false, false;
-        if !cache_get(*source, *clip.ticks_per_second) return false, false;
-        if !cache_get(*source, *clip.channel_start) return false, false;
-        if !cache_get(*source, *clip.channel_count) return false, false;
-        if !cache_get(*source, *clip.morph_channel_start) return false, false;
-        if !cache_get(*source, *clip.morph_channel_count) return false, false;
-        array_add(*scene.anim_clips, clip);
-    }
-
+    schema_hash: u64;
+    if !cache_get(*source, *schema_hash) return false, false;
+    if schema_hash != geo_cache_type_hash(type_info(Imported_Scene)) return false, false;
+    if !geo_cache_get_reflected(*source, scene, type_info(Imported_Scene)) return false, false;
     return true, source.count == 0;
 }
 
@@ -755,6 +634,199 @@ cache_get_string :: (source: *string, out: *string) -> bool {
     source.data += count;
     source.count -= count;
     return true;
+}
+
+geo_cache_type_hash :: (info: *Type_Info) -> u64 {
+    builder: String_Builder;
+    builder.allocator = temp;
+    geo_cache_append_type_signature(*builder, info);
+    signature := builder_to_string(*builder,, temp);
+    return fnv1a_hash(signature.data, signature.count);
+}
+
+geo_cache_append_type_signature :: (builder: *String_Builder, info: *Type_Info) {
+    assert(info != null);
+    print_to_builder(builder, "%|%|", info.type, info.runtime_size);
+    if info.type == {
+    case .STRING;
+        append(builder, "string|");
+    case .ARRAY;
+        arr := cast(*Type_Info_Array) info;
+        print_to_builder(builder, "array|%|%|", arr.array_count, arr.array_type);
+        geo_cache_append_type_signature(builder, arr.element_type);
+    case .STRUCT;
+        st := cast(*Type_Info_Struct) info;
+        print_to_builder(builder, "struct|%|", st.name);
+        highest_offset := -1;
+        for member: st.members {
+            if member.flags & .CONSTANT continue;
+            if member.offset_in_bytes < 0 continue;
+            if member.offset_in_bytes <= highest_offset continue;
+            highest_offset = member.offset_in_bytes;
+            print_to_builder(builder, "%|%|", member.name, member.offset_in_bytes);
+            geo_cache_append_type_signature(builder, member.type);
+        }
+    case;
+        ;
+    }
+}
+
+geo_cache_type_is_blob_serializable :: (info: *Type_Info) -> bool {
+    assert(info != null);
+    if info.type == {
+    case .STRING; return false;
+    case .POINTER; return false;
+    case .ARRAY;
+        arr := cast(*Type_Info_Array) info;
+        if arr.array_count == -1 return false;
+        return geo_cache_type_is_blob_serializable(arr.element_type);
+    case .STRUCT;
+        st := cast(*Type_Info_Struct) info;
+        highest_offset := -1;
+        for member: st.members {
+            if member.flags & .CONSTANT continue;
+            if member.offset_in_bytes < 0 continue;
+            if member.offset_in_bytes <= highest_offset continue;
+            highest_offset = member.offset_in_bytes;
+            if !geo_cache_type_is_blob_serializable(member.type) return false;
+        }
+        return true;
+    case;
+        return true;
+    }
+}
+
+geo_cache_put_reflected :: (builder: *[..]u8, data: *void, info: *Type_Info) -> bool {
+    assert(info != null);
+    if info.type == {
+    case .STRING;
+        cache_put_string(builder, (cast(*string) data).*);
+        return true;
+    case .ARRAY;
+        arr := cast(*Type_Info_Array) info;
+        elem_size := arr.element_type.runtime_size;
+        assert(elem_size >= 0, "Unsupported array element type in reflected cache put.");
+        stride := elem_size;
+        if arr.array_count == -1 {
+            count := (cast(*s64) data).*;
+            count_u32 := cast(u32) count;
+            cache_put(builder, count_u32);
+            data_ptr := (cast(**u8) (data + 8)).*;
+            if count_u32 == 0 return true;
+            if geo_cache_type_is_blob_serializable(arr.element_type) {
+                offset := builder.count;
+                byte_count := stride * cast(s64) count_u32;
+                array_resize(builder, offset + byte_count);
+                memcpy(builder.data + offset, data_ptr, byte_count);
+                return true;
+            }
+            for 0..cast(s64) count_u32-1 {
+                if !geo_cache_put_reflected(builder, data_ptr + it * stride, arr.element_type) return false;
+            }
+            return true;
+        }
+
+        if geo_cache_type_is_blob_serializable(arr.element_type) {
+            offset := builder.count;
+            byte_count := stride * arr.array_count;
+            array_resize(builder, offset + byte_count);
+            memcpy(builder.data + offset, data, byte_count);
+            return true;
+        }
+        for 0..arr.array_count-1 {
+            if !geo_cache_put_reflected(builder, data + it * stride, arr.element_type) return false;
+        }
+        return true;
+    case .STRUCT;
+        st := cast(*Type_Info_Struct) info;
+        highest_offset := -1;
+        for member: st.members {
+            if member.flags & .CONSTANT continue;
+            if member.offset_in_bytes < 0 continue;
+            if member.offset_in_bytes <= highest_offset continue;
+            highest_offset = member.offset_in_bytes;
+            if !geo_cache_put_reflected(builder, data + member.offset_in_bytes, member.type) return false;
+        }
+        return true;
+    case;
+        offset := builder.count;
+        array_resize(builder, offset + info.runtime_size);
+        memcpy(builder.data + offset, data, info.runtime_size);
+        return true;
+    }
+}
+
+geo_cache_get_reflected :: (source: *string, data: *void, info: *Type_Info) -> bool {
+    assert(info != null);
+    if info.type == {
+    case .STRING;
+        return cache_get_string(source, cast(*string) data);
+    case .ARRAY;
+        arr := cast(*Type_Info_Array) info;
+        elem_size := arr.element_type.runtime_size;
+        assert(elem_size >= 0, "Unsupported array element type in reflected cache get.");
+        stride := elem_size;
+        if arr.array_count == -1 {
+            count_u32: u32;
+            if !cache_get(source, *count_u32) return false;
+            count := cast(s64) count_u32;
+            count_ptr := cast(*s64) data;
+            data_ptr_ptr := cast(**u8) (data + 8);
+            alloc_ptr := cast(*s64) (data + 16);
+            count_ptr.* = count;
+            data_ptr_ptr.* = null;
+            alloc_ptr.* = count;
+            if count == 0 return true;
+
+            byte_count := stride * count;
+            memory := cast(*u8) alloc(byte_count);
+            assert(memory != null, "Reflected cache alloc failed.");
+            memset(memory, 0, byte_count);
+            data_ptr_ptr.* = memory;
+
+            if geo_cache_type_is_blob_serializable(arr.element_type) {
+                if source.count < byte_count return false;
+                memcpy(memory, source.data, byte_count);
+                source.data += byte_count;
+                source.count -= byte_count;
+                return true;
+            }
+            for 0..count-1 {
+                if !geo_cache_get_reflected(source, memory + it * stride, arr.element_type) return false;
+            }
+            return true;
+        }
+
+        if geo_cache_type_is_blob_serializable(arr.element_type) {
+            byte_count := stride * arr.array_count;
+            if source.count < byte_count return false;
+            memcpy(data, source.data, byte_count);
+            source.data += byte_count;
+            source.count -= byte_count;
+            return true;
+        }
+        for 0..arr.array_count-1 {
+            if !geo_cache_get_reflected(source, data + it * stride, arr.element_type) return false;
+        }
+        return true;
+    case .STRUCT;
+        st := cast(*Type_Info_Struct) info;
+        highest_offset := -1;
+        for member: st.members {
+            if member.flags & .CONSTANT continue;
+            if member.offset_in_bytes < 0 continue;
+            if member.offset_in_bytes <= highest_offset continue;
+            highest_offset = member.offset_in_bytes;
+            if !geo_cache_get_reflected(source, data + member.offset_in_bytes, member.type) return false;
+        }
+        return true;
+    case;
+        if source.count < info.runtime_size return false;
+        memcpy(data, source.data, info.runtime_size);
+        source.data += info.runtime_size;
+        source.count -= info.runtime_size;
+        return true;
+    }
 }
 
 Texture_Load_Result :: struct {
