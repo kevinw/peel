@@ -14,6 +14,8 @@ Scene_Draw_Params :: struct {
     indices: *u32;
     materials: *Scene_Material;
     instances: *Scene_Instance;
+    morph_vertex_deltas: *Scene_Morph_Vertex_Delta;
+    morph_weights: *float;
     skin_matrices: *Vector4;
     view_proj: Matrix4;
     light_dir: Vector3;
@@ -23,9 +25,10 @@ Scene_Draw_Params :: struct {
     _pad1: float;
     material_index: u32;
     sampler_index: u32;
+    mesh_base_vertex: u32;
     skin_matrix_count: u32;
-    _pad2: u32;
-    _pad3: u32;
+    morph_target_count: u32;
+    morph_vertex_count: u32;
 }
 
 Ground_Draw_Params :: struct {
@@ -192,6 +195,21 @@ model_scene_vertex_main :: (using in: Model_Scene_Vertex_In, params: *Scene_Draw
     local_pos := Vector4.{vertex.position.x, vertex.position.y, vertex.position.z, 1.0};
     local_normal := Vector4.{vertex.normal.x, vertex.normal.y, vertex.normal.z, 0.0};
     local_tangent := Vector4.{vertex.tangent.x, vertex.tangent.y, vertex.tangent.z, 0.0};
+    local_vertex_index := vertex_index - params.mesh_base_vertex;
+    if params.morph_target_count > 0 && local_vertex_index < params.morph_vertex_count {
+        for target_index: 0..cast(s64) params.morph_target_count-1 {
+            weight := params.morph_weights[target_index];
+            if abs(weight) <= 0.00001 continue;
+            delta_index := cast(u32) target_index * params.morph_vertex_count + local_vertex_index;
+            delta := params.morph_vertex_deltas[delta_index];
+            local_pos += delta.position * weight;
+            local_normal += delta.normal * weight;
+            local_tangent += delta.tangent * weight;
+        }
+        local_pos.w = 1.0;
+        local_normal.w = 0.0;
+        local_tangent.w = 0.0;
+    }
     skinned_pos4 := local_pos;
     skinned_normal4 := local_normal;
     skinned_tangent4 := local_tangent;
@@ -273,6 +291,16 @@ model_scene_shadow_vertex_main :: (using in: Model_Scene_Vertex_In, params: *Sce
     instance := params.instances[instance_id];
 
     local_pos := Vector4.{vertex.position.x, vertex.position.y, vertex.position.z, 1.0};
+    local_vertex_index := vertex_index - params.mesh_base_vertex;
+    if params.morph_target_count > 0 && local_vertex_index < params.morph_vertex_count {
+        for target_index: 0..cast(s64) params.morph_target_count-1 {
+            weight := params.morph_weights[target_index];
+            if abs(weight) <= 0.00001 continue;
+            delta_index := cast(u32) target_index * params.morph_vertex_count + local_vertex_index;
+            local_pos += params.morph_vertex_deltas[delta_index].position * weight;
+        }
+        local_pos.w = 1.0;
+    }
     skinned_pos4 := local_pos;
 
     if params.skin_matrix_count > 0 {

@@ -19,9 +19,11 @@ operator == :: inline (a: String, b: string) -> bool {
 // Some helper procedures to make getting slices from assimp structs easier.
 
 bones :: inline (using mesh: *Mesh)         -> []*Bone        { return .{ mNumBones, mBones }; }
+anim_meshes :: inline (using mesh: *Mesh)    -> []*AnimMesh    { return .{ mNumAnimMeshes, mAnimMeshes }; }
 meshes :: inline (using scene: *Scene)      -> []*Mesh        { return .{ mNumMeshes, mMeshes }; }
 children :: inline (using node: *Node)      -> []*Node        { return .{ mNumChildren, mChildren }; }
 channels :: inline (using anim: *Animation) -> []*NodeAnim    { return .{ mNumChannels, mChannels }; }
+morph_channels :: inline (using anim: *Animation) -> []*MeshMorphAnim { return .{ mNumMorphMeshChannels, mMorphMeshChannels }; }
 animations :: inline (using scene: *Scene)  -> []*Animation   { return .{ mNumAnimations, mAnimations }; }
 faces :: inline (using mesh: *Mesh)         -> []Face         { return .{ mNumFaces, mFaces }; }
 weights :: inline (using bone: *Bone)       -> []VertexWeight { return .{ mNumWeights, mWeights }; }
