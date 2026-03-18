@@ -34,3 +34,23 @@ tangent: RGB10A2_UNORM ; w = bitangent.sign
 color: RGBA8_UNORM
 = 28 bytes
 RGB32_FLOAT position could be optimized further as RGBA16_UNORM. Scaled object bounding box to [0,1] and object matrix would have mesh scale matrix multiply inside it. No extra vertex shader cost to decode. But it's extra fuss in CPU side. That's 24 bytes total.
+- or this one: https://x.com/SebAaltonen/status/2032555792839200834?s=20
+fter porting HypeHype shaders to our new project (and from GLSL to WGSL), I restored gather4 and fp16 optimizations...
+
+Biggest gains:
+SSAO: 0.992ms -> 0.555ms (-46%)
+Lighting: 0.149ms -> 0.108ms (-28%)
+
+Total frame time in test scene = 1.16ms (M3 Max)
+Image
+
+Sebastian Aaltonen
+@SebAaltonen
+1.16ms for all this:
+- 4x shadow cascades (4K atlas)
+- G-buffer (3x 32-bit + Z-buffer)
+- SSAO (custom GTAO)
+- Deferred lighting (GGX/HDR, sun only + IBL indirect)
+- Bloom (HDR, very wide kernel)
+- Post: ACES tonemap, color grading LUT, vignette
+- Temporal AA (custom)
