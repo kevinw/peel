@@ -2,6 +2,9 @@
 #import "Jai-Shader-Transpiler/modules/ShaderFuncs";
 #import "Math";
 
+SCENE_ALPHA_MODE_OPAQUE :: 0;
+SCENE_ALPHA_MODE_MASK   :: 1;
+
 Scene_Instance :: struct {
     world: Matrix4;
     tint: Vector4;
@@ -108,10 +111,12 @@ Model_Scene_Fragment_In :: struct {
 Model_Scene_Shadow_Vertex_Out :: struct {
     gl_Position: Vector4; @position
     depth01: float;
+    uv: Vector2;
 }
 
 Model_Scene_Shadow_Fragment_In :: struct {
     depth01: float;
+    uv: Vector2;
 }
 
 Model_Scene_Debug_Vertex_Out :: struct {
@@ -348,11 +353,14 @@ model_scene_shadow_vertex_main :: (using in: Model_Scene_Vertex_In, params: *Sce
     light_clip := light_view_proj * world_pos4;
     gl_Position = light_clip;
     depth01 = clamp(light_clip.z, 0.0, 1.0);
+    uv = vertex.uv;
     return out;
 } @vertex_shader
 
 model_scene_shadow_fragment_main :: (using in: Model_Scene_Shadow_Fragment_In, params: *Scene_Draw_Params) -> struct { out_color: Vector4; } {
-    _ = params;
+    material := params.materials[params.material_index];
+    alpha := scene_material_alpha(material, uv, 1.0);
+    if material.alpha_mode == SCENE_ALPHA_MODE_MASK && alpha < material.alpha_cutoff discard();
     d := clamp(depth01, 0.0, 1.0);
     return .{out_color = .{d, d, d, 1.0}};
 } @fragment_shader
@@ -457,9 +465,22 @@ model_scene_indirect_light :: (N: Vector3, sun_dir: Vector3, sun_strength: float
     return (sky_fill + ground_fill) * indirect_shadow;
 }
 
+scene_material_alpha :: (material: Scene_Material, uv: Vector2, tint_alpha: float) -> float {
+    alpha := material.base_color_factor.w * tint_alpha;
+    if material.base_color_texture_index != SCENE_INVALID_TEXTURE_INDEX {
+        alpha *= sample_2d(material.base_color_texture_index, material.sampler_index, uv).w;
+    }
+    if material.opacity_texture_index != SCENE_INVALID_TEXTURE_INDEX {
+        alpha *= sample_2d(material.opacity_texture_index, material.sampler_index, uv).x;
+    }
+    return alpha;
+}
+
 model_scene_fragment_main :: (using in: Model_Scene_Fragment_In, params: *Scene_Draw_Params) -> Vector4 @SV_Target0 {
     material := params.materials[params.material_index];
     tex := sample_2d(material.base_color_texture_index, material.sampler_index, uv);
+    alpha := scene_material_alpha(material, uv, tint.w);
+    if material.alpha_mode == SCENE_ALPHA_MODE_MASK && alpha < material.alpha_cutoff discard();
     base_rgb := Vector3.{
         tex.x * material.base_color_factor.x * tint.x,
         tex.y * material.base_color_factor.y * tint.y,
@@ -505,7 +526,7 @@ model_scene_fragment_main :: (using in: Model_Scene_Fragment_In, params: *Scene_
     specular := pow(ndh, spec_power) * spec_strength * shadow * sun_strength;
     color := base_rgb * indirect + base_rgb * diffuse + sun_col * specular;
     color = model_scene_apply_atmosphere(color, world_pos, params.camera_pos, sun_dir);
-    return .{color.x, color.y, color.z, tex.w * tint.w};
+    return .{color.x, color.y, color.z, alpha};
 } @fragment_shader
 
 ground_vertex_main :: (using in: Ground_Vertex_In, params: *Ground_Draw_Params) -> Ground_Vertex_Out {

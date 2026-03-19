@@ -144,7 +144,7 @@ show_shadow_debug: bool;
 physics_g_was_down: bool;
 control_mode: enum { Player; Editor; } = .Player;
 model_scene_sun_strength: float = 1.0;
-model_scene_time_of_day: float = 0.32;
+time_of_day: float = 0.4;
 p_was_down: bool;
 orbit_yaw: float = 0.0;
 orbit_pitch: float = -0.32;
@@ -314,7 +314,9 @@ tick :: () {
             }
             Checkbox("Show Shadow Debug", *show_shadow_debug);
             SliderFloat("Sun Strength", *model_scene_sun_strength, 0.0, 3.0, "%.2f");
-            SliderFloat("Time of Day", *model_scene_time_of_day, 0.0, 1.0, "%.2f");
+
+            using Persist;
+            Persist.SliderFloat("Time of Day", *time_of_day, 0.0, 1.0, "%.2f px");
             if Button("Focus Mediapipe Demo") {
                 control_mode = .Editor;
                 scene_camera.position = mediapipe_demo_focus + .{-3.4, 1.9, 4.8};
@@ -371,9 +373,8 @@ tick :: () {
         End();
     }
 
-    right_down := (Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_RIGHT] & .DOWN) != 0;
-    left_down := (Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_LEFT] & .DOWN) != 0;
-    left_pressed := left_down && !left_was_down;
+    right_down := input_down(.MOUSE_BUTTON_RIGHT);
+    left_down, left_pressed := input_down(.MOUSE_BUTTON_LEFT);
     left_released := !left_down && left_was_down;
     left_was_down = left_down;
 
@@ -486,9 +487,9 @@ tick :: () {
     view_proj := proj * view;
     viewport := Vector2.{max(1.0, cast(float) win_w), max(1.0, cast(float) win_h)};
 
-    model_scene_time_of_day = clamp(model_scene_time_of_day, 0.0, 1.0);
+    time_of_day = clamp(time_of_day, 0.0, 1.0);
     model_scene_sun_strength = clamp(model_scene_sun_strength, 0.0, 3.0);
-    sun_dir := model_scene_sun_direction(model_scene_time_of_day);
+    sun_dir := model_scene_sun_direction(time_of_day);
     shadow_map.light_dir = -sun_dir;
     shadow_map.center = .{0.0, 2.0, -12.0};
     shadow_map.extent = 18.0;
@@ -503,7 +504,7 @@ tick :: () {
         sky_draw_params.cpu.* = .{
             camera_right_proj_x = .{cam_right.x, cam_right.y, cam_right.z, proj._11},
             camera_up_proj_y = .{cam_up.x, cam_up.y, cam_up.z, proj._22},
-            camera_forward_time_of_day = .{cam_forward.x, cam_forward.y, cam_forward.z, model_scene_time_of_day},
+            camera_forward_time_of_day = vec4(cam_forward, time_of_day),
             light_dir_sun_strength = .{shadow_map.light_dir.x, shadow_map.light_dir.y, shadow_map.light_dir.z, model_scene_sun_strength},
         };
     }
@@ -574,16 +575,16 @@ tick :: () {
         it.view_proj = view_proj;
         it.camera_pos = scene_camera.position;
         it.light_dir = shadow_map.light_dir;
-        it.sun_params = .{model_scene_sun_strength, model_scene_time_of_day, 0.0, 0.0};
+        it.sun_params = .{model_scene_sun_strength, time_of_day, 0.0, 0.0};
     }
     ground_shadow_params.view_proj = view_proj;
     ground_shadow_params.camera_pos = scene_camera.position;
     ground_shadow_params.light_dir = shadow_map.light_dir;
-    ground_shadow_params.sun_params = .{model_scene_sun_strength, model_scene_time_of_day, 0.0, 0.0};
+    ground_shadow_params.sun_params = .{model_scene_sun_strength, time_of_day, 0.0, 0.0};
     ground_draw_params.view_proj = view_proj;
     ground_draw_params.camera_pos = scene_camera.position;
     ground_draw_params.light_dir = shadow_map.light_dir;
-    ground_draw_params.sun_params = .{model_scene_sun_strength, model_scene_time_of_day, 0.0, 0.0};
+    ground_draw_params.sun_params = .{model_scene_sun_strength, time_of_day, 0.0, 0.0};
     if grass_draw_params.cpu != null {
         lizard_pos := character_controller_position(*running_lizard_controller);
         grass_shadow_params.shadow_view_proj = shadow_map.view_proj;
@@ -598,7 +599,7 @@ tick :: () {
         grass_draw_params.view_proj = view_proj;
         grass_draw_params.camera_pos = scene_camera.position;
         grass_draw_params.light_dir = shadow_map.light_dir;
-        grass_draw_params.sun_params = .{model_scene_sun_strength, model_scene_time_of_day, 0.0, 0.0};
+        grass_draw_params.sun_params = .{model_scene_sun_strength, time_of_day, 0.0, 0.0};
         grass_draw_params.shadow_meta = shadow_binding;
     }
 
@@ -873,7 +874,7 @@ rebuild_scene_runtime :: () {
             skin_matrices = 0,
             view_proj = Matrix4_Identity,
             light_dir = normalize(Vector3.{0.35, -1.0, 0.25}),
-            sun_params = .{model_scene_sun_strength, model_scene_time_of_day, 0.0, 0.0},
+            sun_params = .{model_scene_sun_strength, time_of_day, 0.0, 0.0},
             camera_pos = scene_camera.position,
             material_index = mesh.material_index,
             sampler_index = 0,
@@ -1662,7 +1663,7 @@ init_ground_plane :: (ground: Scene_File.Scene_Procedural_Ground_Desc) {
         skin_matrices = 0,
         view_proj = Matrix4_Identity,
         light_dir = normalize(.{0.35, -1.0, 0.25}),
-        sun_params = .{model_scene_sun_strength, model_scene_time_of_day, 0.0, 0.0},
+        sun_params = .{model_scene_sun_strength, time_of_day, 0.0, 0.0},
         camera_pos = scene_camera.position,
         material_index = 0,
         sampler_index = cast(u32) ground_sampler - 1,
@@ -1677,7 +1678,7 @@ init_ground_plane :: (ground: Scene_File.Scene_Procedural_Ground_Desc) {
         instances = ground_instance.gpu,
         view_proj = Matrix4_Identity,
         light_dir = normalize(Vector3.{0.35, -1.0, 0.25}),
-        sun_params = .{model_scene_sun_strength, model_scene_time_of_day, 0.0, 0.0},
+        sun_params = .{model_scene_sun_strength, time_of_day, 0.0, 0.0},
         camera_pos = scene_camera.position,
         sampler_index = cast(u32) ground_sampler - 1,
         base_color_texture_index = gpu_texture_view_index(ground_texture_view),
@@ -1699,7 +1700,7 @@ init_ground_plane :: (ground: Scene_File.Scene_Procedural_Ground_Desc) {
         view_proj = Matrix4_Identity,
         shadow_view_proj = Matrix4_Identity,
         light_dir = normalize(Vector3.{0.35, -1.0, 0.25}),
-        sun_params = .{model_scene_sun_strength, model_scene_time_of_day, 0.0, 0.0},
+        sun_params = .{model_scene_sun_strength, time_of_day, 0.0, 0.0},
         camera_pos = scene_camera.position,
         shadow_meta = .{0.0, 0.0, 0.0, 0.0},
         ground_size_center_z_time = grass_shadow_params.cpu.ground_size_center_z_time,
@@ -1859,3 +1860,5 @@ Input :: #import "Input";
 #import "stb_image";
 #import "Math";
 #load "shaders/model_scene_shader.jai";
+
+Persist :: #import,file "../ui/persist_controls.jai";

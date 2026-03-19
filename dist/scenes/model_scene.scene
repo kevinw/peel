@@ -1,5 +1,8 @@
 [1]
 scene "Model Scene" {
+  asset "Tree" {
+    model "./models/Tree/Tree.fbx"
+  }
   asset "mask" {
     model "./models/mask.glb"
   }
@@ -165,5 +168,29 @@ scene "Model Scene" {
     rotation_deg 0 0 0
     scale 2 2 2
     mesh_render "mask"
+  }
+  node "Tree" {
+    position -3.043039 -0.289513 -17.628056
+    rotation_deg 0 0 0
+    scale 3.5 3.5 3.5
+    mesh_render "Tree"
+  }
+  node "Tree_1" {
+    position -11.833832 0.106611 -5.844144
+    rotation_deg 0 0 0
+    scale 1 1 1
+    mesh_render "Tree"
+  }
+  node "Tree_2" {
+    position 6.737848 -0.222622 -19.640564
+    rotation_deg 0 0 0
+    scale 1 1 1
+    mesh_render "Tree"
+  }
+  node "Tree_3" {
+    position 14.464329 0.101351 5.519373
+    rotation_deg 0 0 0
+    scale 1 1 1
+    mesh_render "Tree"
   }
 }

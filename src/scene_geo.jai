@@ -13,13 +13,17 @@ Scene_Vertex :: struct {
 Scene_Material :: struct {
     base_color_factor: Vector4;
     base_color_texture_index: u32;
+    opacity_texture_index: u32;
     normal_texture_index: u32;
     roughness_texture_index: u32;
     ao_texture_index: u32;
+    alpha_mode: u32;
+    alpha_cutoff: float;
     address_mode_u: u32;
     address_mode_v: u32;
     sampler_index: u32;
     _pad0: u32;
+    _pad1: u32;
 }
 
 Scene_Mesh :: struct {
@@ -149,6 +153,7 @@ Imported_Texture :: struct {
     width: u32;
     height: u32;
     pixels: [..]u8;
+    has_alpha: bool;
 }
 
 Imported_Scene :: struct {
@@ -253,6 +258,10 @@ scene_geo_init_from_imported :: (geo: *Scene_Geo, imported: *Imported_Scene) {
             material := it;
             assert(material.base_color_texture_index < geo.texture_views.count, "Imported texture index % out of range %.", material.base_color_texture_index, geo.texture_views.count);
             material.base_color_texture_index = gpu_texture_view_index(geo.texture_views[material.base_color_texture_index]);
+            if material.opacity_texture_index != SCENE_INVALID_TEXTURE_INDEX {
+                assert(material.opacity_texture_index < geo.texture_views.count, "Imported opacity texture index % out of range %.", material.opacity_texture_index, geo.texture_views.count);
+                material.opacity_texture_index = gpu_texture_view_index(geo.texture_views[material.opacity_texture_index]);
+            }
             if material.normal_texture_index != SCENE_INVALID_TEXTURE_INDEX {
                 assert(material.normal_texture_index < geo.texture_views.count, "Imported normal texture index % out of range %.", material.normal_texture_index, geo.texture_views.count);
                 material.normal_texture_index = gpu_texture_view_index(geo.texture_views[material.normal_texture_index]);
@@ -508,7 +517,7 @@ compute_model_bounds_from_geo :: (geo: *Scene_Geo, model_index: s32) -> Scene_Bo
 
 Hash_Table :: #import "Hash_Table";
 using,only(Table, table_find, table_reset, table_set) _ :: Hash_Table;
-IMPORTED_SCENE_CACHE_VERSION : u32 : 13;
+IMPORTED_SCENE_CACHE_VERSION : u32 : 14;
 IMPORTED_SCENE_CACHE_MAGIC : u32 : 0x53474d44; // SGMD
 
 imported_scene_cache_path :: (model_paths: []string) -> string {
@@ -833,6 +842,7 @@ Texture_Load_Result :: struct {
     texture_index: u32;
     map_mode_u: ai.TextureMapMode;
     map_mode_v: ai.TextureMapMode;
+    texture_flags: u32;
 }
 
 load_model_into_imported_scene :: (imported: *Imported_Scene, path: string) {
@@ -862,18 +872,24 @@ load_model_into_imported_scene :: (imported: *Imported_Scene, path: string) {
     for scene_materials {
         base_color_load := load_material_texture(imported, scene, it, model_dir, path,
             ai.TextureType.[.BASE_COLOR, .DIFFUSE], default_texture_index = 0);
+        opacity_texture_index := load_material_texture(imported, scene, it, model_dir, path,
+            ai.TextureType.[.OPACITY], default_texture_index = SCENE_INVALID_TEXTURE_INDEX).texture_index;
         normal_texture_index := load_material_texture(imported, scene, it, model_dir, path,
             ai.TextureType.[.NORMALS], default_texture_index = SCENE_INVALID_TEXTURE_INDEX).texture_index;
         roughness_texture_index := load_material_texture(imported, scene, it, model_dir, path,
             ai.TextureType.[.DIFFUSE_ROUGHNESS, .UNKNOWN], default_texture_index = SCENE_INVALID_TEXTURE_INDEX).texture_index;
         ao_texture_index := load_material_texture(imported, scene, it, model_dir, path,
             ai.TextureType.[.AMBIENT_OCCLUSION, .LIGHTMAP], default_texture_index = SCENE_INVALID_TEXTURE_INDEX).texture_index;
+        alpha_mode, alpha_cutoff := detect_material_alpha_mode(scene, it, imported.*, base_color_load.texture_index, opacity_texture_index, base_color_load.texture_flags);
         array_add(*imported.materials, .{
             base_color_factor = .{1.0, 1.0, 1.0, 1.0},
             base_color_texture_index = base_color_load.texture_index,
+            opacity_texture_index = opacity_texture_index,
             normal_texture_index = normal_texture_index,
             roughness_texture_index = roughness_texture_index,
             ao_texture_index = ao_texture_index,
+            alpha_mode = alpha_mode,
+            alpha_cutoff = alpha_cutoff,
             address_mode_u = cast(u32) base_color_load.map_mode_u,
             address_mode_v = cast(u32) base_color_load.map_mode_v,
         });
@@ -1283,6 +1299,7 @@ load_material_texture :: (
             texture_index = get_or_load_texture(imported, scene, resolved, ai.to_string(path)),
             map_mode_u = map_mode,
             map_mode_v = map_mode,
+            texture_flags = flags_from_material_texture(material, it),
         };
     }
 
@@ -1290,7 +1307,16 @@ load_material_texture :: (
         texture_index = default_texture_index,
         map_mode_u = .Wrap,
         map_mode_v = .Wrap,
+        texture_flags = 0,
     };
+}
+
+flags_from_material_texture :: (material: *ai.Material, texture_type: ai.TextureType) -> u32 {
+    path: ai.String;
+    flags: u32 = 0;
+    res := ai.GetMaterialTexture(material, texture_type, 0, *path, null, null, null, null, null, *flags);
+    if res != .SUCCESS return 0;
+    return flags;
 }
 
 resolve_assimp_texture_key :: (scene: *ai.Scene, model_dir: string, model_path: string, path: string) -> string {
@@ -1344,13 +1370,13 @@ load_scene_texture :: (scene: *ai.Scene, resolved_key: string, assimp_path: stri
             defer stbi_image_free(pixels);
             assert(pixels != null && width > 0 && height > 0, "Failed to decode embedded texture %", assimp_path);
             rgba := copy_bytes(cast([]u8) .{count = width * height * 4, data = pixels});
-            return .{key = copy_string(resolved_key), width = cast(u32) width, height = cast(u32) height, pixels = rgba};
+            return .{key = copy_string(resolved_key), width = cast(u32) width, height = cast(u32) height, pixels = rgba, has_alpha = texture_pixels_have_alpha(rgba)};
         }
 
         raw_pixels := cast(*u8) embedded.pcData;
         byte_count := cast(s64) embedded.mWidth * cast(s64) embedded.mHeight * 4;
         rgba := bgra_to_rgba(.{count = byte_count, data = raw_pixels});
-        return .{key = copy_string(resolved_key), width = embedded.mWidth, height = embedded.mHeight, pixels = rgba};
+        return .{key = copy_string(resolved_key), width = embedded.mWidth, height = embedded.mHeight, pixels = rgba, has_alpha = texture_pixels_have_alpha(rgba)};
     }
 
     width, height, channels: s32 = 0;
@@ -1358,7 +1384,7 @@ load_scene_texture :: (scene: *ai.Scene, resolved_key: string, assimp_path: stri
     defer stbi_image_free(pixels);
     assert(pixels != null && width > 0 && height > 0, "Failed to load texture %", resolved_key);
     rgba := copy_bytes(cast([]u8) .{count = width * height * 4, data = pixels});
-    return .{key = copy_string(resolved_key), width = cast(u32) width, height = cast(u32) height, pixels = rgba};
+    return .{key = copy_string(resolved_key), width = cast(u32) width, height = cast(u32) height, pixels = rgba, has_alpha = texture_pixels_have_alpha(rgba)};
 }
 
 imported_scene_create_default_white_texture :: (imported: *Imported_Scene) {
@@ -1370,7 +1396,72 @@ imported_scene_create_default_white_texture :: (imported: *Imported_Scene) {
         width = 1,
         height = 1,
         pixels = pixels,
+        has_alpha = false,
     });
+}
+
+SCENE_ALPHA_MODE_OPAQUE :: 0;
+SCENE_ALPHA_MODE_MASK   :: 1;
+
+texture_pixels_have_alpha :: (pixels: []u8) -> bool {
+    if pixels.count < 4 return false;
+    alpha_index := cast(s64) 3;
+    while alpha_index < pixels.count {
+        if pixels[alpha_index] < 250 return true;
+        alpha_index += 4;
+    }
+    return false;
+}
+
+material_property_key_contains :: (material: *ai.Material, pattern: string) -> bool {
+    for prop_index: 0..cast(s64) material.mNumProperties-1 {
+        prop := material.mProperties[prop_index];
+        if prop == null continue;
+        key := ai.to_string(prop.mKey);
+        if String.find_index_from_left(key, pattern) >= 0 return true;
+    }
+    return false;
+}
+
+material_property_float_lt :: (material: *ai.Material, pattern: string, limit: float) -> bool {
+    for prop_index: 0..cast(s64) material.mNumProperties-1 {
+        prop := material.mProperties[prop_index];
+        if prop == null continue;
+        key := ai.to_string(prop.mKey);
+        if String.find_index_from_left(key, pattern) < 0 continue;
+        if prop.mType == .PTI_Float || prop.mType == .PTI_Double {
+            value := cast(*float) prop.mData;
+            if value != null && value.* < limit return true;
+        }
+    }
+    return false;
+}
+
+detect_material_alpha_mode :: (
+    scene: *ai.Scene,
+    material: *ai.Material,
+    imported: Imported_Scene,
+    base_color_texture_index: u32,
+    opacity_texture_index: u32,
+    base_color_texture_flags: u32,
+) -> u32, float {
+    _ = scene;
+    alpha_cutoff := 0.5;
+    if opacity_texture_index != SCENE_INVALID_TEXTURE_INDEX return SCENE_ALPHA_MODE_MASK, alpha_cutoff;
+    if base_color_texture_index == SCENE_INVALID_TEXTURE_INDEX return SCENE_ALPHA_MODE_OPAQUE, alpha_cutoff;
+    if base_color_texture_index >= imported.textures.count return SCENE_ALPHA_MODE_OPAQUE, alpha_cutoff;
+
+    base_texture := imported.textures[base_color_texture_index];
+    if !base_texture.has_alpha return SCENE_ALPHA_MODE_OPAQUE, alpha_cutoff;
+
+    if (base_color_texture_flags & cast(u32) ai.TextureFlags.UseAlpha) != 0 return SCENE_ALPHA_MODE_MASK, alpha_cutoff;
+    if material_property_float_lt(material, "opacity", 0.999) return SCENE_ALPHA_MODE_MASK, alpha_cutoff;
+    if material_property_float_lt(material, "transparent", 0.999) return SCENE_ALPHA_MODE_MASK, alpha_cutoff;
+    if material_property_key_contains(material, "opacity") return SCENE_ALPHA_MODE_MASK, alpha_cutoff;
+    if material_property_key_contains(material, "transparent") return SCENE_ALPHA_MODE_MASK, alpha_cutoff;
+    if material_property_key_contains(material, "alpha") return SCENE_ALPHA_MODE_MASK, alpha_cutoff;
+
+    return SCENE_ALPHA_MODE_MASK, alpha_cutoff;
 }
 
 create_texture_from_rgba8 :: (pixels: []u8, width: u32, height: u32) -> Gpu_Texture, Gpu_Texture_View {
