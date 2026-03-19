@@ -1,7 +1,7 @@
 #scope_export
 
 SCENE_FILE_VERSION :: 1;
-SCENE_COMPILED_CACHE_VERSION :: 4;
+SCENE_COMPILED_CACHE_VERSION :: 5;
 SCENE_COMPILED_CACHE_MAGIC : u32 : 0x53434e45; // SCNE
 
 Scene_Render_Kind :: enum {
@@ -117,10 +117,10 @@ Compiled_Scene_Node :: struct {
     name: string;
     source_path: string;
     source_kind: Scene_Node_Source;
+    source_node_index: s32 = -1;
     parent_index: s32 = -1;
     first_child_index: s32 = -1;
     next_sibling_index: s32 = -1;
-    _pad0: s32;
 
     local_position: Vector3;
     _pad1: float;
@@ -814,6 +814,7 @@ compiled_scene_append_node_recursive :: (
     dst.name = copy_string(src.name);
     dst.source_path = copy_string(source_path);
     dst.source_kind = source_kind;
+    dst.source_node_index = node_index;
     dst.parent_index = compiled_parent;
     dst.local_position = src.position;
     dst.local_rotation_deg = src.rotation_deg;

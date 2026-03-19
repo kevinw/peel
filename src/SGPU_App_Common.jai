@@ -170,6 +170,8 @@ app_update :: (update_ctx: *App_Update_Ctx) {
                     case .F2;
                         ui_opts.globals.show ^= true;
                         app_ui_enabled |= ui_opts.globals.show;
+                    case .F3;
+                        ui_opts.show_imgui_demo ^= true;
                     case .ESCAPE;
                         #if !SINGLE_BINARY {
                             app_browser_open = !app_browser_open;

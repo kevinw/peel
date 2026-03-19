@@ -170,8 +170,8 @@ scene "Model Scene" {
     mesh_render "mask"
   }
   node "Tree" {
-    position -3.043039 -0.289513 -17.628056
-    rotation_deg 0 0 0
+    position 2.058036 -0.621475 -18.253599
+    rotation_deg 0 -0 0
     scale 3.5 3.5 3.5
     mesh_render "Tree"
   }
@@ -189,6 +189,24 @@ scene "Model Scene" {
   }
   node "Tree_3" {
     position 14.464329 0.101351 5.519373
+    rotation_deg 0 0 0
+    scale 1 1 1
+    mesh_render "Tree"
+  }
+  node "Tree_4" {
+    position -5.725893 -0.169835 -17.760818
+    rotation_deg 0 0 0
+    scale 1 1 1
+    mesh_render "Tree"
+  }
+  node "Tree_5" {
+    position -8.164173 0.023693 -21.941269
+    rotation_deg 0 0 0
+    scale 1 1 1
+    mesh_render "Tree"
+  }
+  node "Tree_6" {
+    position -0.32194 -0.103509 -28.566563
     rotation_deg 0 0 0
     scale 1 1 1
     mesh_render "Tree"

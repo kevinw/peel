@@ -27,7 +27,7 @@ Scene_Draw_Params :: struct {
     camera_pos: Vector3;
     _pad1: float;
     material_index: u32;
-    sampler_index: u32;
+    object_id: u32;
     mesh_base_vertex: u32;
     skin_matrix_count: u32;
     morph_target_count: u32;
@@ -392,6 +392,13 @@ model_scene_debug_shadow_fragment_main :: (using in: Model_Scene_Debug_Fragment_
     return .{out_color = .{d, d, d, 1.0}};
 } @fragment_shader
 
+model_scene_debug_pick_fragment_main :: (using in: Model_Scene_Debug_Fragment_In, params: *Scene_Draw_Params) -> struct { out_color: Vector4; } {
+    tex_idx := params.object_id;
+    samp_idx := params.material_index;
+    s := sample_2d(tex_idx, samp_idx, .{uv.x, 1.0 - uv.y});
+    return .{out_color = s};
+} @fragment_shader
+
 model_scene_sky_base_color :: (view_dir: Vector3, sun_dir: Vector3) -> Vector3 {
     upness := clamp(view_dir.y * 0.5 + 0.5, 0.0, 1.0);
     sun_dot := dot(view_dir, sun_dir);
@@ -476,6 +483,14 @@ scene_material_alpha :: (material: Scene_Material, uv: Vector2, tint_alpha: floa
     return alpha;
 }
 
+scene_encode_object_id :: (object_id: u32) -> Vector4 {
+    r := cast(float) ((object_id >> 0) & 0xff) / 255.0;
+    g := cast(float) ((object_id >> 8) & 0xff) / 255.0;
+    b := cast(float) ((object_id >> 16) & 0xff) / 255.0;
+    a := cast(float) ((object_id >> 24) & 0xff) / 255.0;
+    return .{r, g, b, a};
+}
+
 model_scene_fragment_main :: (using in: Model_Scene_Fragment_In, params: *Scene_Draw_Params) -> Vector4 @SV_Target0 {
     material := params.materials[params.material_index];
     tex := sample_2d(material.base_color_texture_index, material.sampler_index, uv);
@@ -527,6 +542,13 @@ model_scene_fragment_main :: (using in: Model_Scene_Fragment_In, params: *Scene_
     color := base_rgb * indirect + base_rgb * diffuse + sun_col * specular;
     color = model_scene_apply_atmosphere(color, world_pos, params.camera_pos, sun_dir);
     return .{color.x, color.y, color.z, alpha};
+} @fragment_shader
+
+model_scene_pick_fragment_main :: (using in: Model_Scene_Fragment_In, params: *Scene_Draw_Params) -> Vector4 @SV_Target0 {
+    material := params.materials[params.material_index];
+    alpha := scene_material_alpha(material, uv, tint.w);
+    if material.alpha_mode == SCENE_ALPHA_MODE_MASK && alpha < material.alpha_cutoff discard();
+    return scene_encode_object_id(params.object_id);
 } @fragment_shader
 
 ground_vertex_main :: (using in: Ground_Vertex_In, params: *Ground_Draw_Params) -> Ground_Vertex_Out {

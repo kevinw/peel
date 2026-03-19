@@ -1,3 +1,5 @@
+#import "Jai-Shader-Transpiler";
+
 Draw_Batch :: struct {
     mesh_index: u32;
     first_instance: u32;
@@ -13,6 +15,8 @@ Animated_Batch :: struct {
 }
 
 shadow_skip_batch: [..]bool;
+batch_pick_object_ids: [..]u32;
+batch_compiled_node_indices: [..]s32;
 
 Running_Lizard_Instance :: struct {
     instance_index: u32;
@@ -46,11 +50,13 @@ Model_Scene_Sky_Params_CPU :: CPU_Struct(Model_Scene_Sky_Params);
 Grass_Shadow_Params_CPU    :: CPU_Struct(Grass_Shadow_Params);
 
 graphics_pipeline: Gpu_Pipeline;
+pick_pipeline: Gpu_Pipeline;
 ground_pipeline: Gpu_Pipeline;
 shadow_pipeline: Gpu_Pipeline;
 grass_pipeline: Gpu_Pipeline;
 grass_shadow_pipeline: Gpu_Pipeline;
 debug_shadow_pipeline: Gpu_Pipeline;
+debug_pick_pipeline: Gpu_Pipeline;
 sky_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 scene_geo: Scene_Geo;
@@ -73,6 +79,10 @@ scene_depth_texture: Gpu_Texture;
 scene_depth_view: Gpu_Texture_View;
 scene_depth_w: u32;
 scene_depth_h: u32;
+scene_pick_texture: Gpu_Texture;
+scene_pick_view: Gpu_Texture_View;
+scene_pick_w: u32;
+scene_pick_h: u32;
 ground_vertices: Gpu_View(Scene_Vertex);
 ground_indices: Gpu_View(u32);
 ground_instance: Gpu_Buffer(Scene_Instance);
@@ -92,6 +102,7 @@ active_ground: Scene_File.Scene_Procedural_Ground_Desc;
 grass_draw_params: Gpu_Buffer(Grass_Draw_Params);
 grass_shadow_params: Gpu_Buffer(Grass_Shadow_Params_CPU);
 sky_draw_params: Gpu_Buffer(Model_Scene_Sky_Params_CPU);
+debug_pick_params: Gpu_Buffer(Scene_Draw_Params_CPU);
 grass_instance_count: u32;
 render_grass: bool = true;
 scene_shadows_enabled: bool = true;
@@ -141,6 +152,7 @@ scene_debug_logged: bool;
 autopilot_enabled: bool;
 physics_gizmos_enabled: bool;
 show_shadow_debug: bool;
+show_pick_debug: bool;
 physics_g_was_down: bool;
 control_mode: enum { Player; Editor; } = .Player;
 model_scene_sun_strength: float = 1.0;
@@ -152,6 +164,19 @@ orbit_distance: float = 8.5;
 orbit_prev_mouse: Vector2;
 orbit_have_prev_mouse: bool;
 left_was_down: bool;
+scene_pick_pending: bool;
+scene_pick_render_this_frame: bool;
+scene_pick_request_frame: s64 = -1;
+scene_pick_request_x: s64;
+scene_pick_request_y: s64;
+scene_pick_last_object_id: u32;
+scene_pick_last_scene_node_index: s32 = -1;
+scene_pick_request_count: s64;
+scene_pick_apply_count: s64;
+scene_pick_last_request_frame: s64 = -1;
+scene_pick_last_apply_frame: s64 = -1;
+scene_pick_last_applied_x: s64 = -1;
+scene_pick_last_applied_y: s64 = -1;
 gizmo_ctx: Gizmo.Gizmo_Context;
 gizmo_render_ctx: Gizmo_Render.Gizmo_Render_Context;
 
@@ -182,11 +207,13 @@ on_dll_init :: () {
     Physics.debug_draw_enabled = false;
 
     graphics_source     := cast([]u8) get_transpiled(.METAL, model_scene_vertex_main, model_scene_fragment_main);
+    pick_source         := cast([]u8) get_transpiled(.METAL, model_scene_vertex_main, model_scene_pick_fragment_main);
     ground_source       := cast([]u8) get_transpiled(.METAL, ground_vertex_main, ground_fragment_main);
     shadow_source       := cast([]u8) get_transpiled(.METAL, model_scene_shadow_vertex_main, model_scene_shadow_fragment_main);
     grass_source        := cast([]u8) get_transpiled(.METAL, model_scene_grass_vertex_main, model_scene_grass_fragment_main);
     grass_shadow_source := cast([]u8) get_transpiled(.METAL, model_scene_grass_shadow_vertex_main, model_scene_grass_shadow_fragment_main);
     debug_shadow_source := cast([]u8) get_transpiled(.METAL, model_scene_debug_shadow_vertex_main, model_scene_debug_shadow_fragment_main);
+    debug_pick_source   := cast([]u8) get_transpiled(.METAL, model_scene_debug_shadow_vertex_main, model_scene_debug_pick_fragment_main);
     sky_source          := cast([]u8) get_transpiled(.METAL, model_scene_sky_vertex_main, model_scene_sky_fragment_main);
 
     main_raster: Gpu_Raster_Desc = .{
@@ -205,16 +232,23 @@ on_dll_init :: () {
     };
     grass_main_raster := main_raster;
     grass_main_raster.cull = .NONE;
+    pick_raster := main_raster;
+    pick_raster.color_targets = .[
+        .{format = .B8G8R8A8_UNORM},
+    ];
 
     graphics_pipeline     = gpu_create_graphics_pipeline(graphics_source, main_raster);
+    pick_pipeline         = gpu_create_graphics_pipeline(pick_source, pick_raster);
     ground_pipeline       = gpu_create_graphics_pipeline(ground_source, main_raster);
     shadow_pipeline       = gpu_create_graphics_pipeline(shadow_source, shadow_raster);
     grass_pipeline        = gpu_create_graphics_pipeline(grass_source, grass_main_raster);
     grass_shadow_pipeline = gpu_create_graphics_pipeline(grass_shadow_source, shadow_raster);
     debug_shadow_pipeline = gpu_create_graphics_pipeline(debug_shadow_source, main_raster);
+    debug_pick_pipeline   = gpu_create_graphics_pipeline(debug_pick_source, main_raster);
     sky_pipeline          = gpu_create_graphics_pipeline(sky_source, grass_main_raster);
     shadow_map_init(*shadow_map);
     sky_draw_params = gpu_alloc_buffer(Model_Scene_Sky_Params_CPU, label = "model scene sky params");
+    debug_pick_params = gpu_alloc_buffer(Scene_Draw_Params_CPU, label = "model scene debug pick params");
     mediapipe_body_casts_shadows = false;
     mediapipe_face_casts_shadows = false;
 
@@ -225,6 +259,8 @@ on_dll_init :: () {
     mediapipe_demo_instances.allocator = context.allocator;
     mediapipe_face_instances.allocator = context.allocator;
     shadow_skip_batch.allocator = context.allocator;
+    batch_pick_object_ids.allocator = context.allocator;
+    batch_compiled_node_indices.allocator = context.allocator;
     scene_doc, compiled_scene = Scene_File.load_compiled_scene_cached(SCENE_ROOT_PATH);
     init_scene_geo_from_palette();
     rebuild_scene_runtime();
@@ -234,6 +270,7 @@ on_dll_init :: () {
     _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
     if dims_ok && win_w > 0 && win_h > 0 {
         ensure_scene_depth_target(cast(u32) win_w, cast(u32) win_h);
+        ensure_scene_pick_target(cast(u32) win_w, cast(u32) win_h);
     }
 
     gpu_commit_residency();
@@ -253,11 +290,14 @@ on_unload :: () {
     Physics.deinit();
     Gizmo_Render.deinit(*gizmo_render_ctx);
     Gizmo.deinit(*gizmo_ctx);
+    gpu_delete(*debug_pick_params);
     gpu_delete(*sky_draw_params);
     if sky_pipeline != 0 gpu_free_pipeline(sky_pipeline);
+    if debug_pick_pipeline != 0 gpu_free_pipeline(debug_pick_pipeline);
     if debug_shadow_pipeline != 0 gpu_free_pipeline(debug_shadow_pipeline);
     if grass_shadow_pipeline != 0 gpu_free_pipeline(grass_shadow_pipeline);
     if grass_pipeline != 0 gpu_free_pipeline(grass_pipeline);
+    if pick_pipeline != 0 gpu_free_pipeline(pick_pipeline);
     if shadow_pipeline != 0 gpu_free_pipeline(shadow_pipeline);
     if ground_pipeline != 0 gpu_free_pipeline(ground_pipeline);
     shadow_map_deinit(*shadow_map);
@@ -266,6 +306,8 @@ on_unload :: () {
     array_free(mediapipe_demo_instances);
     array_free(mediapipe_face_instances);
     array_free(shadow_skip_batch);
+    array_free(batch_pick_object_ids);
+    array_free(batch_compiled_node_indices);
     array_free(animated_batches);
     array_free(scene_batches);
     scene_geo_deinit(*scene_geo);
@@ -288,14 +330,8 @@ tick :: () {
         Physics.debug_draw_enabled = physics_gizmos_enabled;
     }
     physics_g_was_down = g_down;
-    p_down := (Input.input_button_states[cast(Input.Key_Code) #char "P"] & .DOWN) != 0;
-    if p_down && !p_was_down {
-        if #complete control_mode == {
-        case .Player; control_mode = .Editor;
-        case .Editor; control_mode = .Player;
-        }
-    }
-    p_was_down = p_down;
+    _, p_pressed := input_down(cast(Input.Key_Code)#char "P");
+    if p_pressed toggle_control_mode();
 
     if app_ui_enabled {
         using ImGui;
@@ -313,6 +349,7 @@ tick :: () {
                 rebuild_scene_runtime();
             }
             Checkbox("Show Shadow Debug", *show_shadow_debug);
+            Checkbox("Show Pick Debug", *show_pick_debug);
             SliderFloat("Sun Strength", *model_scene_sun_strength, 0.0, 3.0, "%.2f");
 
             using Persist;
@@ -344,6 +381,38 @@ tick :: () {
             }
             if control_mode == .Editor {
                 Text("%", ifx scene_dirty then "Scene Dirty" else "Scene Saved");
+                Separator();
+                Text("Selection Debug");
+                Text("Picked Object ID: %", scene_pick_last_object_id);
+                Text("Picked Scene Node: %", scene_pick_last_scene_node_index);
+                Text("Manip Selected Index: %", scene_manip_ctx.selected_index);
+                Text("Manip Object Count: %", scene_manip_objects.count);
+                Text("Pick Requests: %", scene_pick_request_count);
+                Text("Pick Applies: %", scene_pick_apply_count);
+                Text("Last Request Frame: %", scene_pick_last_request_frame);
+                Text("Last Apply Frame: %", scene_pick_last_apply_frame);
+                Text("Last Pick Pixel: %, %", scene_pick_last_applied_x, scene_pick_last_applied_y);
+                pickable_batch_count: s64;
+                for batch_pick_object_ids if it != 0 pickable_batch_count += 1;
+                Text("Pickable Batches: % / %", pickable_batch_count, batch_pick_object_ids.count);
+                picked_manip_index := -1;
+                if scene_pick_last_scene_node_index >= 0 {
+                    for scene_manip_node_indices {
+                        if it == scene_pick_last_scene_node_index {
+                            picked_manip_index = cast(s32) it_index;
+                            break;
+                        }
+                    }
+                }
+                Text("Picked Node Manip Index: %", picked_manip_index);
+                if scene_manip_ctx.selected_index >= 0 && cast(s64) scene_manip_ctx.selected_index < scene_manip_node_indices.count {
+                    selected_scene_node_index := scene_manip_node_indices[scene_manip_ctx.selected_index];
+                    Text("Manip Scene Node: %", selected_scene_node_index);
+                    if selected_scene_node_index >= 0 && selected_scene_node_index < scene_doc.nodes.count {
+                        Text("Manip Node Name: %", scene_doc.nodes[selected_scene_node_index].name);
+                    }
+                }
+                Text("Pick Pending: %", scene_pick_pending);
                 if scene_place_palette_index >= 0 {
                     Text("Placing: %", String.path_filename(scene_palette_models[scene_place_palette_index]));
                     SameLine();
@@ -375,8 +444,11 @@ tick :: () {
 
     right_down := input_down(.MOUSE_BUTTON_RIGHT);
     left_down, left_pressed := input_down(.MOUSE_BUTTON_LEFT);
+    _, middle_pressed := input_down(.MOUSE_BUTTON_MIDDLE);
     left_released := !left_down && left_was_down;
     left_was_down = left_down;
+
+    if middle_pressed toggle_control_mode();
 
     controller_forward, controller_right, controller_up: Vector3;
     if #complete control_mode == {
@@ -441,6 +513,7 @@ tick :: () {
             scene_rebuild_manip_objects();
             scene_manip_objects_dirty = false;
         }
+        process_scene_pick_result_if_ready();
         cam_forward, cam_right, cam_up: Vector3;
         editor_camera_basis(*scene_camera, *cam_forward, *cam_right, *cam_up);
         frame := Manip_Frame_Input.{
@@ -463,6 +536,10 @@ tick :: () {
             manip_result := manip_update(*scene_manip_ctx, *gizmo_ctx, scene_manip_objects, frame);
             if manip_result.changed {
                 scene_manip_apply_pending = true;
+                scene_apply_manip_live_to_runtime();
+            }
+            if left_pressed && !io.WantCaptureMouse && !scene_manip_ctx.active {
+                queue_scene_pick_request(cast(s32) mx, cast(s32) my);
             }
             if scene_manip_apply_pending && left_released {
                 scene_apply_manip_back_to_doc();
@@ -486,6 +563,7 @@ tick :: () {
     proj := make_projection_matrix(PI / 3.2, aspect, 0.05, 250.0);
     view_proj := proj * view;
     viewport := Vector2.{max(1.0, cast(float) win_w), max(1.0, cast(float) win_h)};
+    ensure_scene_pick_target(cast(u32) max(1, win_w), cast(u32) max(1, win_h));
 
     time_of_day = clamp(time_of_day, 0.0, 1.0);
     model_scene_sun_strength = clamp(model_scene_sun_strength, 0.0, 3.0);
@@ -649,6 +727,58 @@ tick :: () {
         }
     }
 
+    if scene_pick_render_this_frame && scene_pick_view != 0 {
+        gpu_begin_scoped_render_pass(cmd_buff, .{
+            depth_target = .{
+                view = scene_depth_view,
+                load_op = .CLEAR,
+                store_op = .STORE,
+                clear_value = .{
+                    depth = 1.0,
+                    stencil = 0,
+                },
+            },
+            color_targets = .[
+                .{
+                    view = scene_pick_view,
+                    load_op = .CLEAR,
+                    store_op = .STORE,
+                    clear_color._float = .[0.0, 0.0, 0.0, 0.0],
+                },
+            ],
+        }, .COLOR_ATTACHMENT_WRITE, .COLOR_ATTACHMENT_WRITE);
+        gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .LESS, depth_mode = .READ | .WRITE});
+        gpu_set_pipeline(cmd_buff, pick_pipeline);
+        for batch: scene_batches {
+            if it_index >= batch_pick_object_ids.count || batch_pick_object_ids[it_index] == 0 continue;
+            mesh := scene_geo.meshes[batch.mesh_index];
+            params_gpu := scene_draw_params.gpu + (it_index * size_of(Scene_Draw_Params_CPU)).(Gpu_Ptr);
+            gpu_draw_instanced_direct(cmd_buff, params_gpu, mesh.index_count, batch.instance_count);
+        }
+    }
+
+    if debug_pick_params.cpu != null {
+        debug_pick_params.cpu.* = .{
+            vertices = 0,
+            indices = 0,
+            materials = 0,
+            instances = 0,
+            morph_vertex_deltas = 0,
+            morph_weights = 0,
+            skin_matrices = 0,
+            view_proj = Matrix4_Identity,
+            light_dir = .{0.0, 0.0, 0.0},
+            sun_params = .{0.0, 0.0, 0.0, 0.0},
+            camera_pos = .{0.0, 0.0, 0.0},
+            material_index = cast(u32) ground_sampler - 1,
+            object_id = ifx scene_pick_view != 0 then gpu_texture_view_index(scene_pick_view) else 0,
+            mesh_base_vertex = 0,
+            skin_matrix_count = 0,
+            morph_target_count = 0,
+            morph_vertex_count = 0,
+        };
+    }
+
     {
         gpu_begin_scoped_render_pass(cmd_buff, .{
             depth_target = .{
@@ -690,7 +820,8 @@ tick :: () {
             gpu_draw_instanced_direct(cmd_buff, params_gpu, mesh.index_count, batch.instance_count);
         }
 
-        if physics_gizmos_enabled {
+        should_draw_gizmos := physics_gizmos_enabled || control_mode == .Editor;
+        if should_draw_gizmos {
             Gizmo_Render.gizmo_render_draw(*gizmo_render_ctx, cmd_buff, *gizmo_ctx, viewport, depth_mode = .TEST);
         }
 
@@ -699,9 +830,15 @@ tick :: () {
             gpu_set_pipeline(cmd_buff, debug_shadow_pipeline);
             gpu_draw_instanced_direct(cmd_buff, scene_draw_params.gpu, 6, 1);
         }
+        if show_pick_debug && debug_pick_params.cpu != null {
+            gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
+            gpu_set_pipeline(cmd_buff, debug_pick_pipeline);
+            gpu_draw_instanced_direct(cmd_buff, debug_pick_params.gpu, 6, 1);
+        }
     }
 
     submit_and_present_with_ui(cmd_buff);
+    scene_pick_render_this_frame = false;
 } @on_tick
 
 #scope_file
@@ -718,6 +855,32 @@ ensure_scene_depth_target :: (width: u32, height: u32) {
     scene_depth_view = gpu_texture_view(scene_depth_texture);
     scene_depth_w = width;
     scene_depth_h = height;
+    gpu_commit_residency();
+}
+
+ensure_scene_pick_target :: (width: u32, height: u32) {
+    if width == 0 || height == 0 return;
+    if scene_pick_view != 0 && scene_pick_w == width && scene_pick_h == height return;
+
+    if scene_pick_view != 0 {
+        gpu_free_texture_view(scene_pick_view);
+        scene_pick_view = 0;
+    }
+    if scene_pick_texture != 0 {
+        gpu_free(scene_pick_texture);
+        scene_pick_texture = 0;
+    }
+
+    res, scene_pick_texture= := gpu_create_texture(.{
+        dimensions = .[width, height, 1],
+        format = .B8G8R8A8_UNORM,
+        usage = .COLOR_ATTACHMENT | .TRANSFER_DST,
+    });
+    assert(res == .SUCCESS && scene_pick_texture != 0, "Failed to create model_scene pick texture.");
+    scene_pick_view = gpu_texture_view(scene_pick_texture);
+    assert(scene_pick_view != 0, "Failed to create model_scene pick texture view.");
+    scene_pick_w = width;
+    scene_pick_h = height;
     gpu_commit_residency();
 }
 
@@ -761,6 +924,8 @@ rebuild_scene_runtime :: () {
     collider_model_indices.allocator = temp;
 
     array_reset(*scene_batches);
+    array_reset(*batch_pick_object_ids);
+    array_reset(*batch_compiled_node_indices);
     array_reset(*animated_batches);
     array_reset(*shadow_skip_batch);
     array_reset(*running_lizard_instances);
@@ -817,7 +982,10 @@ rebuild_scene_runtime :: () {
             if model_index < 0 continue;
             array_reset(*root_transforms);
             array_add(*root_transforms, it.world * compiled_asset_import_matrix(compiled_scene.assets[it.asset_index]));
+            start_batch_count := scene_batches.count;
             scene_geo_append_model_instances(*scene_batches, *instances_cpu, *scene_geo, model_index, root_transforms);
+            append_pick_ids_for_new_batches(start_batch_count, compiled_node_pick_object_id(cast(s32) it_index));
+            append_compiled_node_indices_for_new_batches(start_batch_count, cast(s32) it_index);
             continue;
         case .SKINNED_MESH;
             if it.behavior.type_name == "Player_Controller" {
@@ -831,7 +999,10 @@ rebuild_scene_runtime :: () {
             if model_index < 0 continue;
             array_reset(*root_transforms);
             array_add(*root_transforms, it.world * compiled_asset_import_matrix(compiled_scene.assets[it.asset_index]));
+            start_batch_count := scene_batches.count;
             scene_geo_append_model_instances(*scene_batches, *instances_cpu, *scene_geo, model_index, root_transforms);
+            append_pick_ids_for_new_batches(start_batch_count, compiled_node_pick_object_id(cast(s32) it_index));
+            append_compiled_node_indices_for_new_batches(start_batch_count, cast(s32) it_index);
         case .NONE;
             // nothing to do.
         }
@@ -839,6 +1010,8 @@ rebuild_scene_runtime :: () {
 
     if ground_enabled init_ground_plane(active_ground);
     while shadow_skip_batch.count < scene_batches.count array_add(*shadow_skip_batch, false);
+    while batch_pick_object_ids.count < scene_batches.count array_add(*batch_pick_object_ids, 0);
+    while batch_compiled_node_indices.count < scene_batches.count array_add(*batch_compiled_node_indices, -1);
     append_mediapipe_demo_instances(*instances_cpu, *total_skin_matrix_count);
 
     arena_bytes :=
@@ -877,7 +1050,7 @@ rebuild_scene_runtime :: () {
             sun_params = .{model_scene_sun_strength, time_of_day, 0.0, 0.0},
             camera_pos = scene_camera.position,
             material_index = mesh.material_index,
-            sampler_index = 0,
+            object_id = batch_pick_object_ids[it_index],
             mesh_base_vertex = mesh.base_vertex,
             skin_matrix_count = 0,
             morph_target_count = mesh.morph_target_count,
@@ -926,6 +1099,16 @@ clear_scene_runtime_resources :: () {
     }
     scene_depth_w = 0;
     scene_depth_h = 0;
+    if scene_pick_view != 0 {
+        gpu_free_texture_view(scene_pick_view);
+        scene_pick_view = 0;
+    }
+    if scene_pick_texture != 0 {
+        gpu_free(scene_pick_texture);
+        scene_pick_texture = 0;
+    }
+    scene_pick_w = 0;
+    scene_pick_h = 0;
 
 
 
@@ -967,6 +1150,8 @@ clear_scene_runtime_resources :: () {
     array_reset(*mediapipe_demo_instances);
     array_reset(*animated_batches);
     array_reset(*scene_batches);
+    array_reset(*batch_pick_object_ids);
+    array_reset(*batch_compiled_node_indices);
 }
 
 append_compiled_scatter_instances :: (instances_cpu: *[..]Scene_Instance, root_transforms: *[..]Matrix4, total_skin_matrix_count: *s64, collider_model_indices: *[..]s32, node_index: s32) {
@@ -999,7 +1184,10 @@ append_compiled_scatter_instances :: (instances_cpu: *[..]Scene_Instance, root_t
 
         array_reset(root_transforms);
         array_add(root_transforms, scatter_world);
+        start_batch_count := scene_batches.count;
         scene_geo_append_model_instances(*scene_batches, instances_cpu, *scene_geo, model_index, root_transforms.*, tint = .{0.92, 0.9, 0.88, 1.0});
+        append_pick_ids_for_new_batches(start_batch_count, 0);
+        append_compiled_node_indices_for_new_batches(start_batch_count, -1);
 
         base_shape := get_or_create_collider_base_shape(collider_model_indices, model_index);
         scaled_shape := Physics.create_scaled_shape(base_shape, asset_import_scale(asset) * model_scale);
@@ -1056,6 +1244,8 @@ init_player_from_compiled_node :: (instances_cpu: *[..]Scene_Instance, total_ski
             batch.mesh_index = mesh_index;
             batch.first_instance = cast(u32) instances_cpu.count;
             batch.instance_count = 1;
+            array_add(*batch_pick_object_ids, 0);
+            array_add(*batch_compiled_node_indices, -1);
 
             instance_index := cast(u32) instances_cpu.count;
             array_add(instances_cpu, .{
@@ -1114,6 +1304,8 @@ init_player_from_compiled_node :: (instances_cpu: *[..]Scene_Instance, total_ski
                         batch.mesh_index = mesh_index;
                         batch.first_instance = cast(u32) instances_cpu.count;
                         batch.instance_count = 1;
+                        array_add(*batch_pick_object_ids, 0);
+                        array_add(*batch_compiled_node_indices, -1);
 
                         instance_index := cast(u32) instances_cpu.count;
                         array_add(instances_cpu, .{
@@ -1174,7 +1366,9 @@ append_mediapipe_demo_instances :: (instances_cpu: *[..]Scene_Instance, total_sk
                 batch.mesh_index = mesh_index;
                 batch.first_instance = cast(u32) instances_cpu.count;
                 batch.instance_count = 1;
+                array_add(*batch_pick_object_ids, 0);
                 array_add(*shadow_skip_batch, !mediapipe_body_casts_shadows);
+                array_add(*batch_compiled_node_indices, -1);
 
                 instance_index := cast(u32) instances_cpu.count;
                 array_add(instances_cpu, .{
@@ -1216,7 +1410,9 @@ append_mediapipe_demo_instances :: (instances_cpu: *[..]Scene_Instance, total_sk
                 batch.mesh_index = cast(u32) mediapipe_face_mesh_index;
                 batch.first_instance = cast(u32) instances_cpu.count;
                 batch.instance_count = 1;
+                array_add(*batch_pick_object_ids, 0);
                 array_add(*shadow_skip_batch, !mediapipe_face_casts_shadows);
+                array_add(*batch_compiled_node_indices, -1);
 
                 instance_index := cast(u32) instances_cpu.count;
                 array_add(instances_cpu, .{
@@ -1486,11 +1682,15 @@ scene_rebuild_manip_objects :: () {
     }
 }
 
-scene_apply_manip_back_to_doc :: () {
+scene_apply_manip_live_to_runtime :: () {
     if scene_manip_ctx.selected_index < 0 return;
     selected := cast(s64) scene_manip_ctx.selected_index;
     if selected >= scene_manip_objects.count return;
+
     node_index := scene_manip_node_indices[selected];
+    compiled_index := find_compiled_node_for_source(scene_doc.source_path, scene_doc.nodes[node_index].name);
+    if compiled_index < 0 return;
+
     obj := scene_manip_objects[selected];
     doc_node := *scene_doc.nodes[node_index];
 
@@ -1507,11 +1707,43 @@ scene_apply_manip_back_to_doc :: () {
     doc_node.position = local_pos;
     doc_node.rotation_deg = local_rot_deg;
     doc_node.scale = local_scale;
-    scene_dirty = true;
 
-    Scene_File.deinit(*compiled_scene);
-    compiled_scene = Scene_File.recompile_scene_document(scene_doc);
-    rebuild_scene_runtime();
+    compiled_node := *compiled_scene.nodes[compiled_index];
+    compiled_node.local_position = local_pos;
+    compiled_node.local_rotation_deg = local_rot_deg;
+    compiled_node.local_scale = local_scale;
+    scene_recompute_compiled_worlds();
+    scene_refresh_runtime_instance_worlds_from_compiled();
+    scene_dirty = true;
+}
+
+scene_refresh_runtime_instance_worlds_from_compiled :: () {
+    for batch: scene_batches {
+        if it_index >= batch_compiled_node_indices.count continue;
+        compiled_index := batch_compiled_node_indices[it_index];
+        if compiled_index < 0 || compiled_index >= compiled_scene.nodes.count continue;
+        compiled_node := compiled_scene.nodes[compiled_index];
+        instance_world := compiled_node.world;
+        if compiled_node.asset_index >= 0 {
+            instance_world = instance_world * compiled_asset_import_matrix(compiled_scene.assets[compiled_node.asset_index]);
+        }
+        for instance_i: 0..batch.instance_count-1 {
+            scene_instances.cpu[batch.first_instance + instance_i].world = instance_world;
+        }
+    }
+}
+
+scene_recompute_compiled_worlds :: () {
+    for node_index: 0..compiled_scene.nodes.count-1 {
+        node := *compiled_scene.nodes[node_index];
+        local := make_trs_matrix(node.local_position, quat_from_euler_deg(node.local_rotation_deg), node.local_scale);
+        node.world = local;
+        if node.parent_index >= 0 node.world = compiled_scene.nodes[node.parent_index].world * local;
+    }
+}
+
+scene_apply_manip_back_to_doc :: () {
+    scene_apply_manip_live_to_runtime();
     scene_manip_objects_dirty = true;
 }
 
@@ -1549,6 +1781,94 @@ find_compiled_node_for_source :: (source_path: string, node_name: string) -> s32
         if it.source_path == source_path && it.name == node_name return cast(s32) it_index;
     }
     return -1;
+}
+
+append_pick_ids_for_new_batches :: (start_batch_count: s64, object_id: u32) {
+    while batch_pick_object_ids.count < start_batch_count array_add(*batch_pick_object_ids, 0);
+    while batch_pick_object_ids.count < scene_batches.count array_add(*batch_pick_object_ids, object_id);
+}
+
+append_compiled_node_indices_for_new_batches :: (start_batch_count: s64, compiled_node_index: s32) {
+    while batch_compiled_node_indices.count < start_batch_count array_add(*batch_compiled_node_indices, -1);
+    while batch_compiled_node_indices.count < scene_batches.count array_add(*batch_compiled_node_indices, compiled_node_index);
+}
+
+compiled_node_pick_object_id :: (compiled_node_index: s32) -> u32 {
+    if compiled_node_index < 0 || compiled_node_index >= compiled_scene.nodes.count return 0;
+    node := compiled_scene.nodes[compiled_node_index];
+    if node.source_kind != .ROOT_SCENE return 0;
+    if node.source_node_index < 0 || node.source_node_index >= scene_doc.nodes.count return 0;
+    return cast(u32) node.source_node_index + 1;
+}
+
+queue_scene_pick_request :: (mx: s32, my: s32) {
+    if scene_pick_view == 0 || scene_pick_w == 0 || scene_pick_h == 0 return;
+    scene_pick_request_x = clamp(cast(s64) mx, 0, cast(s64) scene_pick_w - 1);
+    flipped_y := cast(s64) scene_pick_h - 1 - cast(s64) my;
+    scene_pick_request_y = clamp(flipped_y, 0, cast(s64) scene_pick_h - 1);
+    scene_pick_pending = true;
+    scene_pick_render_this_frame = true;
+    scene_pick_request_frame = cast(s64) gpu_submission_frame_index() + 1;
+    scene_pick_request_count += 1;
+    scene_pick_last_request_frame = scene_pick_request_frame;
+}
+
+process_scene_pick_result_if_ready :: () {
+    if !scene_pick_pending || scene_pick_view == 0 return;
+    if gpu_completed_submission_frame_index() < scene_pick_request_frame return;
+
+    bytes_per_row := cast(s64) scene_pick_w * 4;
+    total_bytes := bytes_per_row * cast(s64) scene_pick_h;
+    pixels := NewArray(total_bytes, u8);
+    defer array_free(pixels);
+
+    if !gpu_readback_texture_view_bgra8(scene_pick_view, pixels, bytes_per_row) {
+        scene_pick_pending = false;
+        scene_pick_render_this_frame = false;
+        scene_pick_request_frame = -1;
+        return;
+    }
+
+    offset := scene_pick_request_y * bytes_per_row + scene_pick_request_x * 4;
+    p := pixels.data + offset;
+    object_id := cast(u32) p[2] | (cast(u32) p[1] << 8) | (cast(u32) p[0] << 16) | (cast(u32) p[3] << 24);
+    log("unpacked object_id from pick texture: %", object_id);
+    scene_pick_apply_object_id(object_id);
+    scene_pick_pending = false;
+    scene_pick_render_this_frame = false;
+    scene_pick_request_frame = -1;
+}
+
+scene_pick_apply_object_id :: (object_id: u32) {
+    scene_pick_last_object_id = object_id;
+    scene_pick_apply_count += 1;
+    scene_pick_last_apply_frame = cast(s64) gpu_completed_submission_frame_index();
+    scene_pick_last_applied_x = scene_pick_request_x;
+    scene_pick_last_applied_y = scene_pick_request_y;
+    if scene_manip_objects_dirty {
+        scene_rebuild_manip_objects();
+        scene_manip_objects_dirty = false;
+    }
+    scene_manip_ctx.active = false;
+    scene_manip_ctx.active_kind = .NONE;
+    scene_manip_ctx.active_axis = -1;
+    scene_manip_ctx.active_plane = -1;
+
+    if object_id == 0 {
+        scene_pick_last_scene_node_index = -1;
+        scene_manip_ctx.selected_index = -1;
+        return;
+    }
+
+    node_index := cast(s32) object_id - 1;
+    scene_pick_last_scene_node_index = node_index;
+    scene_manip_ctx.selected_index = -1;
+    for scene_manip_node_indices {
+        if it == node_index {
+            scene_manip_ctx.selected_index = cast(s32) it_index;
+            return;
+        }
+    }
 }
 
 compiled_node_is_under_player_root :: (node_index: s32) -> bool {
@@ -1592,6 +1912,23 @@ scene_ray_intersect_plane :: (ray_origin: Vector3, ray_dir: Vector3, plane_origi
         return false, .{};
     }
     return true, ray_origin + ray_dir * t;
+}
+
+metal_stage_entry_name :: (metal: []u8, stage_keyword: string) -> string {
+    source := cast(string) metal;
+    stage_pattern := tprint("% ", stage_keyword);
+    stage_index := String.find_index_from_left(source, stage_pattern);
+    assert(stage_index >= 0, "Failed to find Metal stage keyword '%' in shader source.", stage_keyword);
+
+    token_start := stage_index + stage_pattern.count;
+    while token_start < source.count && source[token_start] == #char " " token_start += 1;
+    while token_start < source.count && source[token_start] != #char " " token_start += 1; // skip return type
+    while token_start < source.count && source[token_start] == #char " " token_start += 1;
+
+    token_end := token_start;
+    while token_end < source.count && source[token_end] != #char "(" && source[token_end] != #char " " token_end += 1;
+    assert(token_end > token_start, "Failed to parse Metal % entry point name.", stage_keyword);
+    return string.{count = token_end - token_start, data = source.data + token_start};
 }
 
 SCENE_ROOT_PATH :: "./scenes/model_scene.scene";
@@ -1666,7 +2003,7 @@ init_ground_plane :: (ground: Scene_File.Scene_Procedural_Ground_Desc) {
         sun_params = .{model_scene_sun_strength, time_of_day, 0.0, 0.0},
         camera_pos = scene_camera.position,
         material_index = 0,
-        sampler_index = cast(u32) ground_sampler - 1,
+        object_id = 0,
         mesh_base_vertex = 0,
         skin_matrix_count = 0,
         morph_target_count = 0,
@@ -1837,6 +2174,13 @@ load_texture_rgba8 :: (path: string) -> Gpu_Texture, Gpu_Texture_View {
 
     view := gpu_texture_view(texture);
     return texture, view;
+}
+
+toggle_control_mode :: () {
+    if #complete control_mode == {
+    case .Player; control_mode = .Editor;
+    case .Editor; control_mode = .Player;
+    }
 }
 
 #load "../character_controller.jai";

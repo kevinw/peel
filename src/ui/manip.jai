@@ -133,10 +133,6 @@ manip_update :: (ctx: *Manip_Context, gizmo_ctx: *Gizmo.Gizmo_Context, objects: 
         return result;
     }
 
-    for objects {
-        draw_object_wire(gizmo_ctx, it, 1.0, it.color, 2.0);
-    }
-
     if frame.viewport.x <= 1.0 || frame.viewport.y <= 1.0 {
         draw_handles(ctx, gizmo_ctx, objects, frame);
         return result;
