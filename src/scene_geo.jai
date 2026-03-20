@@ -36,7 +36,8 @@ Scene_Mesh :: struct {
     skin_bone_count: u32;
     morph_target_start: u32;
     morph_target_count: u32;
-    _pad0: u32;
+    lod_mesh_start: u32;
+    lod_mesh_count: u32;
 }
 
 Scene_Node :: struct {
@@ -517,7 +518,7 @@ compute_model_bounds_from_geo :: (geo: *Scene_Geo, model_index: s32) -> Scene_Bo
 
 Hash_Table :: #import "Hash_Table";
 using,only(Table, table_find, table_reset, table_set) _ :: Hash_Table;
-IMPORTED_SCENE_CACHE_VERSION : u32 : 14;
+IMPORTED_SCENE_CACHE_VERSION : u32 : 15;
 IMPORTED_SCENE_CACHE_MAGIC : u32 : 0x53474d44; // SGMD
 
 imported_scene_cache_path :: (model_paths: []string) -> string {
@@ -1071,6 +1072,9 @@ append_ai_mesh :: (
         morph_target_count = cast(u32) imported.morph_targets.count - morph_target_start,
     });
 
+    mesh_index := cast(s32) imported.meshes.count - 1;
+    build_static_mesh_lods(imported, mesh_index);
+
     if mesh.mNumAnimMeshes == 0 && ai.to_string(mesh.mName).count > 0 {
         table_set(mesh_name_to_index, ai.to_string(mesh.mName), cast(s32) imported.meshes.count - 1);
     }
@@ -1126,6 +1130,84 @@ generate_missing_normals :: (vertices: []Scene_Vertex, indices: []u32, first_ind
         idx := indices[i];
         normal := normalize(Vector3.{vertices[idx].normal.x, vertices[idx].normal.y, vertices[idx].normal.z});
         vertices[idx].normal = .{normal.x, normal.y, normal.z, 0.0};
+    }
+}
+
+build_static_mesh_lods :: (imported: *Imported_Scene, mesh_index: s32) {
+    if mesh_index < 0 || mesh_index >= imported.meshes.count return;
+    mesh := *imported.meshes[mesh_index];
+    if mesh.skin_bone_count != 0 return;
+    if mesh.morph_target_count != 0 return;
+    if mesh.index_count < 192 return;
+
+    target_ratios := float.[0.45, 0.18];
+    target_errors := float.[0.015, 0.035];
+
+    source_indices := NewArray(mesh.index_count, u32);
+    defer array_free(source_indices);
+    for local_index: 0..cast(s64) mesh.index_count-1 {
+        source_indices[local_index] = imported.indices[mesh.first_index + local_index] - mesh.base_vertex;
+    }
+    vertex_positions := cast(*float)(imported.vertices.data + mesh.base_vertex);
+    vertex_positions_stride := cast(u64) size_of(Scene_Vertex);
+    lod_mesh_start := cast(u32) imported.meshes.count;
+    lod_mesh_count: u32;
+
+    for ratio, lod_i: target_ratios {
+        target_index_count := cast(u64) max(36.0, floor(cast(float) mesh.index_count * ratio / 3.0) * 3.0);
+        if target_index_count >= cast(u64) source_indices.count continue;
+
+        simplified := NewArray(source_indices.count, u32);
+        defer array_free(simplified);
+        result_error: float;
+        simplified_count := meshopt.simplify(
+            simplified.data,
+            source_indices.data,
+            cast(u64) source_indices.count,
+            vertex_positions,
+            cast(u64) mesh.vertex_count,
+            vertex_positions_stride,
+            target_index_count,
+            target_errors[lod_i],
+            0,
+            *result_error);
+        if simplified_count < 36 continue;
+        simplified_count = (simplified_count / 3) * 3;
+        if simplified_count < 36 continue;
+        if simplified_count >= cast(u64) source_indices.count continue;
+
+        optimized := NewArray(cast(s64) simplified_count, u32);
+        defer array_free(optimized);
+        meshopt.optimizeVertexCache(
+            optimized.data,
+            simplified.data,
+            simplified_count,
+            cast(u64) mesh.vertex_count);
+
+        lod_first_index := cast(u32) imported.indices.count;
+        for 0..cast(s64) simplified_count-1 {
+            array_add(*imported.indices, optimized[it] + mesh.base_vertex);
+        }
+
+        array_add(*imported.meshes, .{
+            base_vertex = mesh.base_vertex,
+            vertex_count = mesh.vertex_count,
+            first_index = lod_first_index,
+            index_count = cast(u32) simplified_count,
+            material_index = mesh.material_index,
+            skin_bone_start = 0,
+            skin_bone_count = 0,
+            morph_target_start = 0,
+            morph_target_count = 0,
+            lod_mesh_start = 0,
+            lod_mesh_count = 0,
+        });
+        lod_mesh_count += 1;
+    }
+
+    if lod_mesh_count > 0 {
+        imported.meshes[mesh_index].lod_mesh_start = lod_mesh_start;
+        imported.meshes[mesh_index].lod_mesh_count = lod_mesh_count;
     }
 }
 
@@ -1596,6 +1678,7 @@ File_Utilities :: #import "File_Utilities";
 using File_Utilities;
 Hash :: #import "Hash";
 using Hash;
+meshopt :: #import "meshoptimizer";
 #import "Math";
 #import "stb_image";
 

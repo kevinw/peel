@@ -7,6 +7,77 @@ Draw_Batch :: struct {
     instance_count: u32;
 }
 
+Indexed_Indirect_Draw_Args :: struct #type_info_none {
+    vertex_count: u32;
+    instance_count: u32;
+    vertex_start: u32;
+    base_instance: u32;
+}
+
+Enemy_Collider_Kind :: enum u8 {
+    SPHERE;
+    CAPSULE;
+}
+
+Enemy_Spawn_Params :: struct {
+    enabled: bool = true;
+    target_alive: s32 = 10;
+    spawn_rate: float = 12.0;
+    spawn_radius_min: float = 8.0;
+    spawn_radius_max: float = 28.0;
+    despawn_radius: float = 88.0;
+    move_speed: float = 2.9;
+    climb_speed_ratio: float = 0.75;
+    min_head_size: float = 0.78;
+    max_head_size: float = 1.28;
+    touch_damage_per_second: float = 11.0;
+}
+
+Auto_Fire_Params :: struct {
+    enabled: bool = true;
+    shots_per_second: float = 2.0;
+    projectile_speed: float = 18.0;
+    projectile_radius: float = 0.18;
+    projectile_life: float = 2.0;
+}
+
+Enemy_Runtime :: struct {
+    active: bool;
+    body_id: u32;
+    shape: *Shape;
+    hp: float;
+    hit_flash_t: float;
+    yaw: float;
+    visual_scale: float;
+    collider_scale: float;
+    collider_kind: Enemy_Collider_Kind;
+    _pad0: [3]u8;
+    tint: Vector4;
+}
+
+Projectile_Runtime :: struct {
+    active: bool;
+    _pad0: [3]u8;
+    life_remaining: float;
+    position: Vector3;
+    velocity: Vector3;
+}
+
+Enemy_Render_Mesh :: struct {
+    node_index: s32;
+    base_mesh_index: u32;
+    lod_mesh_start: u32;
+    lod_mesh_count: u32;
+}
+
+Enemy_Draw_Group :: struct {
+    render_mesh_index: u32;
+    lod_level: u32;
+    mesh_index: u32;
+    first_instance: u32;
+    instance_count: u32;
+}
+
 Animated_Batch :: struct {
     batch_index: s32;
     node_index: s32;
@@ -76,6 +147,10 @@ scene_instances: Gpu_View(Scene_Instance);
 scene_draw_params: Gpu_View(Scene_Draw_Params_CPU);
 scene_skin_matrices: Gpu_View(Vector4);
 scene_morph_weights: Gpu_View(float);
+enemy_gpu_arena: Gpu_Arena;
+enemy_instances: Gpu_View(Scene_Instance);
+enemy_draw_params: Gpu_View(Scene_Draw_Params_CPU);
+enemy_indirect_args: Gpu_View(Indexed_Indirect_Draw_Args);
 scene_depth_texture: Gpu_Texture;
 scene_depth_view: Gpu_Texture_View;
 scene_depth_w: u32;
@@ -103,8 +178,8 @@ debug_pick_params: Gpu_Buffer(Scene_Draw_Params_CPU);
 grass_instance_count: u32;
 render_grass: bool = true;
 scene_shadows_enabled: bool = true;
-mediapipe_body_casts_shadows: bool;
-mediapipe_face_casts_shadows: bool;
+mediapipe_body_casts_shadows: bool = true;
+mediapipe_face_casts_shadows: bool = true;
 ground_physics_body: u32;
 ground_physics_body_valid: bool;
 stone_physics_bodies: [..]u32;
@@ -118,6 +193,7 @@ mediapipe_demo_instances: [..]Mediapipe_Demo_Instance;
 mediapipe_face_instances: [..]Mediapipe_Face_Instance;
 mediapipe_body_model_index: s32 = -1;
 mediapipe_face_model_index: s32 = -1;
+enemy_mask_model_index: s32 = -1;
 mediapipe_body_mesh_index: s32 = -1;
 mediapipe_face_mesh_index: s32 = -1;
 mediapipe_face_node_index: s32 = -1;
@@ -165,6 +241,30 @@ gizmo_ctx: Gizmo.Gizmo_Context;
 gizmo_render_ctx: Gizmo_Render.Gizmo_Render_Context;
 gizmo_overlay_ctx: Gizmo.Gizmo_Context;
 gizmo_overlay_render_ctx: Gizmo_Render.Gizmo_Render_Context;
+enemy_spawn_params: Enemy_Spawn_Params = .{};
+auto_fire_params: Auto_Fire_Params = .{};
+player_health: float = 100.0;
+enemy_spawn_accumulator: float;
+player_shot_accumulator: float;
+enemy_collider_radius: float = 0.45;
+enemy_collider_half_height: float = 0.0;
+enemy_collider_kind: Enemy_Collider_Kind = .SPHERE;
+enemy_model_scale: float = 1.0;
+enemy_model_root_offset_y: float;
+enemy_shape: *Shape;
+enemy_max_count: s32 = 256;
+enemy_alive_count: s32;
+enemy_runtime: [..]Enemy_Runtime;
+projectile_runtime: [..]Projectile_Runtime;
+enemy_render_meshes: [..]Enemy_Render_Mesh;
+enemy_draw_groups: [..]Enemy_Draw_Group;
+enemy_visible_count_debug: s32;
+enemy_render_instance_count_debug: s32;
+projectile_active_count: s32;
+enemy_debug_next_log_time: float;
+render_enemy_masks: bool = true;
+enemy_direct_draw_debug: bool = true;
+projectile_max_count: s32 = 256;
 
 scene_camera: Editor_Camera = .{
     position = .{0.0, 7.0, 12.5},
@@ -251,6 +351,10 @@ on_dll_init :: () {
     shadow_skip_batch.allocator = context.allocator;
     batch_pick_object_ids.allocator = context.allocator;
     batch_compiled_node_indices.allocator = context.allocator;
+    enemy_runtime.allocator = context.allocator;
+    projectile_runtime.allocator = context.allocator;
+    enemy_render_meshes.allocator = context.allocator;
+    enemy_draw_groups.allocator = context.allocator;
     scene_doc, compiled_scene = Scene_File.load_compiled_scene_cached(SCENE_ROOT_PATH);
     init_scene_geo_from_palette();
     rebuild_scene_runtime();
@@ -300,6 +404,10 @@ on_unload :: () {
     array_free(shadow_skip_batch);
     array_free(batch_pick_object_ids);
     array_free(batch_compiled_node_indices);
+    array_free(enemy_runtime);
+    array_free(projectile_runtime);
+    array_free(enemy_render_meshes);
+    array_free(enemy_draw_groups);
     array_free(animated_batches);
     array_free(scene_batches);
     scene_geo_deinit(*scene_geo);
@@ -328,6 +436,18 @@ tick :: () {
             }
             Checkbox("Render Grass", *render_grass);
             Checkbox("Scene Shadows", *scene_shadows_enabled);
+            Checkbox("Enemy Horde", *enemy_spawn_params.enabled);
+            Checkbox("Render Enemy Masks", *render_enemy_masks);
+            Checkbox("Enemy Direct Draw", *enemy_direct_draw_debug);
+            Checkbox("Auto Fire", *auto_fire_params.enabled);
+            Persist.SliderInt("Enemy Target", *enemy_spawn_params.target_alive, 0, enemy_max_count, "%d");
+            Persist.SliderFloat("Enemy Spawn Rate", *enemy_spawn_params.spawn_rate, 0.0, 600.0, "%.0f/s");
+            Persist.SliderFloat("Enemy Speed", *enemy_spawn_params.move_speed, 0.5, 6.0, "%.2f");
+            Persist.SliderFloat("Climb Speed Ratio", *enemy_spawn_params.climb_speed_ratio, 0.0, 1.5, "%.2f");
+            Persist.SliderFloat("Min Head Size", *enemy_spawn_params.min_head_size, 0.4, 1.5, "%.2f");
+            Persist.SliderFloat("Max Head Size", *enemy_spawn_params.max_head_size, 0.5, 2.0, "%.2f");
+            Persist.SliderFloat("Enemy Touch DPS", *enemy_spawn_params.touch_damage_per_second, 0.0, 40.0, "%.1f");
+            Persist.SliderFloat("Shots / Sec", *auto_fire_params.shots_per_second, 0.0, 10.0, "%.1f");
             if Checkbox("Mediapipe Body Casts Shadows", *mediapipe_body_casts_shadows) {
                 rebuild_scene_runtime();
             }
@@ -337,6 +457,9 @@ tick :: () {
             Checkbox("Show Shadow Debug", *show_shadow_debug);
             Checkbox("Show Pick Debug", *show_pick_debug);
             SliderFloat("Sun Strength", *model_scene_sun_strength, 0.0, 3.0, "%.2f");
+            Text("Player Health: %.1f", player_health);
+            Text("Enemies Alive: % / %", enemy_alive_count, enemy_spawn_params.target_alive);
+            Text("Projectiles: %", projectile_active_count);
 
             using Persist;
             Persist.SliderFloat("Time of Day", *time_of_day, 0.0, 1.0, "%.2f px");
@@ -483,10 +606,14 @@ tick :: () {
     Gizmo.begin_frame(*gizmo_ctx);
     Gizmo.begin_frame(*gizmo_overlay_ctx);
     character_controller_update_in_system(*running_lizard_controller, Physics.physics.system, desired_move, dt);
+    update_enemy_horde(dt);
     Physics.tick(dt);
+    update_auto_fire_and_projectiles(dt);
     if physics_gizmos_enabled {
         append_lizard_physics_gizmos();
+        append_enemy_debug_gizmos();
     }
+    append_projectile_gizmos();
 
     if control_mode == .Editor && dims_ok && win_w > 0 && win_h > 0 {
         if scene_manip_objects_dirty {
@@ -557,6 +684,18 @@ tick :: () {
     shadow_map.bias = 0.0035;
     shadow_map_update_view_proj(*shadow_map);
     shadow_binding := ifx scene_shadows_enabled then shadow_map_binding(*shadow_map) else Vector4.{0.0, 0.0, 2.0, 0.0};
+    refresh_enemy_horde_render_state(view_proj, shadow_binding, scene_camera.position);
+    if cast(float) time >= enemy_debug_next_log_time {
+        log("ENEMY_HORDE alive=% visible=% render_instances=% groups=% health=% target=% enabled=%",
+            enemy_alive_count,
+            enemy_visible_count_debug,
+            enemy_render_instance_count_debug,
+            enemy_draw_groups.count,
+            player_health,
+            enemy_spawn_params.target_alive,
+            enemy_spawn_params.enabled);
+        enemy_debug_next_log_time = cast(float) time + 1.0;
+    }
 
     if sky_draw_params.cpu != null {
         sky_draw_params.cpu.* = .{
@@ -706,6 +845,19 @@ tick :: () {
             params_gpu := scene_draw_params.gpu + (it_index * size_of(Scene_Draw_Params_CPU)).(Gpu_Ptr);
             draw_result = gpu_draw_instanced_direct(cmd_buff, params_gpu, mesh.index_count, batch.instance_count);
         }
+        if render_enemy_masks && enemy_draw_groups.count > 0 && enemy_draw_params.cpu.data != null && enemy_indirect_args.cpu.data != null {
+            for group: enemy_draw_groups {
+                if group.instance_count == 0 continue;
+                params_gpu := enemy_draw_params.gpu + (it_index * size_of(Scene_Draw_Params_CPU)).(Gpu_Ptr);
+                mesh := scene_geo.meshes[group.mesh_index];
+                if enemy_direct_draw_debug {
+                    draw_result = gpu_draw_instanced_direct(cmd_buff, params_gpu, mesh.index_count, group.instance_count);
+                } else {
+                    args_gpu := enemy_indirect_args.gpu + (it_index * size_of(Indexed_Indirect_Draw_Args)).(Gpu_Ptr);
+                    draw_result = gpu_draw_instanced_indirect(cmd_buff, params_gpu, params_gpu, args_gpu);
+                }
+            }
+        }
     }
 
     if scene_pick.render_this_frame && scene_pick.view != 0 {
@@ -800,8 +952,21 @@ tick :: () {
             params_gpu := scene_draw_params.gpu + (it_index * size_of(Scene_Draw_Params_CPU)).(Gpu_Ptr);
             gpu_draw_instanced_direct(cmd_buff, params_gpu, mesh.index_count, batch.instance_count);
         }
+        if render_enemy_masks && enemy_draw_groups.count > 0 && enemy_draw_params.cpu.data != null && enemy_indirect_args.cpu.data != null {
+            for group: enemy_draw_groups {
+                if group.instance_count == 0 continue;
+                params_gpu := enemy_draw_params.gpu + (it_index * size_of(Scene_Draw_Params_CPU)).(Gpu_Ptr);
+                mesh := scene_geo.meshes[group.mesh_index];
+                if enemy_direct_draw_debug {
+                    gpu_draw_instanced_direct(cmd_buff, params_gpu, mesh.index_count, group.instance_count);
+                } else {
+                    args_gpu := enemy_indirect_args.gpu + (it_index * size_of(Indexed_Indirect_Draw_Args)).(Gpu_Ptr);
+                    gpu_draw_instanced_indirect(cmd_buff, params_gpu, params_gpu, args_gpu);
+                }
+            }
+        }
 
-        should_draw_gizmos := physics_gizmos_enabled || control_mode == .Editor;
+        should_draw_gizmos := physics_gizmos_enabled || control_mode == .Editor || projectile_active_count > 0;
         if should_draw_gizmos {
             Gizmo_Render.gizmo_render_draw(*gizmo_render_ctx, cmd_buff, *gizmo_ctx, viewport, depth_mode = .TEST);
             Gizmo_Render.gizmo_render_draw(*gizmo_overlay_render_ctx, cmd_buff, *gizmo_overlay_ctx, viewport, depth_mode = .NONE);
@@ -866,8 +1031,12 @@ scene_rebuild_manip_objects :: () {
 #scope_file
 
 ensure_scene_depth_target :: (width: u32, height: u32) {
-    if width == 0 || height == 0 return;
-    if scene_depth_view != 0 && scene_depth_w == width && scene_depth_h == height return;
+    if width == 0 || height == 0 {
+        return;
+    }
+    if scene_depth_view != 0 && scene_depth_w == width && scene_depth_h == height {
+        return; // no change needed.
+    }
 
     res, scene_depth_texture= := gpu_create_texture(.{
         dimensions = .[width, height, 1],
@@ -890,6 +1059,39 @@ append_lizard_physics_gizmos :: () {
         color = .{1.0, 0.48, 0.18, 0.95},
         thickness = 2.0,
         head_size = 0.16);
+}
+
+append_enemy_debug_gizmos :: () {
+    drawn: s32;
+    for enemy_runtime {
+        if !it.active continue;
+        pos := cast,force(Vector3) BodyInterface_GetPosition(Physics.physics.body_interface, it.body_id);
+        scaled_collider_radius := enemy_collider_radius * it.collider_scale;
+        scaled_collider_half_height := enemy_collider_half_height * it.collider_scale;
+        Gizmo.draw_sphere(*gizmo_ctx, pos, scaled_collider_radius, color = .{1.0, 0.18, 0.18, 0.55}, thickness = 1.25);
+        if #complete it.collider_kind == {
+        case .CAPSULE;
+            top := pos + .{0.0, scaled_collider_half_height, 0.0};
+            bottom := pos - .{0.0, scaled_collider_half_height, 0.0};
+            Gizmo.draw_line(*gizmo_ctx, top, bottom, color = .{1.0, 0.3, 0.3, 0.4}, thickness = 1.0);
+        case .SPHERE;
+            //
+        }
+        drawn += 1;
+        if drawn >= 24 break;
+    }
+}
+
+append_projectile_gizmos :: () {
+    for projectile_runtime {
+        if !it.active continue;
+        Gizmo.draw_sphere(*gizmo_ctx, it.position, auto_fire_params.projectile_radius, color = .{0.98, 0.92, 0.38, 0.92}, thickness = 2.0);
+        vel_len := length(it.velocity);
+        if vel_len > 0.001 {
+            tail := it.position - it.velocity / vel_len * 0.3;
+            Gizmo.draw_line(*gizmo_ctx, tail, it.position, color = .{1.0, 0.78, 0.22, 0.72}, thickness = 2.0);
+        }
+    }
 }
 
 find_animated_batch_index_for_batch :: (batch_index: s32) -> s32 {
@@ -934,6 +1136,7 @@ rebuild_scene_runtime :: () {
     running_lizard_ground_y = 0.0;
     mediapipe_body_model_index = -1;
     mediapipe_face_model_index = -1;
+    enemy_mask_model_index = -1;
     mediapipe_body_mesh_index = -1;
     mediapipe_face_mesh_index = -1;
     mediapipe_face_node_index = -1;
@@ -951,6 +1154,11 @@ rebuild_scene_runtime :: () {
     mediapipe_body_shin_r_node_index = -1;
     autopilot_enabled = false;
     active_ground = .{};
+    enemy_alive_count = 0;
+    enemy_spawn_accumulator = 0.0;
+    player_shot_accumulator = 0.0;
+    player_health = 100.0;
+    projectile_active_count = 0;
 
     total_skin_matrix_count: s64 = 0;
     ground_enabled := false;
@@ -1004,7 +1212,15 @@ rebuild_scene_runtime :: () {
         }
     }
 
-    if ground_enabled init_ground_plane(active_ground);
+    if ground_enabled {
+        active_ground.size_x = max(active_ground.size_x, 120.0);
+        active_ground.size_z = max(active_ground.size_z, 120.0);
+        active_ground.render_grid_x = max(active_ground.render_grid_x, 160);
+        active_ground.render_grid_z = max(active_ground.render_grid_z, 160);
+        active_ground.physics_grid_x = max(active_ground.physics_grid_x, 128);
+        active_ground.physics_grid_z = max(active_ground.physics_grid_z, 128);
+        init_ground_plane(active_ground);
+    }
     while shadow_skip_batch.count < scene_batches.count array_add(*shadow_skip_batch, false);
     while batch_pick_object_ids.count < scene_batches.count array_add(*batch_pick_object_ids, 0);
     while batch_compiled_node_indices.count < scene_batches.count array_add(*batch_compiled_node_indices, -1);
@@ -1064,6 +1280,7 @@ rebuild_scene_runtime :: () {
         scene_draw_params.cpu[batch_index].skin_matrix_count = it.skin_matrix_count;
     }
 
+    init_enemy_horde_runtime();
     gpu_commit_residency();
 }
 
@@ -1122,6 +1339,32 @@ clear_scene_runtime_resources :: () {
     scene_draw_params = .{};
     scene_skin_matrices = .{};
     scene_morph_weights = .{};
+    if enemy_shape != null {
+        Shape_Destroy(enemy_shape);
+        enemy_shape = null;
+    }
+    if enemy_gpu_arena.cpu != null gpu_free_arena(enemy_gpu_arena);
+    enemy_gpu_arena = .{};
+    enemy_instances = .{};
+    enemy_draw_params = .{};
+    enemy_indirect_args = .{};
+    for enemy_runtime {
+        if !it.active continue;
+        Physics.destroy_body(it.body_id);
+        if it.shape != null && it.shape != enemy_shape Shape_Destroy(it.shape);
+    }
+    array_reset(*enemy_runtime);
+    array_reset(*projectile_runtime);
+    array_reset(*enemy_render_meshes);
+    array_reset(*enemy_draw_groups);
+    enemy_alive_count = 0;
+    projectile_active_count = 0;
+    player_shot_accumulator = 0.0;
+    enemy_collider_radius = 0.45;
+    enemy_collider_half_height = 0.0;
+    enemy_collider_kind = .SPHERE;
+    enemy_model_scale = 1.0;
+    enemy_model_root_offset_y = 0.0;
 
     array_reset(*running_lizard_instances);
     array_reset(*mediapipe_demo_instances);
@@ -1588,6 +1831,508 @@ scale_model_to_target_extent :: (model_index: s32, target_extent: float) -> floa
     return ifx max_extent > 0.0 then target_extent / max_extent else 1.0;
 }
 
+init_enemy_horde_runtime :: () {
+    enemy_mask_model_index = scene_geo_model_index_by_name(*scene_geo, "mask");
+    if enemy_mask_model_index < 0 return;
+
+    bounds := scene_geo_model_bounds(*scene_geo, enemy_mask_model_index);
+    size := bounds.max - bounds.min;
+    enemy_model_scale = scale_model_to_target_extent(enemy_mask_model_index, 3.1);
+    scaled_size := size * enemy_model_scale;
+    diameter_xz := max(scaled_size.x, scaled_size.z);
+    enemy_collider_radius = max(0.24, diameter_xz * 0.32);
+    enemy_collider_half_height = max(0.0, (scaled_size.y - enemy_collider_radius * 2.0) * 0.5);
+    enemy_collider_kind = ifx enemy_collider_half_height > enemy_collider_radius * 0.4 then .CAPSULE else .SPHERE;
+    enemy_model_root_offset_y = -bounds.min.y * enemy_model_scale - (enemy_collider_radius + enemy_collider_half_height) + 0.75;
+    if #complete enemy_collider_kind == {
+    case .SPHERE;
+        enemy_shape = cast(*Shape) SphereShape_Create(enemy_collider_radius);
+    case .CAPSULE;
+        enemy_shape = cast(*Shape) CapsuleShape_Create(enemy_collider_half_height, enemy_collider_radius);
+    }
+    assert(enemy_shape != null, "Failed to create enemy collider shape.");
+
+    array_resize(*enemy_runtime, enemy_max_count);
+    for *enemy_runtime it.* = .{};
+    array_resize(*projectile_runtime, projectile_max_count);
+    for *projectile_runtime it.* = .{};
+
+    array_reset(*enemy_render_meshes);
+    mask_model := scene_geo.models[enemy_mask_model_index];
+    for node_index: mask_model.node_start .. mask_model.node_start + mask_model.node_count - 1 {
+        node := scene_geo.nodes[node_index];
+        if node.mesh_ref_count == 0 continue;
+        for mesh_ref_offset: 0..node.mesh_ref_count-1 {
+            mesh_index := scene_geo.node_mesh_refs[node.first_mesh_ref + mesh_ref_offset];
+            mesh := scene_geo.meshes[mesh_index];
+            array_add(*enemy_render_meshes, .{
+                node_index = cast(s32) node_index,
+                base_mesh_index = mesh_index,
+                lod_mesh_start = mesh.lod_mesh_start,
+                lod_mesh_count = mesh.lod_mesh_count,
+            });
+        }
+    }
+    if enemy_render_meshes.count == 0 return;
+    log("ENEMY_HORDE init model=% render_meshes=% collider=% radius=% half_height=% scale=%",
+        scene_geo.models[enemy_mask_model_index].name,
+        enemy_render_meshes.count,
+        enemy_collider_kind,
+        enemy_collider_radius,
+        enemy_collider_half_height,
+        enemy_model_scale);
+
+    array_reset(*enemy_draw_groups);
+    max_group_count: s64;
+    for enemy_render_meshes max_group_count += 1 + cast(s64) it.lod_mesh_count;
+    for render_mesh: enemy_render_meshes {
+        lod_count := 1 + cast(s32) render_mesh.lod_mesh_count;
+        for lod_level: 0..lod_count-1 {
+            mesh_index := render_mesh.base_mesh_index;
+            if lod_level > 0 mesh_index = render_mesh.lod_mesh_start + cast(u32) (lod_level - 1);
+            array_add(*enemy_draw_groups, .{
+                render_mesh_index = cast(u32) it_index,
+                lod_level = cast(u32) lod_level,
+                mesh_index = mesh_index,
+            });
+        }
+    }
+
+    max_instance_count := cast(s64) enemy_max_count * enemy_render_meshes.count;
+    arena_bytes :=
+        max(cast(s64) 1, max_instance_count) * size_of(Scene_Instance) +
+        max(cast(s64) 1, enemy_draw_groups.count) * size_of(Scene_Draw_Params_CPU) +
+        max(cast(s64) 1, enemy_draw_groups.count) * size_of(Indexed_Indirect_Draw_Args) +
+        1024;
+    enemy_gpu_arena = gpu_make_arena(arena_bytes, label = "model scene enemy arena");
+    assert(enemy_gpu_arena.cpu != null, "Failed to create enemy arena.");
+    enemy_instances = gpu_alloc_view(*enemy_gpu_arena, Scene_Instance, max_instance_count);
+    enemy_draw_params = gpu_alloc_view(*enemy_gpu_arena, Scene_Draw_Params_CPU, enemy_draw_groups.count);
+    enemy_indirect_args = gpu_alloc_view(*enemy_gpu_arena, Indexed_Indirect_Draw_Args, enemy_draw_groups.count);
+
+    for group, group_index: enemy_draw_groups {
+        mesh := scene_geo.meshes[group.mesh_index];
+        enemy_draw_params.cpu[group_index] = .{
+            vertices = scene_geo.vertices.gpu,
+            indices = scene_geo.indices.gpu + (mesh.first_index * size_of(u32)).(Gpu_Ptr),
+            materials = scene_geo.materials.gpu,
+            instances = 0,
+            morph_vertex_deltas = 0,
+            morph_weights = 0,
+            skin_matrices = 0,
+            view_proj = Matrix4_Identity,
+            light_dir = normalize(Vector3.{0.35, -1.0, 0.25}),
+            sun_params = .{model_scene_sun_strength, time_of_day, 0.0, 0.0},
+            camera_pos = scene_camera.position,
+            material_index = mesh.material_index,
+            object_id = 0,
+            mesh_base_vertex = mesh.base_vertex,
+            skin_matrix_count = 0,
+            morph_target_count = 0,
+            morph_vertex_count = 0,
+        };
+        enemy_indirect_args.cpu[group_index] = .{
+            vertex_count = mesh.index_count,
+            instance_count = 0,
+            vertex_start = 0,
+            base_instance = 0,
+        };
+    }
+
+    PhysicsSystem_OptimizeBroadPhase(Physics.physics.system);
+}
+
+spawn_enemy :: (spawn_index: s32) -> bool {
+    if enemy_shape == null || !enemy_spawn_params.enabled return false;
+    if spawn_index < 0 || spawn_index >= enemy_runtime.count return false;
+    if enemy_runtime[spawn_index].active return false;
+
+    player_pos := character_controller_position(*running_lizard_controller);
+    spawn_seed := cast(u32) spawn_index * 2654435761 + cast(u32) floor(time * 11.0);
+    spawn_angle := running_lizard_controller.facing_yaw + lerp(-1.9, 1.9, hash01(cast(u32) floor(time * 37.0) + cast(u32) spawn_index * 17));
+    spawn_radius := lerp(enemy_spawn_params.spawn_radius_min, enemy_spawn_params.spawn_radius_max,
+        hash01(spawn_seed));
+    spawn_pos := player_pos + .{cos(spawn_angle) * spawn_radius, 0.0, sin(spawn_angle) * spawn_radius};
+    min_head_size := min(enemy_spawn_params.min_head_size, enemy_spawn_params.max_head_size);
+    max_head_size := max(enemy_spawn_params.min_head_size, enemy_spawn_params.max_head_size);
+    size_variation := lerp(min_head_size, max_head_size, hash01(spawn_seed ^ 0x9e3779b9));
+    scaled_collider_radius := enemy_collider_radius * size_variation;
+    scaled_collider_half_height := enemy_collider_half_height * size_variation;
+    spawn_pos.y = ground_height_at(active_ground, spawn_pos.x, spawn_pos.z) + scaled_collider_radius + scaled_collider_half_height + 0.04;
+    spawn_pos_jph := cast,force(RVec3) spawn_pos;
+    hue_variation := hash01(spawn_seed ^ 0x85ebca6b);
+    brightness_variation := lerp(0.88, 1.18, hash01(spawn_seed ^ 0xc2b2ae35));
+    tint := lerp(Vector4.{0.92, 0.76, 0.72, 1.0}, Vector4.{1.58, 0.46, 0.36, 1.0}, hue_variation) * brightness_variation;
+    tint.w = 1.0;
+
+    enemy_body_shape := enemy_shape;
+    if abs(size_variation - 1.0) > 0.001 {
+        scale_vec := Vec3.{size_variation, size_variation, size_variation};
+        enemy_body_shape = cast(*Shape) ScaledShape_Create(enemy_shape, *scale_vec);
+        assert(enemy_body_shape != null, "Enemy scaled shape creation failed.");
+    }
+
+    body_settings := BodyCreationSettings_Create3(enemy_body_shape, *spawn_pos_jph, null, .Dynamic, Physics.Layers.MOVING);
+    assert(body_settings != null, "Enemy body settings creation failed.");
+    defer BodyCreationSettings_Destroy(body_settings);
+    BodyCreationSettings_SetGravityFactor(body_settings, 0.0);
+    BodyCreationSettings_SetFriction(body_settings, 0.0);
+    BodyCreationSettings_SetLinearDamping(body_settings, 8.0);
+    BodyCreationSettings_SetAngularDamping(body_settings, 8.0);
+    BodyCreationSettings_SetAllowedDOFs(body_settings,
+        cast(AllowedDOFs) (AllowedDOFs.TranslationX | AllowedDOFs.TranslationY | AllowedDOFs.TranslationZ | AllowedDOFs.RotationY));
+    BodyCreationSettings_SetMotionQuality(body_settings, .LinearCast);
+
+    body_id := BodyInterface_CreateAndAddBody(Physics.physics.body_interface, body_settings, .Activate);
+    BodyInterface_SetUserData(Physics.physics.body_interface, body_id, cast(u64) spawn_index + 1);
+
+    enemy_runtime[spawn_index] = .{
+        active = true,
+        body_id = body_id,
+        shape = enemy_body_shape,
+        hp = 3.0,
+        hit_flash_t = 0.0,
+        yaw = spawn_angle + PI,
+        visual_scale = enemy_model_scale * size_variation,
+        collider_scale = size_variation,
+        collider_kind = enemy_collider_kind,
+        tint = tint,
+    };
+    enemy_alive_count += 1;
+    return true;
+}
+
+update_enemy_horde :: (dt: float) {
+    if enemy_runtime.count == 0 return;
+    enemy_spawn_params.target_alive = clamp(enemy_spawn_params.target_alive, 0, enemy_max_count);
+    enemy_spawn_params.climb_speed_ratio = max(0.0, enemy_spawn_params.climb_speed_ratio);
+    if enemy_spawn_params.min_head_size > enemy_spawn_params.max_head_size {
+        temp := enemy_spawn_params.min_head_size;
+        enemy_spawn_params.min_head_size = enemy_spawn_params.max_head_size;
+        enemy_spawn_params.max_head_size = temp;
+    }
+
+    player_pos := character_controller_position(*running_lizard_controller);
+    active_contacts: s32;
+    for *enemy_runtime {
+        if !it.active continue;
+        it.hit_flash_t = max(0.0, it.hit_flash_t - dt);
+
+        body_pos := cast,force(Vector3) BodyInterface_GetPosition(Physics.physics.body_interface, it.body_id);
+        scaled_collider_radius := enemy_collider_radius * it.collider_scale;
+        scaled_collider_half_height := enemy_collider_half_height * it.collider_scale;
+        to_player := player_pos - body_pos;
+        planar_to_player := Vector3.{to_player.x, 0.0, to_player.z};
+        planar_dist := length(planar_to_player);
+        if planar_dist > enemy_spawn_params.despawn_radius {
+            Physics.destroy_body(it.body_id);
+            it.* = .{};
+            enemy_alive_count -= 1;
+            continue;
+        }
+
+        if planar_dist > 0.001 {
+            move_dir := planar_to_player / planar_dist;
+            desired_ground_y := ground_height_at(active_ground, body_pos.x, body_pos.z) + scaled_collider_radius + scaled_collider_half_height + 0.04;
+            target_vel := move_dir * enemy_spawn_params.move_speed;
+            actual_velocity: Vec3;
+            BodyInterface_GetLinearVelocity(Physics.physics.body_interface, it.body_id, *actual_velocity);
+            planar_velocity := Vector3.{actual_velocity.x, 0.0, actual_velocity.z};
+            planar_speed := length(planar_velocity);
+            vertical_correction := (desired_ground_y - body_pos.y) * 10.0;
+            climb_speed := enemy_spawn_params.move_speed * enemy_spawn_params.climb_speed_ratio;
+            is_blocked := planar_speed < enemy_spawn_params.move_speed * 0.55 && planar_dist > scaled_collider_radius * 1.5;
+            if is_blocked {
+                target_vel.y = max(vertical_correction, climb_speed);
+            } else {
+                target_vel.y = vertical_correction;
+            }
+            target_vel_jph := cast,force(Vec3) target_vel;
+            BodyInterface_SetLinearVelocity(Physics.physics.body_interface, it.body_id, *target_vel_jph);
+            desired_yaw := it.yaw;
+            if planar_speed > 0.05 {
+                facing_dir := planar_velocity / planar_speed;
+                desired_yaw = atan2(facing_dir.x, facing_dir.z);
+            } else {
+                desired_yaw = atan2(move_dir.x, move_dir.z);
+            }
+            it.yaw = smooth_yaw_towards(it.yaw, desired_yaw, dt, turn_speed = 12.0);
+            rot := quat_from_euler_deg(.{0.0, it.yaw * 180.0 / PI, 0.0});
+            rot_jph := cast,force(Quat) rot;
+            body_pos_jph := cast,force(RVec3) body_pos;
+            BodyInterface_SetPositionAndRotationWhenChanged(Physics.physics.body_interface, it.body_id, *body_pos_jph, *rot_jph, .Activate);
+        } else {
+            zero_vel := Vec3.{0.0, 0.0, 0.0};
+            BodyInterface_SetLinearVelocity(Physics.physics.body_interface, it.body_id, *zero_vel);
+        }
+
+        if running_lizard_controller.character != null && CharacterVirtual_HasCollidedWithBody(running_lizard_controller.character, it.body_id) {
+            active_contacts += 1;
+        }
+    }
+
+    if active_contacts > 0 && player_health > 0.0 {
+        player_health = max(0.0, player_health - cast(float) active_contacts * enemy_spawn_params.touch_damage_per_second * dt);
+    }
+
+    if !enemy_spawn_params.enabled return;
+
+    enemy_spawn_accumulator += enemy_spawn_params.spawn_rate * dt;
+    desired_spawns := cast(s32) floor(enemy_spawn_accumulator);
+    enemy_spawn_accumulator -= cast(float) desired_spawns;
+    if enemy_alive_count >= enemy_spawn_params.target_alive return;
+
+    spawns_remaining := min(desired_spawns, enemy_spawn_params.target_alive - enemy_alive_count);
+    for *enemy_runtime {
+        if spawns_remaining <= 0 break;
+        if it.active continue;
+        did_spawn := spawn_enemy(cast(s32) it_index);
+        if did_spawn spawns_remaining -= 1;
+    }
+}
+
+kill_enemy :: (enemy_index: s32) {
+    if enemy_index < 0 || enemy_index >= enemy_runtime.count return;
+    enemy := *enemy_runtime[enemy_index];
+    if !enemy.active return;
+    Physics.destroy_body(enemy.body_id);
+    if enemy.shape != null && enemy.shape != enemy_shape Shape_Destroy(enemy.shape);
+    enemy_runtime[enemy_index] = .{};
+    enemy_alive_count = max(cast(s32) 0, enemy_alive_count - 1);
+}
+
+find_closest_enemy_to_player :: (player_pos: Vector3) -> s32 {
+    best_index: s32 = -1;
+    best_dist_sq := 1.0e30;
+    for enemy_runtime {
+        if !it.active continue;
+        enemy_pos := cast,force(Vector3) BodyInterface_GetPosition(Physics.physics.body_interface, it.body_id);
+        to_enemy := enemy_pos - player_pos;
+        dist_sq := dot(to_enemy, to_enemy);
+        if dist_sq < best_dist_sq {
+            best_dist_sq = dist_sq;
+            best_index = cast(s32) it_index;
+        }
+    }
+    return best_index;
+}
+
+spawn_player_projectile :: (origin: Vector3, dir: Vector3) -> bool {
+    if dot(dir, dir) < 1.0e-8 return false;
+    for *projectile_runtime {
+        if it.active continue;
+        it.* = .{
+            active = true,
+            life_remaining = auto_fire_params.projectile_life,
+            position = origin,
+            velocity = normalize(dir) * auto_fire_params.projectile_speed,
+        };
+        projectile_active_count += 1;
+        return true;
+    }
+    return false;
+}
+
+projectile_hits_enemy :: (projectile_pos: Vector3, projectile_radius: float, enemy_index: s32) -> bool {
+    if enemy_index < 0 || enemy_index >= enemy_runtime.count return false;
+    enemy := enemy_runtime[enemy_index];
+    if !enemy.active return false;
+
+    enemy_pos := cast,force(Vector3) BodyInterface_GetPosition(Physics.physics.body_interface, enemy.body_id);
+    scaled_collider_radius := enemy_collider_radius * enemy.collider_scale;
+    scaled_collider_half_height := enemy_collider_half_height * enemy.collider_scale;
+    combined_radius := projectile_radius + scaled_collider_radius;
+    if #complete enemy.collider_kind == {
+    case .SPHERE;
+        return length(projectile_pos - enemy_pos) <= combined_radius;
+    case .CAPSULE;
+        segment_a := enemy_pos + .{0.0, scaled_collider_half_height, 0.0};
+        segment_b := enemy_pos - .{0.0, scaled_collider_half_height, 0.0};
+        segment := segment_b - segment_a;
+        segment_len_sq := dot(segment, segment);
+        t := ifx segment_len_sq > 1.0e-8 then clamp(dot(projectile_pos - segment_a, segment) / segment_len_sq, 0.0, 1.0) else 0.0;
+        closest := segment_a + segment * t;
+        return length(projectile_pos - closest) <= combined_radius;
+    }
+    return false;
+}
+
+update_auto_fire_and_projectiles :: (dt: float) {
+    projectile_active_count = 0;
+    for *projectile_runtime {
+        if !it.active continue;
+        it.life_remaining -= dt;
+        if it.life_remaining <= 0.0 {
+            it.* = .{};
+            continue;
+        }
+
+        next_pos := it.position + it.velocity * dt;
+        hit_enemy_index: s32 = -1;
+        for enemy_runtime {
+            if !it.active continue;
+            if projectile_hits_enemy(next_pos, auto_fire_params.projectile_radius, cast(s32) it_index) {
+                hit_enemy_index = cast(s32) it_index;
+                break;
+            }
+        }
+
+        if hit_enemy_index >= 0 {
+            enemy := *enemy_runtime[hit_enemy_index];
+            enemy.hp -= 1.0;
+            enemy.hit_flash_t = 0.16;
+            if enemy.hp <= 0.0 {
+                kill_enemy(hit_enemy_index);
+            }
+            it.* = .{};
+            continue;
+        }
+
+        it.position = next_pos;
+        projectile_active_count += 1;
+    }
+
+    if !auto_fire_params.enabled || auto_fire_params.shots_per_second <= 0.0 return;
+    if enemy_alive_count <= 0 return;
+
+    player_shot_accumulator += auto_fire_params.shots_per_second * dt;
+    shots_to_fire := cast(s32) floor(player_shot_accumulator);
+    if shots_to_fire <= 0 return;
+    player_shot_accumulator -= cast(float) shots_to_fire;
+
+    player_pos := character_controller_position(*running_lizard_controller);
+    origin := player_pos + .{0.0, 0.95, 0.0};
+    for 0..shots_to_fire-1 {
+        target_enemy_index := find_closest_enemy_to_player(player_pos);
+        if target_enemy_index < 0 break;
+        target_pos := cast,force(Vector3) BodyInterface_GetPosition(Physics.physics.body_interface, enemy_runtime[target_enemy_index].body_id);
+        target_pos.y += enemy_collider_half_height + enemy_collider_radius * 0.35;
+        spawn_player_projectile(origin, target_pos - origin);
+    }
+}
+
+enemy_lod_level_for_distance :: (render_mesh: Enemy_Render_Mesh, distance_to_camera: float) -> s32 {
+    if render_mesh.lod_mesh_count <= 0 return 0;
+    if render_mesh.lod_mesh_count == 1 {
+        if distance_to_camera >= 18.0 return 1;
+        return 0;
+    }
+    if distance_to_camera >= 42.0 return 2;
+    if distance_to_camera >= 18.0 return 1;
+    return 0;
+}
+
+refresh_enemy_horde_render_state :: (view_proj: Matrix4, shadow_binding: Vector4, camera_pos: Vector3) {
+    if enemy_runtime.count == 0 || enemy_draw_groups.count == 0 || enemy_instances.cpu.data == null return;
+    enemy_visible_count_debug = 0;
+    enemy_render_instance_count_debug = 0;
+
+    for *enemy_draw_groups {
+        it.first_instance = 0;
+        it.instance_count = 0;
+    }
+
+    group_instance_counts: [..]u32;
+    group_instance_counts.allocator = temp;
+    array_resize(*group_instance_counts, enemy_draw_groups.count);
+    for *group_instance_counts it.* = 0;
+
+    mask_model := scene_geo.models[enemy_mask_model_index];
+    visible_enemy_count: s32;
+    for *enemy_runtime {
+        if !it.active continue;
+        body_pos := cast,force(Vector3) BodyInterface_GetPosition(Physics.physics.body_interface, it.body_id);
+        to_camera := camera_pos - body_pos;
+        distance_to_camera := length(to_camera);
+        if distance_to_camera > enemy_spawn_params.despawn_radius continue;
+        visible_enemy_count += 1;
+        for render_mesh, render_mesh_index: enemy_render_meshes {
+            lod_level := enemy_lod_level_for_distance(render_mesh, distance_to_camera);
+            group_index := enemy_draw_group_index(render_mesh_index, lod_level);
+            if group_index >= 0 group_instance_counts[group_index] += 1;
+        }
+    }
+
+    running_first_instance: u32;
+    for *enemy_draw_groups {
+        it.first_instance = running_first_instance;
+        it.instance_count = group_instance_counts[it_index];
+        running_first_instance += it.instance_count;
+    }
+
+    group_write_offsets: [..]u32;
+    group_write_offsets.allocator = temp;
+    array_resize(*group_write_offsets, enemy_draw_groups.count);
+    for *group_write_offsets it.* = enemy_draw_groups[it_index].first_instance;
+
+    for *enemy_runtime {
+        if !it.active continue;
+        body_pos := cast,force(Vector3) BodyInterface_GetPosition(Physics.physics.body_interface, it.body_id);
+        to_camera := camera_pos - body_pos;
+        distance_to_camera := length(to_camera);
+        if distance_to_camera > enemy_spawn_params.despawn_radius continue;
+
+        actual_velocity: Vec3;
+        BodyInterface_GetLinearVelocity(Physics.physics.body_interface, it.body_id, *actual_velocity);
+        visual_root_pos := body_pos + .{0.0, enemy_model_root_offset_y * (it.visual_scale / max(enemy_model_scale, 0.001)), 0.0};
+        visual_scale: Vector3 = .{it.visual_scale, it.visual_scale, it.visual_scale};
+        world_root := make_trs_matrix(visual_root_pos, quat_from_euler_deg(.{0.0, it.yaw * 180.0 / PI + 225.0, 0.0}), visual_scale);
+        for render_mesh, render_mesh_index: enemy_render_meshes {
+            lod_level := enemy_lod_level_for_distance(render_mesh, distance_to_camera);
+            group_index := enemy_draw_group_index(render_mesh_index, lod_level);
+            if group_index < 0 continue;
+            write_index := group_write_offsets[group_index];
+            group_write_offsets[group_index] += 1;
+            node_local_index := render_mesh.node_index - cast(s32) mask_model.node_start;
+            world := world_root;
+            if node_local_index >= 0 {
+                world = world_root * scene_geo.nodes[render_mesh.node_index].world;
+            }
+            flash_mix := clamp(it.hit_flash_t * 9.0, 0.0, 1.0);
+            tint := lerp(it.tint, Vector4.{3.2, 3.2, 3.2, 1.0}, flash_mix);
+            enemy_instances.cpu[write_index] = .{
+                world = world,
+                tint = tint,
+                shadow_view_proj = shadow_map.view_proj,
+                shadow_meta = shadow_binding,
+            };
+            enemy_render_instance_count_debug += 1;
+        }
+    }
+    enemy_visible_count_debug = visible_enemy_count;
+
+    for group, group_index: enemy_draw_groups {
+        mesh := scene_geo.meshes[group.mesh_index];
+        enemy_draw_params.cpu[group_index].indices = scene_geo.indices.gpu + (mesh.first_index * size_of(u32)).(Gpu_Ptr);
+        enemy_draw_params.cpu[group_index].instances = enemy_instances.gpu + (group.first_instance * size_of(Scene_Instance)).(Gpu_Ptr);
+        enemy_draw_params.cpu[group_index].view_proj = view_proj;
+        enemy_draw_params.cpu[group_index].camera_pos = camera_pos;
+        enemy_draw_params.cpu[group_index].light_dir = shadow_map.light_dir;
+        enemy_draw_params.cpu[group_index].sun_params = .{model_scene_sun_strength, time_of_day, 0.0, 0.0};
+        enemy_draw_params.cpu[group_index].material_index = mesh.material_index;
+        enemy_draw_params.cpu[group_index].mesh_base_vertex = mesh.base_vertex;
+        enemy_indirect_args.cpu[group_index] = .{
+            vertex_count = mesh.index_count,
+            instance_count = group.instance_count,
+            vertex_start = 0,
+            base_instance = 0,
+        };
+    }
+}
+
+enemy_draw_group_index :: (render_mesh_index: s64, lod_level: s32) -> s32 {
+    running_index: s32;
+    for enemy_render_meshes {
+        lod_count := 1 + cast(s32) it.lod_mesh_count;
+        if it_index == render_mesh_index {
+            if lod_level < 0 || lod_level >= lod_count return -1;
+            return running_index + lod_level;
+        }
+        running_index += lod_count;
+    }
+    return -1;
+}
+
 apply_mediapipe_demo_bone_offset :: (node_index: s32, rotation_offset: Quaternion) {
     if node_index < 0 return;
     local_index := node_index - cast(s32) scene_geo.models[mediapipe_body_model_index].node_start;
@@ -2015,6 +2760,21 @@ model_scene_sun_direction :: (time_of_day: float) -> Vector3 {
     return normalize(Vector3.{cos(phase) * horizontal, elevation, sin(phase) * horizontal * 0.55});
 }
 
+wrap_angle_pi :: (angle: float) -> float {
+    wrapped := angle;
+    while wrapped > PI  wrapped -= PI * 2.0;
+    while wrapped < -PI wrapped += PI * 2.0;
+    return wrapped;
+}
+
+smooth_yaw_towards :: (current: float, target: float, dt: float, turn_speed: float) -> float {
+    max_step := max(0.0, turn_speed) * dt;
+    delta := wrap_angle_pi(target - current);
+    if abs(delta) <= max_step return current + delta;
+    step_sign := ifx delta < 0.0 then -1.0 else 1.0;
+    return current + step_sign * max_step;
+}
+
 hash01 :: (x: u32) -> float {
     phase := cast(float) x * 12.9898 + 78.233;
     value := sin(phase) * cast(float) 43758.5453;
@@ -2063,6 +2823,8 @@ Scene_File :: #import,file "../scene_file.jai";
 Gizmo :: #import "Gizmo";
 Gizmo_Render :: #import "Gizmo_Render";
 Physics :: #import "Physics";
+JPH :: #import "JoltC";
+using JPH;
 ai :: #import "assimp";
 String :: #import "String";
 #import "Jai-Shader-Transpiler";
