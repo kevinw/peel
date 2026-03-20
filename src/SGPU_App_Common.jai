@@ -455,6 +455,13 @@ host_init :: (init_ctx: Init_Ctx) -> bool {
 dummy_on_resize :: () {  } @on_window_resize
 shader_reload_on_ui :: () { SHR.shader_hot_reload_imgui(*shader_reload_ctx, ui_get_monospace_font()); } @on_ui
 
+input_down :: inline ($s: string) -> (down: bool, pressed: bool)
+#modify { return s.count == 1; }
+{
+    down, pressed := input_down(cast(Input.Key_Code)s[0]);
+    return down, pressed;
+}
+
 input_down :: inline (code: Input.Key_Code) -> (down: bool, pressed: bool) {
     return (Input.input_button_states[code] & .DOWN) != 0, (Input.input_button_states[code] & .START) != 0;
 }

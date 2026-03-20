@@ -83,30 +83,47 @@ gpu_begin_scoped_render_pass :: (cmd_buf: Gpu_Command_Buffer, desc: Gpu_Render_P
 //
 // some helper functions for deleting gpu resources
 //
+
+gpu_delete :: (texture_view_ptr: *Gpu_Texture_View) {
+    if texture_view_ptr == null return;
+
+    texture_view := texture_view_ptr.*;
+    if texture_view != 0  gpu_free_texture_view(texture_view);
+    texture_view_ptr.* = 0;
+}
+
+gpu_delete :: (texture_ptr: *Gpu_Texture) {
+    if texture_ptr == null return;
+
+    texture := texture_ptr.*;
+    if texture != 0  gpu_free(texture);
+    texture_ptr.* = 0;
+}
+
 gpu_delete :: (sampler_ptr: *Gpu_Sampler) {
     if sampler_ptr == null return;
-    
+
     sampler := sampler_ptr.*;
     if sampler != 0 gpu_free(sampler);
 }
 
 gpu_delete :: (gpu_view: *Gpu_View($T)) {
     if gpu_view == null return;
-    
+
     if gpu_view.cpu.data != null gpu_free(gpu_view.cpu.data);
     gpu_view.* = {};
 }
 
 gpu_delete :: (gpu_buffer: *Gpu_Buffer($T)) {
     if gpu_buffer == null return;
-    
+
     if gpu_buffer.cpu != null gpu_free(gpu_buffer.cpu);
     gpu_buffer.* = {};
 }
 
 gpu_delete :: (pipeline: *Gpu_Pipeline) {
     if pipeline == null return;
-    
+
     if pipeline.* != 0 gpu_free_pipeline(pipeline.*);
     pipeline.* = 0;
 }

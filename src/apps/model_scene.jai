@@ -1,4 +1,5 @@
 #import "Jai-Shader-Transpiler";
+#load "../scene_pick.jai";
 
 Draw_Batch :: struct {
     mesh_index: u32;
@@ -79,10 +80,6 @@ scene_depth_texture: Gpu_Texture;
 scene_depth_view: Gpu_Texture_View;
 scene_depth_w: u32;
 scene_depth_h: u32;
-scene_pick_texture: Gpu_Texture;
-scene_pick_view: Gpu_Texture_View;
-scene_pick_w: u32;
-scene_pick_h: u32;
 ground_vertices: Gpu_View(Scene_Vertex);
 ground_indices: Gpu_View(u32);
 ground_instance: Gpu_Buffer(Scene_Instance);
@@ -164,21 +161,10 @@ orbit_distance: float = 8.5;
 orbit_prev_mouse: Vector2;
 orbit_have_prev_mouse: bool;
 left_was_down: bool;
-scene_pick_pending: bool;
-scene_pick_render_this_frame: bool;
-scene_pick_request_frame: s64 = -1;
-scene_pick_request_x: s64;
-scene_pick_request_y: s64;
-scene_pick_last_object_id: u32;
-scene_pick_last_scene_node_index: s32 = -1;
-scene_pick_request_count: s64;
-scene_pick_apply_count: s64;
-scene_pick_last_request_frame: s64 = -1;
-scene_pick_last_apply_frame: s64 = -1;
-scene_pick_last_applied_x: s64 = -1;
-scene_pick_last_applied_y: s64 = -1;
 gizmo_ctx: Gizmo.Gizmo_Context;
 gizmo_render_ctx: Gizmo_Render.Gizmo_Render_Context;
+gizmo_overlay_ctx: Gizmo.Gizmo_Context;
+gizmo_overlay_render_ctx: Gizmo_Render.Gizmo_Render_Context;
 
 scene_camera: Editor_Camera = .{
     position = .{0.0, 7.0, 12.5},
@@ -194,9 +180,13 @@ scene_camera: Editor_Camera = .{
 
 on_dll_init :: () {
     Gizmo.init(*gizmo_ctx);
+    Gizmo.init(*gizmo_overlay_ctx);
     gizmo_ok := Gizmo_Render.init(*gizmo_render_ctx, max_lines = 65536);
     assert(gizmo_ok, "Failed to initialize Gizmo_Render for model scene.");
+    overlay_gizmo_ok := Gizmo_Render.init(*gizmo_overlay_render_ctx, max_lines = 65536);
+    assert(overlay_gizmo_ok, "Failed to initialize overlay Gizmo_Render for model scene.");
     Gizmo_Render.bind_gizmo(*gizmo_render_ctx, *gizmo_ctx);
+    Gizmo_Render.bind_gizmo(*gizmo_overlay_render_ctx, *gizmo_overlay_ctx);
     Physics.configure_test_environment(
         spawn_spheres = false,
         include_static_box = false,
@@ -288,7 +278,9 @@ on_unload :: () {
     array_free(stone_scaled_shapes);
     array_free(stone_base_shapes);
     Physics.deinit();
+    Gizmo_Render.deinit(*gizmo_overlay_render_ctx);
     Gizmo_Render.deinit(*gizmo_render_ctx);
+    Gizmo.deinit(*gizmo_overlay_ctx);
     Gizmo.deinit(*gizmo_ctx);
     gpu_delete(*debug_pick_params);
     gpu_delete(*sky_draw_params);
@@ -324,13 +316,7 @@ tick :: () {
     }
 
     io := ImGui.GetIO();
-    g_down := (Input.input_button_states[cast(Input.Key_Code) #char "G"] & .DOWN) != 0;
-    if g_down && !physics_g_was_down {
-        physics_gizmos_enabled = !physics_gizmos_enabled;
-        Physics.debug_draw_enabled = physics_gizmos_enabled;
-    }
-    physics_g_was_down = g_down;
-    _, p_pressed := input_down(cast(Input.Key_Code)#char "P");
+    _, p_pressed := input_down("P");
     if p_pressed toggle_control_mode();
 
     if app_ui_enabled {
@@ -380,31 +366,31 @@ tick :: () {
                 control_mode = ifx is_editor then .Editor else .Player;
             }
             if control_mode == .Editor {
-                Text("%", ifx scene_dirty then "Scene Dirty" else "Scene Saved");
-                Separator();
-                Text("Selection Debug");
-                Text("Picked Object ID: %", scene_pick_last_object_id);
-                Text("Picked Scene Node: %", scene_pick_last_scene_node_index);
-                Text("Manip Selected Index: %", scene_manip_ctx.selected_index);
-                Text("Manip Object Count: %", scene_manip_objects.count);
-                Text("Pick Requests: %", scene_pick_request_count);
-                Text("Pick Applies: %", scene_pick_apply_count);
-                Text("Last Request Frame: %", scene_pick_last_request_frame);
-                Text("Last Apply Frame: %", scene_pick_last_apply_frame);
-                Text("Last Pick Pixel: %, %", scene_pick_last_applied_x, scene_pick_last_applied_y);
+                //Text("%", ifx scene_dirty then "Scene Dirty" else "Scene Saved");
+                //Separator();
+                //Text("Selection Debug");
+                //Text("Picked Object ID: %", scene_pick.last_object_id);
+                //Text("Picked Scene Node: %", scene_pick.last_scene_node_index);
+                //Text("Manip Selected Index: %", scene_manip_ctx.selected_index);
+                //Text("Manip Object Count: %", scene_manip_objects.count);
+                //Text("Pick Requests: %", scene_pick.request_count);
+                //Text("Pick Applies: %", scene_pick.apply_count);
+                //Text("Last Request Frame: %", scene_pick.last_request_frame);
+                //Text("Last Apply Frame: %", scene_pick.last_apply_frame);
+                //Text("Last Pick Pixel: %, %", scene_pick.last_applied_x, scene_pick.last_applied_y);
                 pickable_batch_count: s64;
                 for batch_pick_object_ids if it != 0 pickable_batch_count += 1;
-                Text("Pickable Batches: % / %", pickable_batch_count, batch_pick_object_ids.count);
+                //Text("Pickable Batches: % / %", pickable_batch_count, batch_pick_object_ids.count);
                 picked_manip_index := -1;
-                if scene_pick_last_scene_node_index >= 0 {
+                if scene_pick.last_scene_node_index >= 0 {
                     for scene_manip_node_indices {
-                        if it == scene_pick_last_scene_node_index {
+                        if it == scene_pick.last_scene_node_index {
                             picked_manip_index = cast(s32) it_index;
                             break;
                         }
                     }
                 }
-                Text("Picked Node Manip Index: %", picked_manip_index);
+                //Text("Picked Node Manip Index: %", picked_manip_index);
                 if scene_manip_ctx.selected_index >= 0 && cast(s64) scene_manip_ctx.selected_index < scene_manip_node_indices.count {
                     selected_scene_node_index := scene_manip_node_indices[scene_manip_ctx.selected_index];
                     Text("Manip Scene Node: %", selected_scene_node_index);
@@ -412,13 +398,14 @@ tick :: () {
                         Text("Manip Node Name: %", scene_doc.nodes[selected_scene_node_index].name);
                     }
                 }
-                Text("Pick Pending: %", scene_pick_pending);
+                //Text("Pick Pending: %", scene_pick.pending);
                 if scene_place_palette_index >= 0 {
                     Text("Placing: %", String.path_filename(scene_palette_models[scene_place_palette_index]));
                     SameLine();
                     if Button("Cancel Placement") scene_place_palette_index = -1;
                 }
                 if BeginChild("Palette", .{340.0, 220.0}) {
+                    PushPopFont(fonts.mono, fonts.MAIN_SIZE);
                     for scene_palette_models {
                         selected := cast(s32) it_index == scene_place_palette_index;
                         label := String.path_filename(it);
@@ -430,14 +417,6 @@ tick :: () {
                 EndChild();
                 Separator();
             }
-            if #complete control_mode == {
-            case .Player;
-                Text("Move Lizard: WASD / Orbit Camera: RMB drag");
-            case .Editor;
-                Text("Fly Camera: WASD/QE - Look Camera: RMB drag");
-                Text("Edit: LMB select/drag gizmo");
-            }
-            Text("Toggle Gizmos: G");
         }
         End();
     }
@@ -502,6 +481,7 @@ tick :: () {
     }
 
     Gizmo.begin_frame(*gizmo_ctx);
+    Gizmo.begin_frame(*gizmo_overlay_ctx);
     character_controller_update_in_system(*running_lizard_controller, Physics.physics.system, desired_move, dt);
     Physics.tick(dt);
     if physics_gizmos_enabled {
@@ -533,7 +513,7 @@ tick :: () {
         if scene_place_palette_index >= 0 && left_pressed && !io.WantCaptureMouse {
             scene_place_selected_palette_at_cursor(frame);
         } else {
-            manip_result := manip_update(*scene_manip_ctx, *gizmo_ctx, scene_manip_objects, frame);
+            manip_result := manip_update(*scene_manip_ctx, *gizmo_ctx, scene_manip_objects, frame, *gizmo_overlay_ctx);
             if manip_result.changed {
                 scene_manip_apply_pending = true;
                 scene_apply_manip_live_to_runtime();
@@ -682,6 +662,7 @@ tick :: () {
     }
 
     Gizmo_Render.gizmo_render_set_view_projection(*gizmo_render_ctx, view_proj);
+    Gizmo_Render.gizmo_render_set_view_projection(*gizmo_overlay_render_ctx, view_proj);
 
     if !scene_debug_logged scene_debug_logged = true;
 
@@ -727,7 +708,7 @@ tick :: () {
         }
     }
 
-    if scene_pick_render_this_frame && scene_pick_view != 0 {
+    if scene_pick.render_this_frame && scene_pick.view != 0 {
         gpu_begin_scoped_render_pass(cmd_buff, .{
             depth_target = .{
                 view = scene_depth_view,
@@ -740,7 +721,7 @@ tick :: () {
             },
             color_targets = .[
                 .{
-                    view = scene_pick_view,
+                    view = scene_pick.view,
                     load_op = .CLEAR,
                     store_op = .STORE,
                     clear_color._float = .[0.0, 0.0, 0.0, 0.0],
@@ -771,7 +752,7 @@ tick :: () {
             sun_params = .{0.0, 0.0, 0.0, 0.0},
             camera_pos = .{0.0, 0.0, 0.0},
             material_index = cast(u32) ground_sampler - 1,
-            object_id = ifx scene_pick_view != 0 then gpu_texture_view_index(scene_pick_view) else 0,
+            object_id = ifx scene_pick.view != 0 then gpu_texture_view_index(scene_pick.view) else 0,
             mesh_base_vertex = 0,
             skin_matrix_count = 0,
             morph_target_count = 0,
@@ -823,6 +804,7 @@ tick :: () {
         should_draw_gizmos := physics_gizmos_enabled || control_mode == .Editor;
         if should_draw_gizmos {
             Gizmo_Render.gizmo_render_draw(*gizmo_render_ctx, cmd_buff, *gizmo_ctx, viewport, depth_mode = .TEST);
+            Gizmo_Render.gizmo_render_draw(*gizmo_overlay_render_ctx, cmd_buff, *gizmo_overlay_ctx, viewport, depth_mode = .NONE);
         }
 
         if show_shadow_debug {
@@ -838,8 +820,48 @@ tick :: () {
     }
 
     submit_and_present_with_ui(cmd_buff);
-    scene_pick_render_this_frame = false;
+    scene_pick.render_this_frame = false;
 } @on_tick
+
+scene_rebuild_manip_objects :: () {
+    array_reset(*scene_manip_objects);
+    array_reset(*scene_manip_node_indices);
+
+    for scene_doc.nodes {
+        if it.ground.enabled || it.scatter.enabled continue;
+        if it.render_kind == .NONE && it.instance_scene_path.count == 0 continue;
+        compiled_index := find_compiled_node_for_source(scene_doc.source_path, it.name);
+        if compiled_index < 0 continue;
+        compiled_node := compiled_scene.nodes[compiled_index];
+        pos, rot_deg, scale := decompose_matrix_trs(compiled_node.world);
+
+        half_extents := Vector3.{0.4, 0.4, 0.4};
+        if compiled_node.asset_index >= 0 {
+            model_index := scene_model_index_for_compiled_asset(compiled_node.asset_index);
+            if model_index >= 0 {
+                bounds := scene_geo_model_bounds(*scene_geo, model_index);
+                size := bounds.max - bounds.min;
+                base_extent := max(max(size.x, size.y), size.z);
+                if base_extent > 0.0 {
+                    import_scale := asset_import_scale(compiled_scene.assets[compiled_node.asset_index]);
+                    object_scale := scale * import_scale;
+                    half_extents = 0.5 * size * max(max(object_scale.x, object_scale.y), object_scale.z) / base_extent;
+                }
+            }
+        }
+
+        array_add(*scene_manip_objects, .{
+            name = it.name,
+            position = pos,
+            rotation = quat_from_euler_deg(rot_deg),
+            scale = scale,
+            half_extents = max(half_extents, Vector3.{0.2, 0.2, 0.2}),
+            color = .{0.85, 0.8, 0.35, 1.0},
+        });
+        array_add(*scene_manip_node_indices, cast(s32) it_index);
+    }
+}
+
 
 #scope_file
 
@@ -855,32 +877,6 @@ ensure_scene_depth_target :: (width: u32, height: u32) {
     scene_depth_view = gpu_texture_view(scene_depth_texture);
     scene_depth_w = width;
     scene_depth_h = height;
-    gpu_commit_residency();
-}
-
-ensure_scene_pick_target :: (width: u32, height: u32) {
-    if width == 0 || height == 0 return;
-    if scene_pick_view != 0 && scene_pick_w == width && scene_pick_h == height return;
-
-    if scene_pick_view != 0 {
-        gpu_free_texture_view(scene_pick_view);
-        scene_pick_view = 0;
-    }
-    if scene_pick_texture != 0 {
-        gpu_free(scene_pick_texture);
-        scene_pick_texture = 0;
-    }
-
-    res, scene_pick_texture= := gpu_create_texture(.{
-        dimensions = .[width, height, 1],
-        format = .B8G8R8A8_UNORM,
-        usage = .COLOR_ATTACHMENT | .TRANSFER_DST,
-    });
-    assert(res == .SUCCESS && scene_pick_texture != 0, "Failed to create model_scene pick texture.");
-    scene_pick_view = gpu_texture_view(scene_pick_texture);
-    assert(scene_pick_view != 0, "Failed to create model_scene pick texture view.");
-    scene_pick_w = width;
-    scene_pick_h = height;
     gpu_commit_residency();
 }
 
@@ -1099,43 +1095,24 @@ clear_scene_runtime_resources :: () {
     }
     scene_depth_w = 0;
     scene_depth_h = 0;
-    if scene_pick_view != 0 {
-        gpu_free_texture_view(scene_pick_view);
-        scene_pick_view = 0;
-    }
-    if scene_pick_texture != 0 {
-        gpu_free(scene_pick_texture);
-        scene_pick_texture = 0;
-    }
-    scene_pick_w = 0;
-    scene_pick_h = 0;
+    deinit(*scene_pick);
 
-
-
-    if ground_ao_texture_view != 0 gpu_free_texture_view(ground_ao_texture_view);
-    if ground_ao_texture != 0 gpu_free(ground_ao_texture);
+    gpu_delete(*ground_ao_texture_view);
+    gpu_delete(*ground_ao_texture);
     gpu_delete(*ground_sampler);
     gpu_delete(*grass_draw_params);
     gpu_delete(*grass_shadow_params);
-    if ground_roughness_texture_view != 0 gpu_free_texture_view(ground_roughness_texture_view);
-    if ground_roughness_texture != 0 gpu_free(ground_roughness_texture);
-    if ground_normal_texture_view != 0 gpu_free_texture_view(ground_normal_texture_view);
-    if ground_normal_texture != 0 gpu_free(ground_normal_texture);
-    if ground_texture_view != 0 gpu_free_texture_view(ground_texture_view);
-    if ground_texture != 0 gpu_free(ground_texture);
+    gpu_delete(*ground_roughness_texture_view);
+    gpu_delete(*ground_roughness_texture);
+    gpu_delete(*ground_normal_texture_view);
+    gpu_delete(*ground_texture_view);
+    gpu_delete(*ground_texture);
     gpu_delete(*ground_draw_params);
     gpu_delete(*ground_shadow_params);
     gpu_delete(*ground_instance);
     gpu_delete(*ground_indices);
     gpu_delete(*ground_vertices);
-    ground_texture = 0;
-    ground_texture_view = 0;
-    ground_normal_texture = 0;
-    ground_normal_texture_view = 0;
-    ground_roughness_texture = 0;
-    ground_roughness_texture_view = 0;
-    ground_ao_texture = 0;
-    ground_ao_texture_view = 0;
+    gpu_delete(*ground_normal_texture);
     grass_instance_count = 0;
     ground_index_count = 0;
 
@@ -1643,45 +1620,6 @@ set_model_morph_wave_weights :: (state: *Scene_Anim_State, model_index: s32, t: 
     }
 }
 
-scene_rebuild_manip_objects :: () {
-    array_reset(*scene_manip_objects);
-    array_reset(*scene_manip_node_indices);
-
-    for scene_doc.nodes {
-        if it.ground.enabled || it.scatter.enabled continue;
-        if it.render_kind == .NONE && it.instance_scene_path.count == 0 continue;
-        compiled_index := find_compiled_node_for_source(scene_doc.source_path, it.name);
-        if compiled_index < 0 continue;
-        compiled_node := compiled_scene.nodes[compiled_index];
-        pos, rot_deg, scale := decompose_matrix_trs(compiled_node.world);
-
-        half_extents := Vector3.{0.4, 0.4, 0.4};
-        if compiled_node.asset_index >= 0 {
-            model_index := scene_model_index_for_compiled_asset(compiled_node.asset_index);
-            if model_index >= 0 {
-                bounds := scene_geo_model_bounds(*scene_geo, model_index);
-                size := bounds.max - bounds.min;
-                base_extent := max(max(size.x, size.y), size.z);
-                if base_extent > 0.0 {
-                    import_scale := asset_import_scale(compiled_scene.assets[compiled_node.asset_index]);
-                    object_scale := scale * import_scale;
-                    half_extents = 0.5 * size * max(max(object_scale.x, object_scale.y), object_scale.z) / base_extent;
-                }
-            }
-        }
-
-        array_add(*scene_manip_objects, .{
-            name = it.name,
-            position = pos,
-            rotation = quat_from_euler_deg(rot_deg),
-            scale = scale,
-            half_extents = max(half_extents, Vector3.{0.2, 0.2, 0.2}),
-            color = .{0.85, 0.8, 0.35, 1.0},
-        });
-        array_add(*scene_manip_node_indices, cast(s32) it_index);
-    }
-}
-
 scene_apply_manip_live_to_runtime :: () {
     if scene_manip_ctx.selected_index < 0 return;
     selected := cast(s64) scene_manip_ctx.selected_index;
@@ -1799,76 +1737,6 @@ compiled_node_pick_object_id :: (compiled_node_index: s32) -> u32 {
     if node.source_kind != .ROOT_SCENE return 0;
     if node.source_node_index < 0 || node.source_node_index >= scene_doc.nodes.count return 0;
     return cast(u32) node.source_node_index + 1;
-}
-
-queue_scene_pick_request :: (mx: s32, my: s32) {
-    if scene_pick_view == 0 || scene_pick_w == 0 || scene_pick_h == 0 return;
-    scene_pick_request_x = clamp(cast(s64) mx, 0, cast(s64) scene_pick_w - 1);
-    flipped_y := cast(s64) scene_pick_h - 1 - cast(s64) my;
-    scene_pick_request_y = clamp(flipped_y, 0, cast(s64) scene_pick_h - 1);
-    scene_pick_pending = true;
-    scene_pick_render_this_frame = true;
-    scene_pick_request_frame = cast(s64) gpu_submission_frame_index() + 1;
-    scene_pick_request_count += 1;
-    scene_pick_last_request_frame = scene_pick_request_frame;
-}
-
-process_scene_pick_result_if_ready :: () {
-    if !scene_pick_pending || scene_pick_view == 0 return;
-    if gpu_completed_submission_frame_index() < scene_pick_request_frame return;
-
-    bytes_per_row := cast(s64) scene_pick_w * 4;
-    total_bytes := bytes_per_row * cast(s64) scene_pick_h;
-    pixels := NewArray(total_bytes, u8);
-    defer array_free(pixels);
-
-    if !gpu_readback_texture_view_bgra8(scene_pick_view, pixels, bytes_per_row) {
-        scene_pick_pending = false;
-        scene_pick_render_this_frame = false;
-        scene_pick_request_frame = -1;
-        return;
-    }
-
-    offset := scene_pick_request_y * bytes_per_row + scene_pick_request_x * 4;
-    p := pixels.data + offset;
-    object_id := cast(u32) p[2] | (cast(u32) p[1] << 8) | (cast(u32) p[0] << 16) | (cast(u32) p[3] << 24);
-    log("unpacked object_id from pick texture: %", object_id);
-    scene_pick_apply_object_id(object_id);
-    scene_pick_pending = false;
-    scene_pick_render_this_frame = false;
-    scene_pick_request_frame = -1;
-}
-
-scene_pick_apply_object_id :: (object_id: u32) {
-    scene_pick_last_object_id = object_id;
-    scene_pick_apply_count += 1;
-    scene_pick_last_apply_frame = cast(s64) gpu_completed_submission_frame_index();
-    scene_pick_last_applied_x = scene_pick_request_x;
-    scene_pick_last_applied_y = scene_pick_request_y;
-    if scene_manip_objects_dirty {
-        scene_rebuild_manip_objects();
-        scene_manip_objects_dirty = false;
-    }
-    scene_manip_ctx.active = false;
-    scene_manip_ctx.active_kind = .NONE;
-    scene_manip_ctx.active_axis = -1;
-    scene_manip_ctx.active_plane = -1;
-
-    if object_id == 0 {
-        scene_pick_last_scene_node_index = -1;
-        scene_manip_ctx.selected_index = -1;
-        return;
-    }
-
-    node_index := cast(s32) object_id - 1;
-    scene_pick_last_scene_node_index = node_index;
-    scene_manip_ctx.selected_index = -1;
-    for scene_manip_node_indices {
-        if it == node_index {
-            scene_manip_ctx.selected_index = cast(s32) it_index;
-            return;
-        }
-    }
 }
 
 compiled_node_is_under_player_root :: (node_index: s32) -> bool {

@@ -120,9 +120,10 @@ quat_to_euler_xyz :: (q: Quaternion) -> Vector3 {
     return .{x, y, z};
 }
 
-manip_update :: (ctx: *Manip_Context, gizmo_ctx: *Gizmo.Gizmo_Context, objects: []Manip_Object, frame: Manip_Frame_Input) -> Manip_Result {
+manip_update :: (ctx: *Manip_Context, gizmo_ctx: *Gizmo.Gizmo_Context, objects: []Manip_Object, frame: Manip_Frame_Input, overlay_gizmo_ctx: *Gizmo.Gizmo_Context = null) -> Manip_Result {
     result: Manip_Result;
     if !ctx || !gizmo_ctx return result;
+    if overlay_gizmo_ctx == null overlay_gizmo_ctx = gizmo_ctx;
 
     reset_hover(ctx);
 
@@ -134,13 +135,13 @@ manip_update :: (ctx: *Manip_Context, gizmo_ctx: *Gizmo.Gizmo_Context, objects: 
     }
 
     if frame.viewport.x <= 1.0 || frame.viewport.y <= 1.0 {
-        draw_handles(ctx, gizmo_ctx, objects, frame);
+        draw_handles(ctx, gizmo_ctx, overlay_gizmo_ctx, objects, frame);
         return result;
     }
 
     ray_origin, ray_dir, ray_ok := mouse_world_ray(frame);
     if !ray_ok {
-        draw_handles(ctx, gizmo_ctx, objects, frame);
+        draw_handles(ctx, gizmo_ctx, overlay_gizmo_ctx, objects, frame);
         return result;
     }
 
@@ -184,7 +185,7 @@ manip_update :: (ctx: *Manip_Context, gizmo_ctx: *Gizmo.Gizmo_Context, objects: 
     }
 
     if hovered_object >= 0 result.captured_mouse = true;
-    draw_handles(ctx, gizmo_ctx, objects, frame);
+    draw_handles(ctx, gizmo_ctx, overlay_gizmo_ctx, objects, frame);
     return result;
 }
 
@@ -196,7 +197,12 @@ reset_hover :: (ctx: *Manip_Context) {
     ctx.hovered_orbit = false;
 }
 
-draw_handles :: (ctx: *Manip_Context, gizmo_ctx: *Gizmo.Gizmo_Context, objects: []Manip_Object, frame: Manip_Frame_Input) {
+draw_handles :: (ctx: *Manip_Context, gizmo_ctx: *Gizmo.Gizmo_Context, overlay_gizmo_ctx: *Gizmo.Gizmo_Context, objects: []Manip_Object, frame: Manip_Frame_Input) {
+    if ctx.hovered_index >= 0 && ctx.hovered_index != ctx.selected_index && cast(s64) ctx.hovered_index < objects.count {
+        hovered := objects[cast(s64) ctx.hovered_index];
+        draw_object_wire(gizmo_ctx, hovered, 1.03, .{0.82, 0.88, 0.96, 0.28}, 1.6);
+    }
+
     if ctx.selected_index < 0 || cast(s64) ctx.selected_index >= objects.count return;
 
     obj := objects[cast(s64) ctx.selected_index];
@@ -216,9 +222,9 @@ draw_handles :: (ctx: *Manip_Context, gizmo_ctx: *Gizmo.Gizmo_Context, objects: 
         if ctx.hovered_orbit || (ctx.active && ctx.active_kind == .ORBIT) {
             orbit_col = .{1.0, 0.95, 0.55, 1.0};
         }
-        draw_axis_ring(gizmo_ctx, center, .{1.0, 0.0, 0.0}, orbit_r, orbit_col, 2.1, 44);
-        draw_axis_ring(gizmo_ctx, center, .{0.0, 1.0, 0.0}, orbit_r, orbit_col, 2.1, 44);
-        draw_axis_ring(gizmo_ctx, center, .{0.0, 0.0, 1.0}, orbit_r, orbit_col, 2.1, 44);
+        draw_axis_ring(overlay_gizmo_ctx, center, .{1.0, 0.0, 0.0}, orbit_r, orbit_col, 2.1, 44);
+        draw_axis_ring(overlay_gizmo_ctx, center, .{0.0, 1.0, 0.0}, orbit_r, orbit_col, 2.1, 44);
+        draw_axis_ring(overlay_gizmo_ctx, center, .{0.0, 0.0, 1.0}, orbit_r, orbit_col, 2.1, 44);
         return;
     }
 
@@ -234,11 +240,11 @@ draw_handles :: (ctx: *Manip_Context, gizmo_ctx: *Gizmo.Gizmo_Context, objects: 
             color = color * .{1.25, 1.25, 1.25, 1.0};
         }
 
-        Gizmo.draw_arrow(gizmo_ctx, center, tip, color, 2.8, axis_len * 0.16);
+        Gizmo.draw_arrow(overlay_gizmo_ctx, center, tip, color, 2.8, axis_len * 0.16);
         if ctx.mode == .SCALE {
-            draw_obb(gizmo_ctx, tip, .{axis_len * 0.08, axis_len * 0.08, axis_len * 0.08}, .{w = 1.0}, color, 2.0);
+            draw_obb(overlay_gizmo_ctx, tip, .{axis_len * 0.08, axis_len * 0.08, axis_len * 0.08}, .{w = 1.0}, color, 2.0);
         } else {
-            Gizmo.draw_handle(gizmo_ctx, tip, axis_len * 0.09, color, 2.0);
+            Gizmo.draw_handle(overlay_gizmo_ctx, tip, axis_len * 0.09, color, 2.0);
         }
     }
 
@@ -260,7 +266,7 @@ draw_handles :: (ctx: *Manip_Context, gizmo_ctx: *Gizmo.Gizmo_Context, objects: 
             if ctx.hovered_plane == plane_i32 || (ctx.active && ctx.active_kind == .PLANE && ctx.active_plane == plane_i32) {
                 col = .{1.0, 0.95, 0.55, 0.9};
             }
-            draw_plane_quad(gizmo_ctx, plane_center, u, v, plane_size, col, 2.2, fill = true);
+            draw_plane_quad(overlay_gizmo_ctx, plane_center, u, v, plane_size, col, 2.2, fill = true);
         }
     }
 }
