@@ -27,12 +27,20 @@ boid_tints: Gpu_View(Vector4);
 boids_draw_params: Gpu_Buffer(Boids_Draw_Params_CPU);
 boids_control_ring: Gpu_Frame_Ring(Boids_Control);
 
+boids_control: Boids_Control;
+
 build_ui :: () {
     using,except(Viewport) _ :: #import "ImGui";
     open: bool = true;
     window_flags: WindowFlags = .NoDecoration | .AlwaysAutoResize | .NoSavedSettings | .NoFocusOnAppearing | .NoNav;
     if Begin("Boids", *open, window_flags) {
         Text("Boids");
+        using boids_control;
+        SliderFloat("View Extent", *view_extent, 0.25, 1.1);
+        SliderFloat("Min Speed", *min_speed, 0.001, 0.2);
+        SliderFloat("Max Speed", *max_speed, 0.5, 2.0);
+        SliderFloat("Perception Radius", *perception_radius, 0, 0.2);
+        SliderFloat("Separation Radius", *separation_radius, 0, 0.1);
     }
     End();
 }
@@ -69,7 +77,7 @@ on_dll_init :: () {
         dir := Vector2.{random_get_within_range(-1.0, 1.0), random_get_within_range(-1.0, 1.0)};
         normalize(*dir);
         speed := random_get_within_range(MIN_SPEED, MAX_SPEED);
-        vel := Vector2.{dir.x * speed, dir.y * speed};
+        vel := dir * speed;
         palette_idx := cast(s64) floor(random_get_within_range(0.0, cast(float) palette.count));
         if palette_idx >= palette.count palette_idx = palette.count - 1;
         boid_state_a_cpu.*[it] = .{pos = pos, vel = vel};
@@ -93,11 +101,7 @@ on_dll_init :: () {
     };
 
     boids_control_ring = sgpu_make_frame_ring(*gpu_arena, Boids_Control);
-    for 0..SGPU_FRAMES_IN_FLIGHT-1 {
-        // TODO: use #initializer_of
-        boids_control_ring.view.cpu[it].cursor = .{9999.0, 9999.0};
-        boids_control_ring.view.cpu[it].use_b_as_src = 0;
-    }
+    for 0..SGPU_FRAMES_IN_FLIGHT-1 boids_control_ring.view.cpu[it] = .{};
 
     draw_data = .{
         vertex_params_gpu = boids_draw_params.gpu,
@@ -115,18 +119,20 @@ tick :: () {
 
     mx, my, mouse_ok := get_mouse_pointer_position(true);
     _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
-    control := sgpu_frame_ring_slot(*boids_control_ring);
+    
+    
     if mouse_ok && dims_ok && win_w > 0 && win_h > 0 {
         nx := cast(float) mx / cast(float) win_w;
         ny := cast(float) my / cast(float) win_h;
-        control.cpu.cursor.x = (nx * 2.0 - 1.0) * VIEW_EXTENT;
-        control.cpu.cursor.y = (ny * 2.0 - 1.0) * VIEW_EXTENT;
+        boids_control.cursor = .{ (nx * 2.0 - 1.0), (ny * 2.0 - 1.0) } * boids_control.view_extent;
     } else {
-        control.cpu.cursor.x = 9999.0;
-        control.cpu.cursor.y = 9999.0;
+        boids_control.cursor = .{ 9999.0, 9999.0 };
     }
-    control.cpu.dt = dt;
-    log("dt % %", time_scale, dt);
+    
+    boids_control.dt = dt;
+    
+    control := sgpu_frame_ring_slot(*boids_control_ring);
+    control.cpu.* = boids_control;
 
     _, cmd_buff := gpu_start_command_recording(gpu_get_queue(.MAIN, 0));
     gpu_set_pipeline(cmd_buff, compute_pipeline);

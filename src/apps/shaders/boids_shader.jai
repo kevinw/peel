@@ -2,17 +2,16 @@
 #import "Math";
 
 BOIDS_COUNT :: 1920;
-VIEW_EXTENT :: 1.05;
-MAX_SPEED :: 0.9;
 MIN_SPEED :: 0.05;
-PERCEPTION_RADIUS :: 0.13;
-SEPARATION_RADIUS :: 0.049;
+MAX_SPEED :: 0.9;
 ALIGN_WEIGHT :: 0.9;
 COHESION_WEIGHT :: 0.45;
 SEPARATION_WEIGHT :: 1.4;
 CURSOR_AVOID_RADIUS :: 0.25;
 CURSOR_AVOID_WEIGHT :: 2.9;
+VIEW_EXTENT :: 1.05;
 
+// One boid's state.
 Boid_State :: struct {
     pos: Vector2;
     vel: Vector2;
@@ -22,6 +21,14 @@ Boids_Control :: struct {
     cursor: Vector2;
     use_b_as_src: u32;
     dt: float;
+    
+    view_extent: float = VIEW_EXTENT;
+    min_speed: float = MIN_SPEED;
+    max_speed: float = MAX_SPEED;
+    perception_radius: float = 0.13;
+    separation_radius: float = 0.049;
+    _pad1: float;
+    _pad2: float;
 }
 
 Boids_Compute_Params :: struct {
@@ -39,9 +46,9 @@ boids_hash01 :: (i: u32, pos: Vector2) -> float {
     return x - floor(x);
 }
 
-boids_random_turn_impulse :: (i: u32, pos: Vector2, vel: Vector2) -> Vector2 {
+boids_random_turn_impulse :: (i: u32, pos: Vector2, vel: Vector2, max_speed: float) -> Vector2 {
     h := boids_hash01(i, pos);
-    turn_strength := MAX_SPEED * 6.0;
+    turn_strength := max_speed * 6.0;
 
     if h > 0.992 return Vector2.{-vel.y, vel.x} * turn_strength;
     if h < 0.008 return Vector2.{vel.y, -vel.x} * turn_strength;
@@ -59,11 +66,18 @@ UVector3 :: struct {
 boids_step_compute :: (using in: Boids_Compute_In, data: *Boids_Compute_Params) {
     i := thread_id.x;
     if i >= BOIDS_COUNT return;
+    
+    dt := data.control.dt;
+    view_extent := data.control.view_extent;
+    min_speed := data.control.min_speed;
+    max_speed := data.control.max_speed;
+    perception_radius := data.control.perception_radius;
+    separation_radius := data.control.separation_radius;
+    
 
-    use_b_as_src := data.control.use_b_as_src != 0;
     src_offset: u32 = 0;
     dst_offset: u32 = cast(u32) BOIDS_COUNT;
-    if use_b_as_src {
+    if data.control.use_b_as_src != 0 {
         src_offset = cast(u32) BOIDS_COUNT;
         dst_offset = 0;
     }
@@ -71,8 +85,8 @@ boids_step_compute :: (using in: Boids_Compute_In, data: *Boids_Compute_Params) 
     pos := data.state[src_offset + i].pos;
     vel := data.state[src_offset + i].vel;
 
-    perception2 := PERCEPTION_RADIUS * PERCEPTION_RADIUS;
-    separation2 := SEPARATION_RADIUS * SEPARATION_RADIUS;
+    perception2 := perception_radius * perception_radius;
+    separation2 := separation_radius * separation_radius;
 
     align_sum: Vector2;
     cohesion_sum: Vector2;
@@ -115,13 +129,13 @@ boids_step_compute :: (using in: Boids_Compute_In, data: *Boids_Compute_Params) 
         align_target := align_avg;
         align_len := length(align_target);
         if align_len < 0.000001 {
-            align_target = .{fallback_dir.x * MIN_SPEED, fallback_dir.y * MIN_SPEED};
-        } else if align_len > MAX_SPEED {
+            align_target = .{fallback_dir.x * min_speed, fallback_dir.y * min_speed};
+        } else if align_len > max_speed {
             inv := 1.0 / align_len;
-            align_target = .{align_target.x * inv * MAX_SPEED, align_target.y * inv * MAX_SPEED};
-        } else if align_len < MIN_SPEED {
+            align_target = .{align_target.x * inv * max_speed, align_target.y * inv * max_speed};
+        } else if align_len < min_speed {
             inv := 1.0 / align_len;
-            align_target = .{align_target.x * inv * MIN_SPEED, align_target.y * inv * MIN_SPEED};
+            align_target = .{align_target.x * inv * min_speed, align_target.y * inv * min_speed};
         }
         align_force := Vector2.{align_target.x - vel.x, align_target.y - vel.y};
 
@@ -130,64 +144,63 @@ boids_step_compute :: (using in: Boids_Compute_In, data: *Boids_Compute_Params) 
         cohesion_target := cohesion_dir;
         cohesion_len := sqrt(cohesion_target.x * cohesion_target.x + cohesion_target.y * cohesion_target.y);
         if cohesion_len < 0.000001 {
-            cohesion_target = .{fallback_dir.x * MIN_SPEED, fallback_dir.y * MIN_SPEED};
-        } else if cohesion_len > MAX_SPEED {
+            cohesion_target = .{fallback_dir.x * min_speed, fallback_dir.y * min_speed};
+        } else if cohesion_len > max_speed {
             inv := 1.0 / cohesion_len;
-            cohesion_target = .{cohesion_target.x * inv * MAX_SPEED, cohesion_target.y * inv * MAX_SPEED};
-        } else if cohesion_len < MIN_SPEED {
+            cohesion_target = .{cohesion_target.x * inv * max_speed, cohesion_target.y * inv * max_speed};
+        } else if cohesion_len < min_speed {
             inv := 1.0 / cohesion_len;
-            cohesion_target = .{cohesion_target.x * inv * MIN_SPEED, cohesion_target.y * inv * MIN_SPEED};
+            cohesion_target = .{cohesion_target.x * inv * min_speed, cohesion_target.y * inv * min_speed};
         }
         cohesion_force := cohesion_target - vel;
 
         separation_target := separation_sum;
         separation_len := sqrt(separation_target.x * separation_target.x + separation_target.y * separation_target.y);
         if separation_len < 0.000001 {
-            separation_target = fallback_dir * MIN_SPEED;
-        } else if separation_len > MAX_SPEED {
+            separation_target = fallback_dir * min_speed;
+        } else if separation_len > max_speed {
             inv := 1.0 / separation_len;
-            separation_target = separation_target * inv * MAX_SPEED;
-        } else if separation_len < MIN_SPEED {
+            separation_target = separation_target * inv * max_speed;
+        } else if separation_len < min_speed {
             inv := 1.0 / separation_len;
-            separation_target = separation_target * inv * MIN_SPEED;
+            separation_target = separation_target * inv * min_speed;
         }
         
         separation_force := separation_target - vel;
         accel = align_force * ALIGN_WEIGHT + cohesion_force * COHESION_WEIGHT + separation_force * SEPARATION_WEIGHT;
     }
     
-    turn_impulse := boids_random_turn_impulse(i, pos, vel);
+    turn_impulse := boids_random_turn_impulse(i, pos, vel, data.control.max_speed);
     accel += turn_impulse;
 
-    cursor_pos := data.control.cursor;
-    cursor_delta := pos - cursor_pos;
+    cursor_delta := pos - data.control.cursor;
     cursor_dist2 := cursor_delta.x * cursor_delta.x + cursor_delta.y * cursor_delta.y;
     cursor_radius2 := CURSOR_AVOID_RADIUS * CURSOR_AVOID_RADIUS;
     if cursor_dist2 > 0.000001 && cursor_dist2 < cursor_radius2 {
         cursor_dist := sqrt(cursor_dist2);
         inv_cursor_dist := 1.0 / cursor_dist;
         falloff := 1.0 - (cursor_dist / CURSOR_AVOID_RADIUS);
-        cursor_force := cursor_delta * inv_cursor_dist * MAX_SPEED * falloff;
+        cursor_force := cursor_delta * inv_cursor_dist * max_speed * falloff;
         accel += cursor_force * CURSOR_AVOID_WEIGHT;
     }
 
-    next_vel := vel + accel * data.control.dt;
+    next_vel := vel + accel * dt;
     next_vel_len := sqrt(next_vel.x * next_vel.x + next_vel.y * next_vel.y);
     if next_vel_len < 0.000001 {
         next_vel = .{fallback_dir.x * MIN_SPEED, fallback_dir.y * MIN_SPEED};
-    } else if next_vel_len > MAX_SPEED {
+    } else if next_vel_len > max_speed {
         inv := 1.0 / next_vel_len;
-        next_vel = .{next_vel.x * inv * MAX_SPEED, next_vel.y * inv * MAX_SPEED};
+        next_vel = .{next_vel.x * inv * max_speed, next_vel.y * inv * max_speed};
     } else if next_vel_len < MIN_SPEED {
         inv := 1.0 / next_vel_len;
         next_vel = .{next_vel.x * inv * MIN_SPEED, next_vel.y * inv * MIN_SPEED};
     }
 
-    next_pos := pos + next_vel * data.control.dt;
-    if next_pos.x < -VIEW_EXTENT next_pos.x += VIEW_EXTENT * 2.0;
-    if next_pos.x > VIEW_EXTENT next_pos.x -= VIEW_EXTENT * 2.0;
-    if next_pos.y < -VIEW_EXTENT next_pos.y += VIEW_EXTENT * 2.0;
-    if next_pos.y > VIEW_EXTENT next_pos.y -= VIEW_EXTENT * 2.0;
+    next_pos := pos + next_vel * dt;
+    if next_pos.x < -view_extent next_pos.x += view_extent * 2.0;
+    if next_pos.x > view_extent next_pos.x -= view_extent * 2.0;
+    if next_pos.y < -view_extent next_pos.y += view_extent * 2.0;
+    if next_pos.y > view_extent next_pos.y -= view_extent * 2.0;
 
     data.state[dst_offset + i].pos = next_pos;
     data.state[dst_offset + i].vel = next_vel;
