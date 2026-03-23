@@ -1,6 +1,6 @@
 
 Outdoor_Rig :: struct {
-    sun_strength: float = 1.0;
+    sun_strength: float = 1.2;
     time_of_day: float = 0.4;
 }
 
@@ -72,7 +72,6 @@ apply_grass_lighting :: (rig: Outdoor_Rig, shadow_params: *Grass_Shadow_Params_C
     draw_params.shadow_view_proj = shadow_params.shadow_view_proj;
     draw_params.ground_size_center_z_time = shadow_params.ground_size_center_z_time;
     draw_params.ground_shape = shadow_params.ground_shape;
-    draw_params.grass_grid_height_width = shadow_params.grass_grid_height_width;
     draw_params.player_pos_radius = shadow_params.player_pos_radius;
     draw_params.view_proj = view_proj;
     draw_params.camera_pos = camera_pos;

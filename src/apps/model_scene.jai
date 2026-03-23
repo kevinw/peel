@@ -104,7 +104,17 @@ grass_shadow_params: Gpu_Buffer(Grass_Shadow_Params_CPU);
 sky_draw_params: Gpu_Buffer(Model_Scene_Sky_Params_CPU);
 debug_pick_params: Gpu_Buffer(Scene_Draw_Params_CPU);
 grass_instance_count: u32;
+grass_shadow_instance_count: u32;
 render_grass: bool = true;
+grass_density_scale: float = 4.0;
+grass_shadow_density_scale: float = 1.05;
+grass_jitter: float = 0.28;
+grass_blade_height: float = 0.22;
+grass_fade_start: float = 10.0;
+grass_fade_end: float = 26.0;
+grass_far_shade_start: float = 16.0;
+grass_shadow_fade_start: float = 7.0;
+grass_shadow_fade_end: float = 16.0;
 scene_shadows_enabled: bool = true;
 mediapipe_body_casts_shadows: bool = true;
 mediapipe_face_casts_shadows: bool = true;
@@ -245,15 +255,6 @@ on_dll_init :: () {
     mediapipe_face_casts_shadows = false;
 
     scene_palette_models = Scene_File.scan_scene_palette_models();
-    scene_manip_objects.allocator = context.allocator;
-    scene_manip_node_indices.allocator = context.allocator;
-    running_lizard_attachment_instances.allocator = context.allocator;
-    mediapipe_demo_instances.allocator = context.allocator;
-    mediapipe_face_instances.allocator = context.allocator;
-    shadow_skip_batch.allocator = context.allocator;
-    batch_pick_object_ids.allocator = context.allocator;
-    batch_compiled_node_indices.allocator = context.allocator;
-    init(*horde_runtime, context.allocator);
     scene_doc, compiled_scene = Scene_File.load_compiled_scene_cached(SCENE_ROOT_PATH);
     init_scene_geo_from_palette();
     rebuild_scene_runtime();
@@ -323,6 +324,16 @@ tick :: () {
     _, p_pressed := input_down("P");
     if p_pressed toggle_control_mode();
 
+    grass_density_scale = clamp(grass_density_scale, 0.25, 9.0);
+    grass_shadow_density_scale = clamp(grass_shadow_density_scale, 0.0, 2.0);
+    grass_jitter = clamp(grass_jitter, 0.0, 0.8);
+    grass_blade_height = clamp(grass_blade_height, 0.05, 0.5);
+    grass_fade_start = clamp(grass_fade_start, 0.0, 128.0);
+    grass_fade_end = clamp(grass_fade_end, grass_fade_start + 0.001, 160.0);
+    grass_far_shade_start = clamp(grass_far_shade_start, grass_fade_start, grass_fade_end);
+    grass_shadow_fade_start = clamp(grass_shadow_fade_start, 0.0, 128.0);
+    grass_shadow_fade_end = clamp(grass_shadow_fade_end, grass_shadow_fade_start + 0.001, 160.0);
+
     if app_ui_enabled {
         using ImGui;
         if Begin("Model Scene", flags = .NoCollapse | .AlwaysAutoResize) {
@@ -331,6 +342,13 @@ tick :: () {
                 Physics.debug_draw_enabled = physics_gizmos_enabled;
             }
             Checkbox("Render Grass", *render_grass);
+            SliderFloat("Grass Density", *grass_density_scale, 0.25, 3.0, "%.2f");
+            SliderFloat("Grass Shadow Density", *grass_shadow_density_scale, 0.0, 2.0, "%.2f");
+            SliderFloat("Grass Fade Start", *grass_fade_start, 1.0, 64.0, "%.1f");
+            SliderFloat("Grass Fade End", *grass_fade_end, 2.0, 96.0, "%.1f");
+            SliderFloat("Grass Far Shade", *grass_far_shade_start, 1.0, 96.0, "%.1f");
+            SliderFloat("Grass Shadow Fade Start", *grass_shadow_fade_start, 1.0, 64.0, "%.1f");
+            SliderFloat("Grass Shadow Fade End", *grass_shadow_fade_end, 2.0, 96.0, "%.1f");
             Checkbox("Scene Shadows", *scene_shadows_enabled);
             do_ui(*horde_runtime);
             if Checkbox("Mediapipe Body Casts Shadows", *mediapipe_body_casts_shadows) {
@@ -633,6 +651,18 @@ tick :: () {
     apply_ground_lighting(outdoor_rig, ground_shadow_params.cpu, ground_draw_params.cpu, view_proj, scene_camera.position, shadow_map.light_dir);
     lizard_pos := character_controller_position(*running_lizard_controller);
     apply_grass_lighting(outdoor_rig, grass_shadow_params.cpu, *grass_draw_params, active_ground, lizard_pos, running_lizard_controller.facing_yaw, cast(float) time, view_proj, scene_camera.position, shadow_map.light_dir, shadow_map.view_proj, shadow_binding);
+    grass_grid_x := max(1, cast(s32) ceil(cast(float) active_ground.render_grid_x * grass_density_scale));
+    grass_grid_z := max(1, cast(s32) ceil(cast(float) active_ground.render_grid_z * grass_density_scale));
+    grass_shadow_grid_x := max(1, cast(s32) ceil(cast(float) active_ground.render_grid_x * grass_shadow_density_scale));
+    grass_shadow_grid_z := max(1, cast(s32) ceil(cast(float) active_ground.render_grid_z * grass_shadow_density_scale));
+    grass_instance_count = cast(u32) grass_grid_x * cast(u32) grass_grid_z;
+    grass_shadow_instance_count = cast(u32) grass_shadow_grid_x * cast(u32) grass_shadow_grid_z;
+    grass_shadow_params.cpu.grass_grid_height_width = .{cast(float) grass_shadow_grid_x, cast(float) grass_shadow_grid_z, grass_jitter, grass_blade_height};
+    grass_shadow_params.cpu.camera_pos_fade_start = .{scene_camera.position.x, scene_camera.position.y, scene_camera.position.z, grass_shadow_fade_start};
+    grass_shadow_params.cpu.fade_end_far_shade_shadow_end = .{grass_fade_end, grass_far_shade_start, grass_shadow_fade_end, 0.0};
+    grass_draw_params.cpu.grass_grid_height_width = .{cast(float) grass_grid_x, cast(float) grass_grid_z, grass_jitter, grass_blade_height};
+    grass_draw_params.cpu.camera_pos_fade_start = .{scene_camera.position.x, scene_camera.position.y, scene_camera.position.z, grass_fade_start};
+    grass_draw_params.cpu.fade_end_far_shade_shadow_end = .{grass_fade_end, grass_far_shade_start, grass_shadow_fade_end, 0.0};
 
     Gizmo_Render.gizmo_render_set_view_projection(*gizmo_render_ctx, view_proj);
     Gizmo_Render.gizmo_render_set_view_projection(*gizmo_overlay_render_ctx, view_proj);
@@ -668,9 +698,9 @@ tick :: () {
         gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .LESS, depth_mode = .READ | .WRITE});
         gpu_set_pipeline(cmd_buff, shadow_pipeline);
         draw_result := gpu_draw_instanced_direct(cmd_buff, ground_shadow_params.gpu, ground_index_count, 1);
-        if render_grass && grass_shadow_params.cpu != null && grass_instance_count > 0 {
+        if render_grass && grass_shadow_params.cpu != null && grass_shadow_instance_count > 0 {
             gpu_set_pipeline(cmd_buff, grass_shadow_pipeline);
-            draw_result = gpu_draw_instanced_direct(cmd_buff, grass_shadow_params.gpu, 6, grass_instance_count);
+            draw_result = gpu_draw_instanced_direct(cmd_buff, grass_shadow_params.gpu, 6, grass_shadow_instance_count);
             gpu_set_pipeline(cmd_buff, shadow_pipeline);
         }
         for batch: scene_batches {
@@ -1107,6 +1137,7 @@ clear_scene_runtime_resources :: () {
     gpu_delete(*ground_vertices);
     gpu_delete(*ground_normal_texture);
     grass_instance_count = 0;
+    grass_shadow_instance_count = 0;
     ground_index_count = 0;
 
     if gpu_arena.cpu != null gpu_free_arena(gpu_arena);
@@ -1885,15 +1916,20 @@ init_ground_plane :: (ground: Scene_File.Scene_Procedural_Ground_Desc) {
         roughness_texture_index = gpu_texture_view_index(ground_roughness_texture_view),
         ao_texture_index = gpu_texture_view_index(ground_ao_texture_view),
     };
-    grass_grid_x := max(1, ground.render_grid_x * 4 / 3 * 3);
-    grass_grid_z := max(1, ground.render_grid_z * 4 / 3 * 3);
+    grass_grid_x := max(1, cast(s32) ceil(cast(float) ground.render_grid_x * grass_density_scale));
+    grass_grid_z := max(1, cast(s32) ceil(cast(float) ground.render_grid_z * grass_density_scale));
+    grass_shadow_grid_x := max(1, cast(s32) ceil(cast(float) ground.render_grid_x * grass_shadow_density_scale));
+    grass_shadow_grid_z := max(1, cast(s32) ceil(cast(float) ground.render_grid_z * grass_shadow_density_scale));
     grass_instance_count = cast(u32) grass_grid_x * cast(u32) grass_grid_z;
+    grass_shadow_instance_count = cast(u32) grass_shadow_grid_x * cast(u32) grass_shadow_grid_z;
     grass_shadow_params.cpu.* = .{
         shadow_view_proj = Matrix4_Identity,
         ground_size_center_z_time = .{ground.size_x, ground.size_z, ground.center_z, 0.0},
         ground_shape = .{ground.ridge, ground.swell, ground.warp, 0.0},
-        grass_grid_height_width = .{cast(float) grass_grid_x, cast(float) grass_grid_z, 0.33, 0.24},
+        grass_grid_height_width = .{cast(float) grass_shadow_grid_x, cast(float) grass_shadow_grid_z, grass_jitter, grass_blade_height},
         player_pos_radius = .{0.0, 0.0, 0.0, 1.7},
+        camera_pos_fade_start = .{0.0, 0.0, 0.0, grass_shadow_fade_start},
+        fade_end_far_shade_shadow_end = .{grass_fade_end, grass_far_shade_start, grass_shadow_fade_end, 0.0},
     };
     grass_draw_params.cpu.* = .{
         view_proj = Matrix4_Identity,
@@ -1904,8 +1940,10 @@ init_ground_plane :: (ground: Scene_File.Scene_Procedural_Ground_Desc) {
         shadow_meta = .{0.0, 0.0, 0.0, 0.0},
         ground_size_center_z_time = grass_shadow_params.cpu.ground_size_center_z_time,
         ground_shape = grass_shadow_params.cpu.ground_shape,
-        grass_grid_height_width = grass_shadow_params.cpu.grass_grid_height_width,
+        grass_grid_height_width = .{cast(float) grass_grid_x, cast(float) grass_grid_z, grass_jitter, grass_blade_height},
         player_pos_radius = grass_shadow_params.cpu.player_pos_radius,
+        camera_pos_fade_start = .{0.0, 0.0, 0.0, grass_fade_start},
+        fade_end_far_shade_shadow_end = .{grass_fade_end, grass_far_shade_start, grass_shadow_fade_end, 0.0},
     };
     ground_index_count = cast(u32) ground_indices.cpu.count;
 }

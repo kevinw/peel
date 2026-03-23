@@ -19,6 +19,9 @@ last_time: float64;
 time: float64;
 frame_count: int;
 
+time_scale: float = 1;
+edit_time_scale: float = 1;
+
 last_window_size: V2(u32);
 window: *void; // TODO
 sgpu_debug_status: string;
@@ -113,6 +116,10 @@ app_update :: (update_ctx: *App_Update_Ctx) {
     editor_dt = dt;
     last_time = time;
     cpu_frame_ms := dt * 1000.0;
+    
+    dt *= time_scale;
+    editor_dt *= edit_time_scale;
+    
     gpu_frame_ms := gpu_last_frame_gpu_ms();
     perf_push_cpu_frame_ms(cpu_frame_ms);
     perf_set_latest_gpu_frame_ms(gpu_frame_ms);
@@ -177,8 +184,17 @@ app_update :: (update_ctx: *App_Update_Ctx) {
                             app_browser_open = !app_browser_open;
                             app_ui_enabled |= app_browser_open;
                         }
+                    
+                    // Reload app dll
                     case #char "R";
-                        update_ctx.app_return_flags |= .Reload;
+                        #if !SINGLE_BINARY update_ctx.app_return_flags |= .Reload;
+                        
+                    // Modify time scale with minus/plus
+                    case #char "-";
+                        modify_delta_time_multiplier(0.5);
+                    case 43 /* equals-plus */;
+                        modify_delta_time_multiplier(2.0);
+                        
                     }
                 }
         }
@@ -656,4 +672,12 @@ toggle_all_ui :: () {
         app_browser_open = false;
         ui_cancel_pending_frame(*current_ui_render_frame);
     }
+}
+
+modify_delta_time_multiplier :: (factor: float) {
+    time_scale *= factor;
+    if abs(time_scale - 1.0) < 0.000001 {
+        time_scale = 1.0;
+    }
+    report_replace("time_scale = %", delta_time_multiplier);
 }

@@ -41,18 +41,22 @@ init :: () {
 
     job_system = JobSystemThreadPool_Create(null);
 
-	// We use only 2 layers: one for non-moving objects and one for moving objects
-	objectLayerPairFilterTable := ObjectLayerPairFilterTable_Create(2);
+	// We use only 2 layers: one for non-moving objects and one for moving objects.
+	objectLayerPairFilterTable := ObjectLayerPairFilterTable_Create(Layers.NUM_LAYERS);
 	ObjectLayerPairFilterTable_EnableCollision(objectLayerPairFilterTable, Layers.NON_MOVING, Layers.MOVING);
 	ObjectLayerPairFilterTable_EnableCollision(objectLayerPairFilterTable, Layers.MOVING, Layers.NON_MOVING);
 	ObjectLayerPairFilterTable_EnableCollision(objectLayerPairFilterTable, Layers.MOVING, Layers.MOVING);
 
-	// We use a 1-to-1 mapping between object layers and broadphase layers
-	broadPhaseLayerInterfaceTable := BroadPhaseLayerInterfaceTable_Create(2, 2);
+	// We use a 1-to-1 mapping between object layers and broadphase layers.
+	broadPhaseLayerInterfaceTable := BroadPhaseLayerInterfaceTable_Create(Layers.NUM_LAYERS, BroadPhaseLayers.NUM_LAYERS);
 	BroadPhaseLayerInterfaceTable_MapObjectToBroadPhaseLayer(broadPhaseLayerInterfaceTable, Layers.NON_MOVING, BroadPhaseLayers.NON_MOVING);
 	BroadPhaseLayerInterfaceTable_MapObjectToBroadPhaseLayer(broadPhaseLayerInterfaceTable, Layers.MOVING, BroadPhaseLayers.MOVING);
 
-    objectVsBroadPhaseLayerFilter := ObjectVsBroadPhaseLayerFilterTable_Create(broadPhaseLayerInterfaceTable, 2, objectLayerPairFilterTable, 2);
+    objectVsBroadPhaseLayerFilter := ObjectVsBroadPhaseLayerFilterTable_Create(
+        broadPhaseLayerInterfaceTable,
+        Layers.NUM_LAYERS,
+        objectLayerPairFilterTable,
+        Layers.NUM_LAYERS);
 
     settings := PhysicsSystemSettings.{
         maxBodies = 65536,

@@ -65,6 +65,8 @@ Grass_Draw_Params :: struct {
     ground_shape: Vector4;
     grass_grid_height_width: Vector4;
     player_pos_radius: Vector4;
+    camera_pos_fade_start: Vector4;
+    fade_end_far_shade_shadow_end: Vector4;
 }
 
 Grass_Shadow_Params :: struct {
@@ -73,6 +75,8 @@ Grass_Shadow_Params :: struct {
     ground_shape: Vector4;
     grass_grid_height_width: Vector4;
     player_pos_radius: Vector4;
+    camera_pos_fade_start: Vector4;
+    fade_end_far_shade_shadow_end: Vector4;
 }
 
 Model_Scene_Sky_Params :: struct {
@@ -169,6 +173,7 @@ Grass_Vertex_Out :: struct {
     world_pos: Vector3;
     normal: Vector3;
     blade_t: float;
+    fade_t: float;
     shadow_uvz: Vector3;
     shadow_meta: Vector4;
 }
@@ -177,6 +182,7 @@ Grass_Fragment_In :: struct {
     world_pos: Vector3;
     normal: Vector3;
     blade_t: float;
+    fade_t: float;
     shadow_uvz: Vector3;
     shadow_meta: Vector4;
 }
@@ -615,6 +621,19 @@ model_scene_grass_shadow_vertex_main :: (using in: Grass_Vertex_In, params: *Gra
     using out: Grass_Shadow_Vertex_Out;
     blade_t := grass_blade_vt(vertex_id);
     world_pos := grass_blade_world_pos(vertex_id, instance_id, blade_t, params);
+    camera_pos := Vector3.{params.camera_pos_fade_start.x, params.camera_pos_fade_start.y, params.camera_pos_fade_start.z};
+    shadow_fade_start := max(params.camera_pos_fade_start.w, 0.0);
+    shadow_fade_end := max(params.fade_end_far_shade_shadow_end.z, shadow_fade_start + 0.001);
+    shadow_dx := world_pos.x - camera_pos.x;
+    shadow_dy := world_pos.y - camera_pos.y;
+    shadow_dz := world_pos.z - camera_pos.z;
+    shadow_dist := sqrt(max(shadow_dx * shadow_dx + shadow_dy * shadow_dy + shadow_dz * shadow_dz, 0.0));
+    shadow_fade_t := clamp((shadow_fade_end - shadow_dist) / (shadow_fade_end - shadow_fade_start), 0.0, 1.0);
+    if shadow_fade_t <= 0.0 {
+        gl_Position = .{0.0, 0.0, 2.0, 1.0};
+        depth01 = 1.0;
+        return out;
+    }
     clip := params.shadow_view_proj * Vector4.{world_pos.x, world_pos.y, world_pos.z, 1.0};
     gl_Position = clip;
     depth01 = clamp(clip.z, 0.0, 1.0);
@@ -631,6 +650,21 @@ model_scene_grass_vertex_main :: (using in: Grass_Vertex_In, params: *Grass_Draw
     using out: Grass_Vertex_Out;
     blade_t = grass_blade_vt(vertex_id);
     world_pos = grass_blade_world_pos(vertex_id, instance_id, blade_t, params);
+    camera_pos := Vector3.{params.camera_pos_fade_start.x, params.camera_pos_fade_start.y, params.camera_pos_fade_start.z};
+    fade_start := max(params.camera_pos_fade_start.w, 0.0);
+    fade_end := max(params.fade_end_far_shade_shadow_end.x, fade_start + 0.001);
+    dx := world_pos.x - camera_pos.x;
+    dy := world_pos.y - camera_pos.y;
+    dz := world_pos.z - camera_pos.z;
+    dist := sqrt(max(dx * dx + dy * dy + dz * dz, 0.0));
+    fade_t = clamp((fade_end - dist) / (fade_end - fade_start), 0.0, 1.0);
+    if fade_t <= 0.0 {
+        gl_Position = .{0.0, 0.0, 2.0, 1.0};
+        shadow_uvz = .{0.0, 0.0, 2.0};
+        shadow_meta = params.shadow_meta;
+        normal = .{0.0, 1.0, 0.0};
+        return out;
+    }
     clip := params.view_proj * Vector4.{world_pos.x, world_pos.y, world_pos.z, 1.0};
     gl_Position = clip;
     shadow_clip := params.shadow_view_proj * Vector4.{world_pos.x, world_pos.y, world_pos.z, 1.0};
@@ -641,6 +675,16 @@ model_scene_grass_vertex_main :: (using in: Grass_Vertex_In, params: *Grass_Draw
 } @vertex_shader
 
 model_scene_grass_fragment_main :: (using in: Grass_Fragment_In, params: *Grass_Draw_Params) -> Vector4 @SV_Target0 {
+    if fade_t <= 0.0 {
+        discard();
+    }
+
+    dither_seed := world_pos.x * cast(float) 12.9898 + world_pos.y * cast(float) 78.233 + world_pos.z * cast(float) 37.719 + blade_t * cast(float) 5.173;
+    dither := fract(sin(dither_seed) * cast(float) 43758.5453);
+    if dither > fade_t {
+        discard();
+    }
+
     N := normalize(normal);
     sun_dir := normalize(-params.light_dir);
     sun_strength := max(params.sun_params.x, 0.0);
@@ -650,7 +694,16 @@ model_scene_grass_fragment_main :: (using in: Grass_Fragment_In, params: *Grass_
     ndl_raw := dot(N, L);
     ndl := max(ndl_raw, 0.0);
     ndh := max(dot(N, H), 0.0);
-    shadow := model_scene_shadow_visibility(shadow_meta, shadow_uvz);
+    far_shade_start := clamp(params.fade_end_far_shade_shadow_end.y, params.camera_pos_fade_start.w, params.fade_end_far_shade_shadow_end.x);
+    camera_pos := Vector3.{params.camera_pos_fade_start.x, params.camera_pos_fade_start.y, params.camera_pos_fade_start.z};
+    dx := world_pos.x - camera_pos.x;
+    dy := world_pos.y - camera_pos.y;
+    dz := world_pos.z - camera_pos.z;
+    dist := sqrt(max(dx * dx + dy * dy + dz * dz, 0.0));
+    far_fade_span := max(far_shade_start - params.camera_pos_fade_start.w, 0.001);
+    far_fade_t := clamp((far_shade_start - dist) / far_fade_span, 0.0, 1.0);
+    use_far_shading := fade_t < 1.0 && far_fade_t <= 0.0;
+    shadow := ifx use_far_shading then 1.0 else model_scene_shadow_visibility(shadow_meta, shadow_uvz);
 
     root_col := Vector3.{0.22, 0.18, 0.08};
     tip_col := Vector3.{0.74, 0.67, 0.31};
@@ -659,11 +712,11 @@ model_scene_grass_fragment_main :: (using in: Grass_Fragment_In, params: *Grass_
     warm := Vector3.{1.08, 1.02, 0.91};
     base := mix(root_col, tip_col, blade_t) * mix(cool, warm, tint_noise);
 
-    indirect := model_scene_indirect_light(N, sun_dir, sun_strength, shadow);
+    indirect := ifx use_far_shading then Vector3.{0.18, 0.19, 0.16} else model_scene_indirect_light(N, sun_dir, sun_strength, shadow);
     wrapped_ndl := clamp((ndl_raw + 0.32) / 1.32, 0.0, 1.0);
-    diffuse := wrapped_ndl * 0.7 * shadow * sun_strength;
-    specular := pow(ndh, 14.0) * 0.03 * shadow * sun_strength;
-    rim := pow(1.0 - max(dot(N, V), 0.0), 2.3) * 0.08;
+    diffuse := wrapped_ndl * (ifx use_far_shading then 0.45 else 0.7) * shadow * sun_strength;
+    specular := ifx use_far_shading then 0.0 else pow(ndh, 14.0) * 0.03 * shadow * sun_strength;
+    rim := ifx use_far_shading then 0.0 else pow(1.0 - max(dot(N, V), 0.0), 2.3) * 0.08;
     sun_col := mix(Vector3.{1.0, 0.96, 0.9}, Vector3.{1.16, 0.62, 0.32}, 1.0 - clamp(abs(sun_dir.y) * 2.2, 0.0, 1.0));
     color := base * indirect + base * diffuse + sun_col * specular + base * rim;
     color = model_scene_apply_atmosphere(color, world_pos, params.camera_pos, sun_dir);

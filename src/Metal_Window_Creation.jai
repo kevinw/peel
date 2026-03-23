@@ -12,23 +12,22 @@
     }
 
     peel_input_view_key_down :: (self: *NSView, _cmd: Selector, event: *NSEvent) #c_call {
-        _ = self; _ = _cmd;
         if !event return;
-
+        
+        if ImGui.GetCurrentContext() == null return;
+        io := ImGui.GetIO();
+        if !io.WantTextInput return;
+        
         ctx: #Context;
-        push_context ctx {
-            if ImGui.GetCurrentContext() != null {
-                io := ImGui.GetIO();
-                if io.WantTextInput {
-                    chars := NSEvent.characters(event);
-                    if chars != null && NSString.length(chars) > 0 {
-                        utf8 := NSString.UTF8String(chars);
-                        if utf8 != null {
-                            io.AddInputCharactersUTF8(io, utf8);
-                        }
-                    }
-                }
-            }
+        push_context,defer_pop ctx;
+        
+        // @Leak ?
+        chars := NSEvent.characters(event);
+        if chars == null || NSString.length(chars) <= 0 return;
+        
+        utf8 := NSString.UTF8String(chars);
+        if utf8 != null {
+            io.AddInputCharactersUTF8(io, utf8);
         }
     }
 

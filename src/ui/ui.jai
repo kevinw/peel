@@ -1,4 +1,5 @@
 #load "./inspect.jai";
+#load "./report.jai";
 
 current_ui_render_frame: UI_Render_Frame_Info;
 ui_frame_sync_semaphore: Gpu_Semaphore;
