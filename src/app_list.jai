@@ -12,6 +12,7 @@ APP_FILES :: string.[
     "fluid2d.jai",
     "ripple_heightfield.jai",
     "flux.jai",
+    "inspiration_test.jai",
     "sand_toy.jai",
     "gizmos_test.jai",
     "terrain_test.jai",

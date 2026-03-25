@@ -92,6 +92,7 @@ MacOS_Runtime_Services :: struct {
   window_is_occluded:         *void;
   window_has_focus:           *void;
   take_quit_requested:        *void;
+  take_dropped_file:          *void;
   set_custom_cursor_handling: *void;
   ensure_window_frontmost:    *void;
 }

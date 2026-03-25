@@ -219,15 +219,15 @@ scene_geo_init :: (geo: *Scene_Geo, model_paths: []string) {
     scene_geo_init_from_imported(geo, *imported);
 }
 
-scene_geo_init_from_imported :: (geo: *Scene_Geo, imported: *Imported_Scene) {
+scene_geo_init_from_imported :: (using geo: *Scene_Geo, imported: *Imported_Scene) {
     for it: imported.textures {
         assert(it.width > 0 && it.height > 0 && it.pixels.count >= cast(s64) it.width * cast(s64) it.height * 4,
             "Imported texture invalid: key=% width=% height=% pixels=%.",
             it.key, it.width, it.height, it.pixels.count);
         texture, view := create_texture_from_rgba8(it.pixels, it.width, it.height);
-        array_add(*geo.textures, texture);
-        array_add(*geo.texture_views, view);
-        array_add(*geo.texture_keys, copy_string(it.key));
+        array_add(*textures, texture);
+        array_add(*texture_views, view);
+        array_add(*texture_keys, copy_string(it.key));
     }
 
     total_bytes :=
@@ -237,68 +237,68 @@ scene_geo_init_from_imported :: (geo: *Scene_Geo, imported: *Imported_Scene) {
         imported.materials.count * size_of(Scene_Material) +
         1024;
 
-    geo.arena = gpu_make_arena(total_bytes, label = "scene geo arena");
-    assert(geo.arena.cpu != null, "Scene_Geo arena creation failed.");
+    arena = gpu_make_arena(total_bytes, label = "scene geo arena");
+    assert(arena.cpu != null, "Scene_Geo arena creation failed.");
 
-    geo.vertices = gpu_alloc_view(*geo.arena, Scene_Vertex, imported.vertices.count);
-    geo.morph_vertex_deltas = gpu_alloc_view(*geo.arena, Scene_Morph_Vertex_Delta, imported.morph_vertex_deltas.count);
-    geo.indices = gpu_alloc_view(*geo.arena, u32, imported.indices.count);
-    geo.materials = gpu_alloc_view(*geo.arena, Scene_Material, imported.materials.count);
+    vertices = gpu_alloc_view(*arena, Scene_Vertex, imported.vertices.count);
+    morph_vertex_deltas = gpu_alloc_view(*arena, Scene_Morph_Vertex_Delta, imported.morph_vertex_deltas.count);
+    indices = gpu_alloc_view(*arena, u32, imported.indices.count);
+    materials = gpu_alloc_view(*arena, Scene_Material, imported.materials.count);
 
     if imported.vertices.count > 0 {
-        memcpy(geo.vertices.cpu.data, imported.vertices.data, imported.vertices.count * size_of(Scene_Vertex));
+        memcpy(vertices.cpu.data, imported.vertices.data, imported.vertices.count * size_of(Scene_Vertex));
     }
     if imported.morph_vertex_deltas.count > 0 {
-        memcpy(geo.morph_vertex_deltas.cpu.data, imported.morph_vertex_deltas.data, imported.morph_vertex_deltas.count * size_of(Scene_Morph_Vertex_Delta));
+        memcpy(morph_vertex_deltas.cpu.data, imported.morph_vertex_deltas.data, imported.morph_vertex_deltas.count * size_of(Scene_Morph_Vertex_Delta));
     }
     if imported.indices.count > 0 {
-        memcpy(geo.indices.cpu.data, imported.indices.data, imported.indices.count * size_of(u32));
+        memcpy(indices.cpu.data, imported.indices.data, imported.indices.count * size_of(u32));
     }
     if imported.materials.count > 0 {
         for imported.materials {
             material := it;
-            assert(material.base_color_texture_index < geo.texture_views.count, "Imported texture index % out of range %.", material.base_color_texture_index, geo.texture_views.count);
-            material.base_color_texture_index = gpu_texture_view_index(geo.texture_views[material.base_color_texture_index]);
+            assert(material.base_color_texture_index < texture_views.count, "Imported texture index % out of range %.", material.base_color_texture_index, texture_views.count);
+            material.base_color_texture_index = gpu_texture_view_index(texture_views[material.base_color_texture_index]);
             if material.opacity_texture_index != SCENE_INVALID_TEXTURE_INDEX {
-                assert(material.opacity_texture_index < geo.texture_views.count, "Imported opacity texture index % out of range %.", material.opacity_texture_index, geo.texture_views.count);
-                material.opacity_texture_index = gpu_texture_view_index(geo.texture_views[material.opacity_texture_index]);
+                assert(material.opacity_texture_index < texture_views.count, "Imported opacity texture index % out of range %.", material.opacity_texture_index, texture_views.count);
+                material.opacity_texture_index = gpu_texture_view_index(texture_views[material.opacity_texture_index]);
             }
             if material.normal_texture_index != SCENE_INVALID_TEXTURE_INDEX {
-                assert(material.normal_texture_index < geo.texture_views.count, "Imported normal texture index % out of range %.", material.normal_texture_index, geo.texture_views.count);
-                material.normal_texture_index = gpu_texture_view_index(geo.texture_views[material.normal_texture_index]);
+                assert(material.normal_texture_index < texture_views.count, "Imported normal texture index % out of range %.", material.normal_texture_index, texture_views.count);
+                material.normal_texture_index = gpu_texture_view_index(texture_views[material.normal_texture_index]);
             }
             if material.roughness_texture_index != SCENE_INVALID_TEXTURE_INDEX {
-                assert(material.roughness_texture_index < geo.texture_views.count, "Imported roughness texture index % out of range %.", material.roughness_texture_index, geo.texture_views.count);
-                material.roughness_texture_index = gpu_texture_view_index(geo.texture_views[material.roughness_texture_index]);
+                assert(material.roughness_texture_index < texture_views.count, "Imported roughness texture index % out of range %.", material.roughness_texture_index, texture_views.count);
+                material.roughness_texture_index = gpu_texture_view_index(texture_views[material.roughness_texture_index]);
             }
             if material.ao_texture_index != SCENE_INVALID_TEXTURE_INDEX {
-                assert(material.ao_texture_index < geo.texture_views.count, "Imported AO texture index % out of range %.", material.ao_texture_index, geo.texture_views.count);
-                material.ao_texture_index = gpu_texture_view_index(geo.texture_views[material.ao_texture_index]);
+                assert(material.ao_texture_index < texture_views.count, "Imported AO texture index % out of range %.", material.ao_texture_index, texture_views.count);
+                material.ao_texture_index = gpu_texture_view_index(texture_views[material.ao_texture_index]);
             }
             sampler := scene_geo_get_or_create_sampler(geo,
                 address_mode_from_assimp(cast(ai.TextureMapMode) material.address_mode_u),
                 address_mode_from_assimp(cast(ai.TextureMapMode) material.address_mode_v));
             material.sampler_index = cast(u32) sampler - 1;
-            geo.materials.cpu[it_index] = material;
+            materials.cpu[it_index] = material;
         }
     }
 
-    array_copy(*geo.meshes, imported.meshes);
-    array_copy(*geo.nodes, imported.nodes);
-    for imported.node_names array_add(*geo.node_names, copy_string(it));
-    array_copy(*geo.node_bind_transforms, imported.node_bind_transforms);
-    array_copy(*geo.node_mesh_refs, imported.node_mesh_refs);
-    array_copy(*geo.mesh_skin_bones, imported.mesh_skin_bones);
-    array_copy(*geo.morph_targets, imported.morph_targets);
-    for imported.morph_target_names array_add(*geo.morph_target_names, copy_string(it));
-    array_copy(*geo.anim_position_keys, imported.anim_position_keys);
-    array_copy(*geo.anim_rotation_keys, imported.anim_rotation_keys);
-    array_copy(*geo.anim_scale_keys, imported.anim_scale_keys);
-    array_copy(*geo.anim_channels, imported.anim_channels);
-    array_copy(*geo.anim_morph_keys, imported.anim_morph_keys);
-    array_copy(*geo.anim_morph_channels, imported.anim_morph_channels);
+    array_copy(*meshes, imported.meshes);
+    array_copy(*nodes, imported.nodes);
+    for imported.node_names array_add(*node_names, copy_string(it));
+    array_copy(*node_bind_transforms, imported.node_bind_transforms);
+    array_copy(*node_mesh_refs, imported.node_mesh_refs);
+    array_copy(*mesh_skin_bones, imported.mesh_skin_bones);
+    array_copy(*morph_targets, imported.morph_targets);
+    for imported.morph_target_names array_add(*morph_target_names, copy_string(it));
+    array_copy(*anim_position_keys, imported.anim_position_keys);
+    array_copy(*anim_rotation_keys, imported.anim_rotation_keys);
+    array_copy(*anim_scale_keys, imported.anim_scale_keys);
+    array_copy(*anim_channels, imported.anim_channels);
+    array_copy(*anim_morph_keys, imported.anim_morph_keys);
+    array_copy(*anim_morph_channels, imported.anim_morph_channels);
     for it: imported.anim_clips {
-        array_add(*geo.anim_clips, .{
+        array_add(*anim_clips, .{
             name = copy_string(it.name),
             duration = it.duration,
             ticks_per_second = it.ticks_per_second,
@@ -309,56 +309,56 @@ scene_geo_init_from_imported :: (geo: *Scene_Geo, imported: *Imported_Scene) {
         });
     }
     for it: imported.models {
-        model := array_add(*geo.models);
+        model := array_add(*models);
         model.* = it;
         model.name = copy_string(it.name);
     }
-    array_reserve(*geo.model_bounds, geo.models.count);
-    for model_index: 0..geo.models.count-1 {
-        array_add(*geo.model_bounds, compute_model_bounds_from_geo(geo, cast(s32) model_index));
+    array_reserve(*model_bounds, models.count);
+    for model_index: 0..models.count-1 {
+        array_add(*model_bounds, compute_model_bounds_from_geo(geo, cast(s32) model_index));
     }
 
     gpu_commit_residency();
 }
 
-scene_geo_deinit :: (geo: *Scene_Geo) {
-    for geo.texture_keys if it.count != 0 free(it);
-    array_free(geo.texture_keys);
-    for geo.models if it.name.count != 0 free(it.name);
-    for geo.anim_clips if it.name.count != 0 free(it.name);
-    array_free(geo.anim_clips);
-    array_free(geo.anim_morph_channels);
-    array_free(geo.anim_morph_keys);
-    array_free(geo.anim_channels);
-    array_free(geo.anim_scale_keys);
-    array_free(geo.anim_rotation_keys);
-    array_free(geo.anim_position_keys);
-    array_free(geo.morph_targets);
-    for geo.morph_target_names if it.count != 0 free(it);
-    array_free(geo.morph_target_names);
-    array_free(geo.mesh_skin_bones);
-    array_free(geo.models);
-    for geo.node_names if it.count != 0 free(it);
-    array_free(geo.node_names);
-    array_free(geo.model_bounds);
-    array_free(geo.node_bind_transforms);
-    array_free(geo.nodes);
-    array_free(geo.node_mesh_refs);
-    array_free(geo.meshes);
+scene_geo_deinit :: (using geo: *Scene_Geo) {
+    for texture_keys if it.count != 0 free(it);
+    array_free(texture_keys);
+    for models if it.name.count != 0 free(it.name);
+    for anim_clips if it.name.count != 0 free(it.name);
+    array_free(anim_clips);
+    array_free(anim_morph_channels);
+    array_free(anim_morph_keys);
+    array_free(anim_channels);
+    array_free(anim_scale_keys);
+    array_free(anim_rotation_keys);
+    array_free(anim_position_keys);
+    array_free(morph_targets);
+    for morph_target_names if it.count != 0 free(it);
+    array_free(morph_target_names);
+    array_free(mesh_skin_bones);
+    array_free(models);
+    for node_names if it.count != 0 free(it);
+    array_free(node_names);
+    array_free(model_bounds);
+    array_free(node_bind_transforms);
+    array_free(nodes);
+    array_free(node_mesh_refs);
+    array_free(meshes);
 
-    for geo.textures {
+    for textures {
         if it != 0 gpu_free(it);
     }
-    array_free(geo.textures);
-    array_free(geo.texture_views);
-    for geo.samplers if it.sampler != 0 gpu_free(it.sampler);
-    array_free(geo.samplers);
-    if geo.arena.cpu != null gpu_free_arena(geo.arena);
+    array_free(textures);
+    array_free(texture_views);
+    for samplers if it.sampler != 0 gpu_free(it.sampler);
+    array_free(samplers);
+    if arena.cpu != null gpu_free_arena(arena);
     geo.* = .{};
 }
 
-scene_geo_model_index_by_name :: (geo: *Scene_Geo, name: string) -> s32 {
-    for geo.models if it.name == name return cast(s32) it_index;
+scene_geo_model_index_by_name :: (using geo: *Scene_Geo, name: string) -> s32 {
+    for models if it.name == name return cast(s32) it_index;
     return -1;
 }
 
@@ -1674,10 +1674,8 @@ create_texture_from_bgra8 :: (pixels: []u8, width: u32, height: u32) -> Gpu_Text
 ai :: #import "assimp";
 String :: #import "String";
 File :: #import "File";
-File_Utilities :: #import "File_Utilities";
-using File_Utilities;
-Hash :: #import "Hash";
-using Hash;
+#import "File_Utilities";
+#import "Hash";
 meshopt :: #import "meshoptimizer";
 #import "Math";
 #import "stb_image";

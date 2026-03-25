@@ -179,6 +179,8 @@ app_update :: (update_ctx: *App_Update_Ctx) {
                         app_ui_enabled |= ui_opts.globals.show;
                     case .F3;
                         ui_opts.show_imgui_demo ^= true;
+                    case .F4;
+                        inspiration_board_toggle();
                     case .ESCAPE;
                         #if !SINGLE_BINARY {
                             app_browser_open = !app_browser_open;
@@ -197,6 +199,21 @@ app_update :: (update_ctx: *App_Update_Ctx) {
                         
                     }
                 }
+        }
+    }
+
+    process_input_events(*inspiration_board, Input.events_this_frame);
+
+    #if OS == .MACOS && !SINGLE_BINARY {
+        dropped_file: string;
+        while peel_take_dropped_file(*dropped_file) {
+            log("Inspiration DnD: app polled host dropped file '%'", dropped_file);
+            inspiration_board_note_dropped_file(dropped_file);
+            // @Leak: `peel_take_dropped_file` currently returns a string allocated while executing
+            // in the host runtime service context, so freeing it from the DLL side trips Basic's
+            // allocator ownership checks. Keep it alive for now until the drop-file handoff uses
+            // a shared allocator or an explicit host-side release callback.
+            dropped_file = "";
         }
     }
 
@@ -656,6 +673,7 @@ String :: #import "String";
 Env_Vars :: #import "Env_Vars";
 SHR :: #import,file "shader_hot_reload.jai";
 #load "GPU_Tools.jai";
+#load "inspiration_board.jai";
 #if !SINGLE_BINARY {
     #load "app_list.jai";
     #load "ui/app_browser.jai";

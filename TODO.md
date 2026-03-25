@@ -57,6 +57,9 @@ Sebastian Aaltonen
 - Visibility Buffer and Deferred Rendering in DOOM: The Dark Ages https://www.youtube.com/watch?v=fXakIV1OFes
 - https://wojtsterna.com/math-for-3d-programmers/
 
+# use
+- lumberyard https://developer.nvidia.com/orca/amazon-lumberyard-bistro
+
 # read
 - https://www.rastergrid.com/blog/gpu-tech/2026/03/vulkan-memory-barriers-and-image-layouts-explained/
 - https://irradiance.ca/posts/microshadowing-part2/
@@ -70,3 +73,4 @@ Sebastian Aaltonen
 - https://0byte.io/articles/pytorch_introduction.html
 - https://syllogi-graphikon.vercel.app/posts/metal-single-pass-downsampler/
 - https://www.cs.cmu.edu/~rdriley/487/papers/Thompson_1984_ReflectionsonTrustingTrust.pdf
+- https://github.com/myemural/VulkanCppExamples/tree/master

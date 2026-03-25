@@ -1,0 +1,3 @@
+# peel inspiration board v1
+view 989.634277 893.720215 1.395253
+item "/Users/kev/Downloads/GlowingBun2.png" -639.55896 -557.759216 320 221.25 "https://alextardif.com/eden.html"

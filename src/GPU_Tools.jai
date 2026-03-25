@@ -143,3 +143,44 @@ make_trs_matrix :: inline (pos: Vector3, rot: Quaternion, scale: float) -> Matri
         rotation_matrix(Matrix4, rot) *
         make_scale_matrix4(.{scale, scale, scale});
 }
+
+wrap_angle_pi :: (angle: float) -> float {
+    wrapped := angle;
+    while wrapped > PI  wrapped -= PI * 2.0;
+    while wrapped < -PI wrapped += PI * 2.0;
+    return wrapped;
+}
+
+smooth_yaw_towards :: (current: float, target: float, dt: float, turn_speed: float) -> float {
+    max_step := max(0.0, turn_speed) * dt;
+    delta := wrap_angle_pi(target - current);
+    if abs(delta) <= max_step return current + delta;
+    step_sign := ifx delta < 0.0 then -1.0 else 1.0;
+    return current + step_sign * max_step;
+}
+
+load_texture_rgba8 :: (path: string) -> Gpu_Texture, Gpu_Texture_View {
+    width, height, num_channels: s32 = 0;
+    pixels := stbi_load(temp_c_string(path), *width, *height, *num_channels, 4);
+    defer stbi_image_free(pixels);
+
+    assert(pixels != null && width > 0 && height > 0, tprint("Failed to load texture: %", path));
+    texture_result, texture := gpu_create_texture(.{
+        dimensions = .[cast(u32) width, cast(u32) height, 1],
+        format = .R8G8B8A8_UNORM,
+        usage = .SAMPLED | .TRANSFER_DST,
+    });
+
+    bgra_pixels: [..]u8;
+    bgra_pixels.allocator = temp;
+    array_resize(*bgra_pixels, cast(s64) width * cast(s64) height * 4);
+    memcpy(bgra_pixels.data, pixels, bgra_pixels.count);
+
+    gpu_copy_to_texture(texture, bgra_pixels.data);
+
+    view := gpu_texture_view(texture);
+    return texture, view;
+}
+
+#scope_file
+#import "stb_image";

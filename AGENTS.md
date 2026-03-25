@@ -109,3 +109,18 @@ for elem, elem_index: my_collection {
 
 Prefer `assert(my_condition, "my message: %", my_val)` over `assert(my_condition, tprint("my message: %", my_val))`.
 Prefer `print_to_builder(*string_builder, "my message: %", my_val)` over `append(*string_builder, tprint("my message: %", my_val))`.
+
+Logging functions from the Basic module:
+
+```
+log("here's my var: %", var);
+```
+
+or for errors:
+
+```
+if failed {
+    log_error("something failed: %", error_reason);
+    return false; // etc
+}
+```

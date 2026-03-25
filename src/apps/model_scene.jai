@@ -163,10 +163,8 @@ autopilot_enabled: bool;
 physics_gizmos_enabled: bool;
 show_shadow_debug: bool;
 show_pick_debug: bool;
-physics_g_was_down: bool;
 control_mode: enum { Player; Editor; } = .Player;
 outdoor_rig: Outdoor_Rig = .{};
-p_was_down: bool;
 orbit_yaw: float = 0.0;
 orbit_pitch: float = -0.32;
 orbit_distance: float = 8.5;
@@ -288,14 +286,14 @@ on_unload :: () {
     Gizmo.deinit(*gizmo_ctx);
     gpu_delete(*debug_pick_params);
     gpu_delete(*sky_draw_params);
-    if sky_pipeline != 0 gpu_free_pipeline(sky_pipeline);
-    if debug_pick_pipeline != 0 gpu_free_pipeline(debug_pick_pipeline);
-    if debug_shadow_pipeline != 0 gpu_free_pipeline(debug_shadow_pipeline);
-    if grass_shadow_pipeline != 0 gpu_free_pipeline(grass_shadow_pipeline);
-    if grass_pipeline != 0 gpu_free_pipeline(grass_pipeline);
-    if pick_pipeline != 0 gpu_free_pipeline(pick_pipeline);
-    if shadow_pipeline != 0 gpu_free_pipeline(shadow_pipeline);
-    if ground_pipeline != 0 gpu_free_pipeline(ground_pipeline);
+    gpu_delete(*sky_pipeline);
+    gpu_delete(*debug_pick_pipeline);
+    gpu_delete(*debug_shadow_pipeline);
+    gpu_delete(*grass_shadow_pipeline);
+    gpu_delete(*grass_pipeline);
+    gpu_delete(*pick_pipeline);
+    gpu_delete(*shadow_pipeline);
+    gpu_delete(*ground_pipeline);
     shadow_map_deinit(*shadow_map);
     array_free(running_lizard_instances);
     array_free(running_lizard_attachment_instances);
@@ -336,7 +334,7 @@ tick :: () {
 
     if app_ui_enabled {
         using ImGui;
-        if Begin("Model Scene", flags = .NoCollapse | .AlwaysAutoResize) {
+        if Begin("Model Scene", flags = .AlwaysAutoResize) {
             Checkbox("Autopilot", *autopilot_enabled);
             if Checkbox("Physics Gizmos", *physics_gizmos_enabled) {
                 Physics.debug_draw_enabled = physics_gizmos_enabled;
@@ -572,14 +570,15 @@ tick :: () {
     shadow_binding := ifx scene_shadows_enabled then shadow_map_binding(*shadow_map) else Vector4.{0.0, 0.0, 2.0, 0.0};
     prepare_render(*horde_runtime, view_proj, shadow_binding, scene_camera.position, outdoor_rig.sun_strength, outdoor_rig.time_of_day);
     if cast(float) time >= horde_runtime.debug_next_log_time {
+        using horde_runtime;
         log("ENEMY_HORDE alive=% visible=% render_instances=% groups=% health=% target=% enabled=%",
-            horde_runtime.alive_count,
-            horde_runtime.visible_count_debug,
-            horde_runtime.render_instance_count_debug,
-            horde_runtime.draw_groups.count,
-            horde_runtime.player_health,
-            horde_runtime.spawn_params.target_alive,
-            horde_runtime.spawn_params.enabled);
+            alive_count,
+            visible_count_debug,
+            render_instance_count_debug,
+            draw_groups.count,
+            player_health,
+            spawn_params.target_alive,
+            spawn_params.enabled);
         horde_runtime.debug_next_log_time = cast(float) time + 1.0;
     }
 
@@ -1086,6 +1085,9 @@ rebuild_scene_runtime :: () {
         shadow_map = *shadow_map,
         player_controller = *running_lizard_controller,
         ground = *active_ground,
+        mask_import_basis = ifx compiled_scene_find_asset_index_by_name_for_runtime("mask") >= 0
+            then compiled_asset_import_matrix(compiled_scene.assets[compiled_scene_find_asset_index_by_name_for_runtime("mask")])
+            else Matrix4_Identity,
     }, scene_camera.position, outdoor_rig.sun_strength, outdoor_rig.time_of_day);
     gpu_commit_residency();
 }
@@ -2039,48 +2041,10 @@ ground_normal_at :: (desc: Scene_File.Scene_Procedural_Ground_Desc, x: float, z:
     return normalize({h_l - h_r, eps * 2.0, h_d - h_u});
 }
 
-wrap_angle_pi :: (angle: float) -> float {
-    wrapped := angle;
-    while wrapped > PI  wrapped -= PI * 2.0;
-    while wrapped < -PI wrapped += PI * 2.0;
-    return wrapped;
-}
-
-smooth_yaw_towards :: (current: float, target: float, dt: float, turn_speed: float) -> float {
-    max_step := max(0.0, turn_speed) * dt;
-    delta := wrap_angle_pi(target - current);
-    if abs(delta) <= max_step return current + delta;
-    step_sign := ifx delta < 0.0 then -1.0 else 1.0;
-    return current + step_sign * max_step;
-}
-
 hash01 :: (x: u32) -> float {
     phase := cast(float) x * 12.9898 + 78.233;
     value := sin(phase) * cast(float) 43758.5453;
     return value - floor(value);
-}
-
-load_texture_rgba8 :: (path: string) -> Gpu_Texture, Gpu_Texture_View {
-    width, height, num_channels: s32 = 0;
-    pixels := stbi_load(temp_c_string(path), *width, *height, *num_channels, 4);
-    defer stbi_image_free(pixels);
-
-    assert(pixels != null && width > 0 && height > 0, tprint("Failed to load texture: %", path));
-    texture_result, texture := gpu_create_texture(.{
-        dimensions = .[cast(u32) width, cast(u32) height, 1],
-        format = .R8G8B8A8_UNORM,
-        usage = .SAMPLED | .TRANSFER_DST,
-    });
-
-    bgra_pixels: [..]u8;
-    bgra_pixels.allocator = temp;
-    array_resize(*bgra_pixels, cast(s64) width * cast(s64) height * 4);
-    memcpy(bgra_pixels.data, pixels, bgra_pixels.count);
-
-    gpu_copy_to_texture(texture, bgra_pixels.data);
-
-    view := gpu_texture_view(texture);
-    return texture, view;
 }
 
 toggle_control_mode :: () {
@@ -2110,7 +2074,6 @@ String :: #import "String";
 ImGui :: #import "ImGui";
 Input :: #import "Input";
 #import "Random";
-#import "stb_image";
 #import "Math";
 #load "shaders/model_scene_shader.jai";
 

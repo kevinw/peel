@@ -40,6 +40,10 @@
     "command": "jai ~/src/peel/build.jai - src/apps/hex_tactics.jai -run -dll"
   },
   {
+    "label": "inspiration_test",
+    "command": "jai ~/src/peel/build.jai - src/apps/inspiration_test.jai -run -dll"
+  },
+  {
     "label": "model_scene",
     "command": "jai ~/src/peel/build.jai - src/apps/model_scene.jai -run -dll"
   },

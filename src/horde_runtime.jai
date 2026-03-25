@@ -26,13 +26,13 @@ SPIDER_LEG_PAIR_COUNT :: SPIDER_LEG_COUNT / 2;
 
 Enemy_Spawn_Params :: struct {
     enabled: bool = true;
-    target_alive: s32 = 10;
+    target_alive: s32 = 30;
     spawn_rate: float = 12.0;
     spawn_radius_min: float = 13.0;
     spawn_radius_max: float = 28.0;
     despawn_radius: float = 88.0;
     move_speed: float = 2.2;
-    climb_speed_ratio: float = 0.75;
+    climb_speed_ratio: float = 2.95;
     min_head_size: float = 0.78;
     max_head_size: float = 1.28;
     touch_damage_per_second: float = 11.0;
@@ -103,6 +103,7 @@ Horde_Bindings :: struct {
     shadow_map: *Shadow_Map;
     player_controller: *Character_Controller;
     ground: *Scene_File.Scene_Procedural_Ground_Desc;
+    mask_import_basis: Matrix4 = Matrix4_Identity;
 }
 
 Horde_Runtime :: struct {
@@ -225,7 +226,7 @@ reset :: (using runtime: *Horde_Runtime, horde_bindings: Horde_Bindings, camera_
     case .CAPSULE; mask_shape = cast(*Shape) CapsuleShape_Create(collider_half_height, collider_radius);
     }
     assert(mask_shape != null, "Failed to create horde mask collider shape.");
-    
+
     spider_shape = cast(*Shape) SphereShape_Create(spider_body_radius);
     assert(spider_shape != null, "Failed to create horde spider collider shape.");
 
@@ -312,7 +313,6 @@ reset :: (using runtime: *Horde_Runtime, horde_bindings: Horde_Bindings, camera_
 }
 
 do_ui :: (using runtime: *Horde_Runtime) {
-    using Persist;
     ImGui.Checkbox("Enemy Horde", *spawn_params.enabled);
     ImGui.Checkbox("Render Enemy Masks", *render_enemy_masks);
     ImGui.Checkbox("Enemy Direct Draw", *direct_draw_debug);
@@ -389,7 +389,7 @@ prepare_render :: (using runtime: *Horde_Runtime, view_proj: Matrix4, shadow_bin
 
         visual_root_pos := body_pos + .{0.0, model_root_offset_y * (it.visual_scale / max(model_scale, 0.001)), 0.0};
         visual_scale: Vector3 = .{it.visual_scale, it.visual_scale, it.visual_scale};
-        world_root := make_trs_matrix(visual_root_pos, horde_quat_from_euler_deg(.{0.0, it.yaw * 180.0 / PI + 225.0, 0.0}), visual_scale);
+        world_root := make_trs_matrix(visual_root_pos, horde_quat_from_euler_deg(.{0.0, it.yaw * 180.0 / PI, 0.0}), visual_scale) * bindings.mask_import_basis;
         for render_mesh, render_mesh_index: render_meshes {
             lod_level := enemy_lod_level_for_distance(render_mesh, distance_to_camera);
             group_index := draw_group_index(runtime, render_mesh_index, lod_level);
@@ -611,7 +611,6 @@ Projectile_Collide_Result :: struct {
 horde_projectile_collide_result: Projectile_Collide_Result;
 
 projectile_collide_shape_body_callback :: (_context: *void, result: BodyID) -> float #c_call {
-    _ = _context;
     if horde_projectile_collide_result.count < horde_projectile_collide_result.body_ids.count {
         horde_projectile_collide_result.body_ids[horde_projectile_collide_result.count] = result;
         horde_projectile_collide_result.count += 1;
@@ -671,33 +670,33 @@ projectile_query_enemy_hit :: (runtime: *Horde_Runtime, projectile_pos: Vector3)
     return -1;
 }
 
-spawn_enemy :: (runtime: *Horde_Runtime, spawn_index: s32) -> bool {
-    if runtime.mask_shape == null || runtime.spider_shape == null || !runtime.spawn_params.enabled return false;
-    if spawn_index < 0 || spawn_index >= runtime.enemies.count return false;
-    if runtime.enemies[spawn_index].active return false;
+spawn_enemy :: (using runtime: *Horde_Runtime, spawn_index: s32) -> bool {
+    if mask_shape == null || spider_shape == null || !spawn_params.enabled return false;
+    if spawn_index < 0 || spawn_index >= enemies.count return false;
+    if enemies[spawn_index].active return false;
 
-    player_pos := character_controller_position(runtime.bindings.player_controller);
+    player_pos := character_controller_position(bindings.player_controller);
     spawn_seed := cast(u32) spawn_index * 2654435761 + cast(u32) floor(time * 11.0);
-    spawn_angle := runtime.bindings.player_controller.facing_yaw + lerp(-1.9, 1.9, horde_hash01(cast(u32) floor(time * 37.0) + cast(u32) spawn_index * 17));
-    spawn_radius := lerp(runtime.spawn_params.spawn_radius_min, runtime.spawn_params.spawn_radius_max, horde_hash01(spawn_seed));
+    spawn_angle := bindings.player_controller.facing_yaw + lerp(-1.9, 1.9, horde_hash01(cast(u32) floor(time * 37.0) + cast(u32) spawn_index * 17));
+    spawn_radius := lerp(spawn_params.spawn_radius_min, spawn_params.spawn_radius_max, horde_hash01(spawn_seed));
     spawn_pos := player_pos + .{cos(spawn_angle) * spawn_radius, 0.0, sin(spawn_angle) * spawn_radius};
-    min_head_size := min(runtime.spawn_params.min_head_size, runtime.spawn_params.max_head_size);
-    max_head_size := max(runtime.spawn_params.min_head_size, runtime.spawn_params.max_head_size);
+    min_head_size := min(spawn_params.min_head_size, spawn_params.max_head_size);
+    max_head_size := max(spawn_params.min_head_size, spawn_params.max_head_size);
     size_variation := lerp(min_head_size, max_head_size, horde_hash01(spawn_seed ^ 0x9e3779b9));
     enemy_kind := ifx (spawn_seed & 3) == 0 then Enemy_Kind.SPIDER else .MASK;
-    scaled_collider_radius := runtime.collider_radius * size_variation;
-    scaled_collider_half_height := runtime.collider_half_height * size_variation;
-    enemy_collider_kind := runtime.collider_kind;
-    enemy_visual_scale := runtime.model_scale * size_variation;
-    enemy_body_shape := runtime.mask_shape;
+    scaled_collider_radius := collider_radius * size_variation;
+    scaled_collider_half_height := collider_half_height * size_variation;
+    enemy_collider_kind := collider_kind;
+    enemy_visual_scale := model_scale * size_variation;
+    enemy_body_shape := mask_shape;
     if enemy_kind == .SPIDER {
-        scaled_collider_radius = runtime.spider_body_radius * size_variation;
+        scaled_collider_radius = spider_body_radius * size_variation;
         scaled_collider_half_height = 0.0;
         enemy_collider_kind = .SPHERE;
         enemy_visual_scale = size_variation;
-        enemy_body_shape = runtime.spider_shape;
+        enemy_body_shape = spider_shape;
     }
-    spawn_pos.y = horde_ground_height_at(runtime.bindings.ground.*, spawn_pos.x, spawn_pos.z) + scaled_collider_radius + scaled_collider_half_height + 0.04;
+    spawn_pos.y = horde_ground_height_at(bindings.ground.*, spawn_pos.x, spawn_pos.z) + scaled_collider_radius + scaled_collider_half_height + 0.04;
     spawn_pos_jph := cast,force(RVec3) spawn_pos;
 
     hue_variation := horde_hash01(spawn_seed ^ 0x85ebca6b);
@@ -707,7 +706,7 @@ spawn_enemy :: (runtime: *Horde_Runtime, spawn_index: s32) -> bool {
 
     if abs(size_variation - 1.0) > 0.001 {
         scale_vec := Vec3.{size_variation, size_variation, size_variation};
-        base_shape := ifx enemy_kind == .SPIDER then runtime.spider_shape else runtime.mask_shape;
+        base_shape := ifx enemy_kind == .SPIDER then spider_shape else mask_shape;
         enemy_body_shape = cast(*Shape) ScaledShape_Create(base_shape, *scale_vec);
         assert(enemy_body_shape != null, "Enemy scaled shape creation failed.");
     }
@@ -726,7 +725,7 @@ spawn_enemy :: (runtime: *Horde_Runtime, spawn_index: s32) -> bool {
     body_id := BodyInterface_CreateAndAddBody(Physics.physics.body_interface, body_settings, .Activate);
     BodyInterface_SetUserData(Physics.physics.body_interface, body_id, enemy_body_user_data_make(spawn_index));
 
-    runtime.enemies[spawn_index] = .{
+    enemies[spawn_index] = .{
         active = true,
         body_id = body_id,
         shape = enemy_body_shape,
@@ -743,10 +742,10 @@ spawn_enemy :: (runtime: *Horde_Runtime, spawn_index: s32) -> bool {
         tint = tint,
     };
     if enemy_kind == .SPIDER {
-        init_spider_legs(runtime, *runtime.enemies[spawn_index]);
-        runtime.spider_active_count += 1;
+        init_spider_legs(runtime, *enemies[spawn_index]);
+        spider_active_count += 1;
     }
-    runtime.alive_count += 1;
+    alive_count += 1;
     return true;
 }
 

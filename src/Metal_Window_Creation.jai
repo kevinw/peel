@@ -54,6 +54,51 @@
         cursor_update(*super_call, _cmd, event);
     }
 
+    peel_input_view_dragging_entered :: (self: *NSView, _cmd: Selector, sender: id) -> NSDragOperation #c_call {
+        _ = self; _ = _cmd;
+        mask := NSDraggingInfo.draggingSourceOperationMask(sender);
+        return mask & NSDragOperationGeneric;
+    }
+
+    peel_input_view_dragging_updated :: (self: *NSView, _cmd: Selector, sender: id) -> NSDragOperation #c_call {
+        _ = self; _ = _cmd;
+        mask := NSDraggingInfo.draggingSourceOperationMask(sender);
+        return mask & NSDragOperationGeneric;
+    }
+
+    peel_input_view_wants_periodic_dragging_updates :: (self: *NSView, _cmd: Selector) -> BOOL #c_call {
+        _ = self; _ = _cmd;
+        return NO;
+    }
+
+    peel_input_view_prepare_for_drag_operation :: (self: *NSView, _cmd: Selector, sender: id) -> BOOL #c_call {
+        _ = self; _ = _cmd; _ = sender;
+        return YES;
+    }
+
+    peel_input_view_perform_drag_operation :: (self: *NSView, _cmd: Selector, sender: id) -> BOOL #c_call {
+        _ = self; _ = _cmd;
+        ctx: #Context;
+        push_context,defer_pop ctx;
+        log("Inspiration DnD: native performDragOperation");
+        pasteboard := NSDraggingInfo.draggingPasteboard(sender);
+        classes := NSArray(Class).arrayWithObject(class(NSURL));
+        file_urls := NSPasteboard.readObjectsForClasses(pasteboard, classes, null, *NSURL);
+        if file_urls == null return NO;
+        num_urls := cast(s64) file_urls.count(file_urls);
+        if num_urls <= 0 return NO;
+        log("Inspiration DnD: native drop count=%", num_urls);
+
+        for i: 0..num_urls-1 {
+            url := file_urls.objectAtIndex(file_urls, xx i);
+            objc_file_path := NSURL.path(url);
+            file_path := to_string(objc_file_path);
+            log("Inspiration DnD: native path '%'", file_path);
+            if file_path inspiration_board_note_dropped_file(file_path);
+        }
+        return YES;
+    }
+
     ensure_peel_input_view_class :: () -> ObjC.Class {
         if peel_input_view_class return peel_input_view_class;
 
@@ -74,6 +119,11 @@
         ObjC.objc_add_instance_method(cls, peel_input_view_key_down, "keyDown:");
         ObjC.objc_add_instance_method(cls, peel_input_view_reset_cursor_rects, "resetCursorRects");
         ObjC.objc_add_instance_method(cls, peel_input_view_cursor_update, "cursorUpdate:");
+        ObjC.objc_add_instance_method(cls, peel_input_view_dragging_entered, "draggingEntered:");
+        ObjC.objc_add_instance_method(cls, peel_input_view_dragging_updated, "draggingUpdated:");
+        ObjC.objc_add_instance_method(cls, peel_input_view_wants_periodic_dragging_updates, "wantsPeriodicDraggingUpdates");
+        ObjC.objc_add_instance_method(cls, peel_input_view_prepare_for_drag_operation, "prepareForDragOperation:");
+        ObjC.objc_add_instance_method(cls, peel_input_view_perform_drag_operation, "performDragOperation:");
         ObjC.objc_finalize_class(cls);
 
         peel_input_view_class = cls;
@@ -114,6 +164,8 @@
 
         view := cast(*NSView) objc_init(objc_alloc(view_class));
         NSView.setWantsLayer(view, YES);
+        types := NSArray(NSPasteboardType).arrayWithObject(NSPasteboardTypeFileURL);
+        NSView.registerForDraggedTypes(view, types);
         autorelease(view);
 
         metal_layer_class := objc_getClass("CAMetalLayer");
