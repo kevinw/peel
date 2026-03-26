@@ -267,3 +267,6 @@ spinner_frames :: string.["|", "/", "-", "\\"];
 get_spinner :: () -> string {
     return spinner_frames[(frame_count / 8) % spinner_frames.count];
 }
+
+#scope_file
+String :: #import "String";

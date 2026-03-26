@@ -101,6 +101,9 @@ Brickmap_Params :: struct {
     camera_tan_half_fov: float;
     time: float;
 
+    view_proj: Matrix4;
+    prev_view_proj: Matrix4;
+
     camera_pos: Vector3;
     _cam_pad0: float;
     camera_forward: Vector3;
@@ -432,6 +435,8 @@ sample_cached :: (params: *Brickmap_Params, p: Vector3) -> Vector4 {
     if params.cache_force_lod0 != 0 {
         max_lod = 1;
     }
+    fallback_lod: s32 = -1;
+    fallback_voxel := max(params.lod_voxel_size[0], 0.0001);
     for lod_i: 0..max_lod-1 {
         lod := cast(s32) lod_i;
         voxel_size := max(params.lod_voxel_size[lod], 0.0001);
@@ -454,11 +459,19 @@ sample_cached :: (params: *Brickmap_Params, p: Vector3) -> Vector4 {
         ptr_base := lod * BRICKMAP_GRID_CELLS;
         ptr_idx := ptr_base + lx + ly * BRICKMAP_GRID_RES + lz * BRICKMAP_GRID_RES * BRICKMAP_GRID_RES;
         if params.pointer_grid_valid[ptr_idx] == 0 {
-            return .{100000.0, cast(float) lod, voxel_size, 0.0};
+            if fallback_lod < 0 {
+                fallback_lod = lod;
+                fallback_voxel = voxel_size;
+            }
+            continue;
         }
         atlas_index := params.pointer_grid[ptr_idx];
         if atlas_index < 0 {
-            return .{100000.0, cast(float) lod, voxel_size, 0.0};
+            if fallback_lod < 0 {
+                fallback_lod = lod;
+                fallback_voxel = voxel_size;
+            }
+            continue;
         }
 
         // Convert to voxel-center space (matching bake positions at +0.5 voxel).
@@ -469,6 +482,9 @@ sample_cached :: (params: *Brickmap_Params, p: Vector3) -> Vector4 {
         return .{d, cast(float) lod, voxel_size, 1.0};
     }
 
+    if fallback_lod >= 0 {
+        return .{100000.0, cast(float) fallback_lod, fallback_voxel, 0.0};
+    }
     return .{100000.0, -1.0, max(params.lod_voxel_size[0], 0.0001), 0.0};
 }
 
@@ -638,6 +654,23 @@ cached_normal :: (params: *Brickmap_Params, p: Vector3, voxel: float) -> Vector3
         return .{0.0, 1.0, 0.0};
     }
     return safe_normalize(.{s_px.x - s_nx.x, s_py.x - s_ny.x, s_pz.x - s_nz.x});
+}
+
+brickmap_project_screen_px :: (view_proj: Matrix4, world_pos: Vector3, resolution: Vector2) -> Vector2 {
+    clip := view_proj * Vector4.{world_pos.x, world_pos.y, world_pos.z, 1.0};
+    if abs(clip.w) <= 0.00001 return .{-100000.0, -100000.0};
+    ndc_xy := clip.xy * (1.0 / clip.w);
+    return .{
+        (ndc_xy.x * 0.5 + 0.5) * resolution.x,
+        (1.0 - (ndc_xy.y * 0.5 + 0.5)) * resolution.y,
+    };
+}
+
+brickmap_project_depth01 :: (view_proj: Matrix4, world_pos: Vector3) -> float {
+    clip := view_proj * Vector4.{world_pos.x, world_pos.y, world_pos.z, 1.0};
+    if abs(clip.w) <= 0.00001 return 1.0;
+    ndc_z := clip.z / clip.w;
+    return clamp(ndc_z * 0.5 + 0.5, 0.0, 1.0);
 }
 
 brickmap_fragment_main :: (using in: Brickmap_Fragment_In, params: *Brickmap_Params) -> struct { out_color: Vector4; } {
@@ -868,9 +901,246 @@ brickmap_fragment_main :: (using in: Brickmap_Fragment_In, params: *Brickmap_Par
             line := 1.0 - clamp(min(grid_u, grid_v) * 22.0, 0.0, 1.0);
             color = mix(color, color * 1.35, line * 0.18);
         }
+
     }
 
     return .{out_color = .{color.x, color.y, color.z, 1.0}};
+} @fragment_shader
+
+brickmap_temporal_fragment_main :: (using in: Brickmap_Fragment_In, params: *Brickmap_Params) -> struct { out_color: Vector4; out_motion: Vector2; out_depth: float; } {
+    hit_world := Vector3.{0.0, 0.0, 0.0};
+    hit_valid := false;
+
+    if params.debug_force_flat_color != 0 {
+        return .{out_color = .{0.22, 0.35, 0.58, 1.0}, out_motion = .{0.0, 0.0}, out_depth = 1.0};
+    }
+
+    p := Vector2.{uv.x * 2.0 - 1.0, uv.y * 2.0 - 1.0};
+    denom := max(params.resolution.y, 1.0);
+    aspect := params.resolution.x / denom;
+    p.x *= aspect;
+
+    tan_half := params.camera_tan_half_fov;
+    ro := params.camera_pos;
+    rd := safe_normalize(params.camera_forward + params.camera_right * (p.x * tan_half) + params.camera_up * (p.y * tan_half));
+
+    if params.atlas_debug_fullscreen != 0 {
+        debug_uvw := Vector3.{uv.x, uv.y, clamp(params.atlas_debug_slice, 0.0, 1.0)};
+        d := sample_3d(params.atlas_texture_index, params.atlas_sampler_point_index, debug_uvw).x;
+        g := clamp(0.5 + d * 0.35, 0.0, 1.0);
+        return .{out_color = .{g, g, g, 1.0}, out_motion = .{0.0, 0.0}, out_depth = 1.0};
+    }
+
+    if params.pointer_grid_debug != 0 && uv.x > 0.72 && uv.y < 0.28 {
+        map_uv := Vector2.{(uv.x - 0.72) / 0.28, uv.y / 0.28};
+        gx := clamp(cast(s32) floor(map_uv.x * cast(float) BRICKMAP_GRID_RES), 0, BRICKMAP_GRID_RES - 1);
+        gy := clamp(cast(s32) floor(map_uv.y * cast(float) BRICKMAP_GRID_RES), 0, BRICKMAP_GRID_RES - 1);
+
+        voxel_size := max(params.lod_voxel_size[0], 0.0001);
+        brick_world_size := voxel_size * cast(float) BRICKMAP_BRICK_RES;
+        bz := cast(s32) floor(params.camera_pos.z / brick_world_size);
+        lz := bz - params.lod_origin_brick_z[0];
+
+        if lz < 0 || lz >= BRICKMAP_GRID_RES {
+            return .{out_color = .{0.12, 0.12, 0.12, 1.0}, out_motion = .{0.0, 0.0}, out_depth = 1.0};
+        }
+
+        ptr_base := 0 * BRICKMAP_GRID_CELLS;
+        ptr_idx := ptr_base + gx + gy * BRICKMAP_GRID_RES + lz * BRICKMAP_GRID_RES * BRICKMAP_GRID_RES;
+        atlas_index := params.pointer_grid[ptr_idx];
+        occupied := atlas_index >= 0 && params.pointer_grid_valid[ptr_idx] != 0;
+        occ := ifx occupied then 1.0 else 0.0;
+        idx_t := clamp(cast(float) max(atlas_index, 0) / cast(float) BRICKMAP_MAX_BRICKS, 0.0, 1.0);
+        c := mix(Vector3.{0.08, 0.08, 0.08}, Vector3.{0.15, 0.95, 0.35}, occ);
+        c = mix(c, Vector3.{1.0, 0.45, 0.15}, idx_t * 0.5);
+
+        grid_x := abs(fract(map_uv.x * cast(float) BRICKMAP_GRID_RES) - 0.5) * 2.0;
+        grid_y := abs(fract(map_uv.y * cast(float) BRICKMAP_GRID_RES) - 0.5) * 2.0;
+        line := 1.0 - clamp(min(grid_x, grid_y) * 40.0, 0.0, 1.0);
+        c = mix(c, Vector3.{1.0, 1.0, 1.0}, line * 0.2);
+        return .{out_color = .{c.x, c.y, c.z, 1.0}, out_motion = .{0.0, 0.0}, out_depth = 1.0};
+    }
+
+    if params.atlas_debug_overlay != 0 && uv.x < 0.28 && uv.y < 0.28 {
+        debug_uvw := Vector3.{uv.x / 0.28, uv.y / 0.28, clamp(params.atlas_debug_slice, 0.0, 1.0)};
+        d := sample_3d(params.atlas_texture_index, params.atlas_sampler_point_index, debug_uvw).x;
+        g := clamp(0.5 + d * 0.35, 0.0, 1.0);
+        grid_x := abs(fract(debug_uvw.x * 8.0) - 0.5) * 2.0;
+        grid_y := abs(fract(debug_uvw.y * 8.0) - 0.5) * 2.0;
+        line := 1.0 - clamp(min(grid_x, grid_y) * 20.0, 0.0, 1.0);
+        c := mix(Vector3.{g, g, g}, Vector3.{1.0, 0.35, 0.15}, line * 0.35);
+        return .{out_color = .{c.x, c.y, c.z, 1.0}, out_motion = .{0.0, 0.0}, out_depth = 1.0};
+    }
+
+    t := 0.0;
+    hit := false;
+    min_hit_eps := 0.003;
+    use_cache := params.use_cache_raymarch != 0;
+    hit_lod: s32 = -1;
+    hit_voxel := max(params.lod_voxel_size[0], 0.0001);
+    hit_cached_d := 0.0;
+    hit_is_ground := false;
+    prev_d := cast(float) 100000.0;
+    for 0..219 {
+        pos := ro + rd * t;
+        sample_lod: s32 = -1;
+        d: float;
+        d_ground := pos.y + 1.2;
+        non_ground_d := cast(float) 100000.0;
+        if use_cache {
+            cached := sample_cached(params, pos);
+            d_cached := cached.x;
+            sample_lod = cast(s32) cached.y;
+            sample_voxel := cached.z;
+            cache_valid := cached.w != 0.0;
+            if sample_lod >= 0 {
+                hit_voxel = sample_voxel;
+            }
+            if sample_lod >= 0 && cache_valid {
+                d_cached -= sample_voxel * INWARD_SAMPLED_BIAS;
+                non_ground_d = d_cached;
+                d = min(non_ground_d, d_ground);
+            } else if sample_lod >= 0 {
+                d_skip := step_to_next_lod_cell(params, pos, rd, sample_lod);
+                non_ground_d = 100000.0;
+                d = min(d_skip, d_ground);
+                if d_ground < min_hit_eps {
+                    hit_is_ground = true;
+                    hit = true;
+                    break;
+                }
+                t += max(d_skip, 0.0035);
+                prev_d = d_skip;
+                if t > 80.0 break;
+                continue;
+            } else {
+                d_skip := step_to_next_lod0_cell(params, pos, rd);
+                non_ground_d = 100000.0;
+                d = min(d_skip, d_ground);
+                if d_ground < min_hit_eps {
+                    hit_is_ground = true;
+                    hit = true;
+                    break;
+                }
+                t += max(d_skip, 0.0035);
+                prev_d = d_skip;
+                if t > 80.0 break;
+                continue;
+            }
+            hit_lod = sample_lod;
+            hit_cached_d = d_cached;
+        } else {
+            non_ground_d = eval_edits_sdf(params, pos);
+            d = min(non_ground_d, d_ground);
+        }
+
+        hit_eps := min_hit_eps;
+        if use_cache && sample_lod >= 0 {
+            lod_voxel := max(params.lod_voxel_size[sample_lod], 0.0001);
+            hit_eps = max(hit_eps, lod_voxel * HIT_EPSILON_VOXEL_SCALE);
+        }
+
+        if d < hit_eps {
+            hit_is_ground = d_ground <= non_ground_d;
+            hit = true;
+            break;
+        }
+        if use_cache && sample_lod >= 0 {
+            lod_voxel := max(params.lod_voxel_size[sample_lod], 0.0001);
+            if d < lod_voxel * 0.45 && d > prev_d {
+                hit = true;
+                break;
+            }
+        }
+
+        step_scale := ifx use_cache then 0.3 else 0.85;
+        step_len := max(d * step_scale, 0.0035);
+        if use_cache && sample_lod < 0 {
+            step_len = max(d, 0.0035);
+        } else if use_cache && sample_lod >= 0 {
+            lod_voxel := max(params.lod_voxel_size[sample_lod], 0.0001);
+            step_len = min(step_len, lod_voxel * 0.60);
+            if d < lod_voxel * 0.80 {
+                step_len = min(step_len, lod_voxel * 0.25);
+            }
+        }
+        t += step_len;
+        prev_d = d;
+        if t > 80.0 break;
+    }
+
+    sky_a := Vector3.{0.12, 0.14, 0.18};
+    sky_b := Vector3.{0.55, 0.68, 0.88};
+    sky_t := clamp(0.5 + 0.5 * rd.y, 0.0, 1.0);
+    color := mix(sky_a, sky_b, sky_t);
+
+    if hit {
+        hit_world = ro + rd * t;
+        hit_valid = true;
+        if hit_is_ground {
+            depth := brickmap_project_depth01(params.view_proj, hit_world);
+            return .{out_color = .{0.5, 0.72, 0.38, 1.0}, out_motion = .{0.0, 0.0}, out_depth = depth};
+        }
+        out_color: Vector4;
+        if use_cache && params.cache_debug_show_selected_lod != 0 {
+            if hit_lod == 0 out_color = .{0.15, 0.85, 1.0, 1.0};
+            else if hit_lod == 1 out_color = .{1.0, 0.65, 0.2, 1.0};
+            else out_color = .{1.0, 0.0, 1.0, 1.0};
+        } else if use_cache && params.cache_debug_show_distance != 0 {
+            g := clamp(0.5 + hit_cached_d * 0.35, 0.0, 1.0);
+            out_color = .{g, g, g, 1.0};
+        } else {
+            pos := hit_world;
+            n: Vector3;
+            if use_cache {
+                is_ground := abs(pos.y + 1.2) <= max(min_hit_eps * 2.0, hit_voxel * 0.25);
+                if is_ground {
+                    n = .{0.0, 1.0, 0.0};
+                } else {
+                    n = cached_normal(params, pos, hit_voxel);
+                }
+            } else {
+                for 0..3 {
+                    refine_pos := ro + rd * t;
+                    t -= eval_scene_sdf(params, refine_pos) * 0.7;
+                    if t < 0.0 {
+                        t = 0.0;
+                        break;
+                    }
+                }
+                pos = ro + rd * t;
+                hit_world = pos;
+                n = scene_normal(params, pos);
+            }
+            sun := safe_normalize(.{0.6, 0.7, 0.3});
+            ndl := max(dot(n, sun), 0.0);
+            base: Vector3;
+            if use_cache {
+                base = sample_cached_albedo(params, pos);
+            } else {
+                d_color := eval_edits_sdf_albedo(params, pos);
+                base = .{d_color.y, d_color.z, d_color.w};
+            }
+            color = base * (0.2 + 0.8 * ndl);
+            if false {
+                grid_u := abs(fract(pos.x * 0.25) - 0.5) * 2.0;
+                grid_v := abs(fract(pos.z * 0.25) - 0.5) * 2.0;
+                line := 1.0 - clamp(min(grid_u, grid_v) * 22.0, 0.0, 1.0);
+                color = mix(color, color * 1.35, line * 0.18);
+            }
+            out_color = .{color.x, color.y, color.z, 1.0};
+        }
+
+        current_px := brickmap_project_screen_px(params.view_proj, hit_world, params.resolution);
+        prev_px := brickmap_project_screen_px(params.prev_view_proj, hit_world, params.resolution);
+        return .{
+            out_color = out_color,
+            out_motion = prev_px - current_px,
+            out_depth = brickmap_project_depth01(params.view_proj, hit_world),
+        };
+    }
+
+    return .{out_color = .{color.x, color.y, color.z, 1.0}, out_motion = .{0.0, 0.0}, out_depth = 1.0};
 } @fragment_shader
 
 brickmap_recenter_compute :: (using in: Brickmap_Compute_In, params: *Brickmap_Params,

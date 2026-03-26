@@ -1,6 +1,7 @@
 WRITE_SHADER_OUTPUT :: true;
 
 #load "../SGPU_App_Common.jai";
+#load "../upscaler.jai";
 
 #import "Jai-Shader-Transpiler";
 SHR :: #import,file "../shader_hot_reload.jai";
@@ -57,6 +58,7 @@ Brickmap_Validation_Counters :: struct {
 }
 
 graphics_pipeline: Gpu_Pipeline;
+temporal_graphics_pipeline: Gpu_Pipeline;
 blit_pipeline: Gpu_Pipeline;
 compute_recenter_pipeline: Gpu_Pipeline;
 compute_prepare_pipeline: Gpu_Pipeline;
@@ -88,12 +90,10 @@ atlas_albedo_texture: Gpu_Texture;
 atlas_albedo_view: Gpu_Texture_View;
 atlas_linear_sampler: Gpu_Sampler;
 atlas_point_sampler: Gpu_Sampler;
-render_texture: Gpu_Texture;
-render_view: Gpu_Texture_View;
 render_sampler: Gpu_Sampler;
 render_point_sampler: Gpu_Sampler;
-render_width: s32;
-render_height: s32;
+upscaler: MetalFX_Upscaler;
+prev_view_proj: Matrix4 = Matrix4_Identity;
 
 camera: Editor_Camera = .{
     position = .{4.0, 2.0, 7.0},
@@ -193,6 +193,7 @@ cpu_present_encode_avg_ms: float;
 
 on_dll_init :: () {
     graphics_source := cast([]u8) get_transpiled(.METAL, brickmap_vertex_main, brickmap_fragment_main);
+    temporal_graphics_source := cast([]u8) get_transpiled(.METAL, brickmap_vertex_main, brickmap_temporal_fragment_main);
     blit_source := cast([]u8) get_transpiled(.METAL, brickmap_blit_vertex_main, brickmap_blit_fragment_main);
     recenter_source := cast([]u8) get_transpiled(.METAL, brickmap_recenter_compute);
     prepare_source := cast([]u8) get_transpiled(.METAL, brickmap_prepare_dirty_compute);
@@ -209,6 +210,14 @@ on_dll_init :: () {
 
     graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, brickmap_vertex_main, brickmap_fragment_main);
     assert(graphics_ok, "Brickmap graphics pipeline creation failed.");
+    temporal_raster_desc := raster_desc;
+    temporal_raster_desc.color_targets = .[
+        .{format = .B8G8R8A8_UNORM},
+        .{format = .R16G16_SFLOAT},
+        .{format = .R16_SFLOAT},
+    ];
+    temporal_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *temporal_graphics_pipeline, temporal_graphics_source, temporal_raster_desc, .METAL, brickmap_vertex_main, brickmap_temporal_fragment_main);
+    assert(temporal_ok, "Brickmap temporal graphics pipeline creation failed.");
     blit_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *blit_pipeline, blit_source, raster_desc, .METAL, brickmap_blit_vertex_main, brickmap_blit_fragment_main);
     assert(blit_ok, "Brickmap blit pipeline creation failed.");
 
@@ -318,6 +327,8 @@ on_dll_init :: () {
         address_mode_u = .CLAMP_TO_EDGE, address_mode_v = .CLAMP_TO_EDGE, address_mode_w = .CLAMP_TO_EDGE,
     });
     assert(render_point_sampler != 0, "Brickmap render point sampler creation failed.");
+    prev_view_proj = Matrix4_Identity;
+    init(*upscaler, "PEEL_BRICKMAP_UPSCALER", .SPATIAL);
 
     try_parse_env_int("BRICKMAP_EDIT_AFTER", *auto_edit_after);
     try_parse_env_int("BRICKMAP_LOG", *log_updates);
@@ -359,8 +370,7 @@ on_dll_init :: () {
 } @on_dll_init
 
 on_unload :: () {
-    if render_view != 0 gpu_free_texture_view(render_view);
-    if render_texture != 0 gpu_free(render_texture);
+    deinit(*upscaler);
     gpu_free(render_sampler);
     gpu_free(render_point_sampler);
     gpu_free(atlas_point_sampler);
@@ -385,8 +395,9 @@ ui :: () {
         _ = toggle("Use Cache Raymarch", *use_cache_raymarch, .{56.0, 0.0}, true, 0.09);
         _ = toggle("Use HW 3D Interp", *use_hw_interp, .{56.0, 0.0}, true, 0.09);
         SliderFloat("Render Scale", *render_scale, 0.25, 1.0);
+        do_ui(*upscaler);
         Checkbox("Blit Nearest (No Filter)", *blit_nearest);
-        Text("Render target: % x %", render_width, render_height);
+        Text("Render target: % x %", upscaler.render_width, upscaler.render_height);
         Checkbox("Atlas Overlay", *show_atlas_overlay);
         if show_atlas_overlay {
             SliderFloat("Atlas Slice", *atlas_debug_slice, 0.0, 1.0);
@@ -713,13 +724,15 @@ tick :: () {
         if debug_render_direct_swapchain {
             params.cpu.resolution = .{cast(float) win_w, cast(float) win_h};
         } else {
-            if !ensure_render_target(win_w, win_h) {
+            if !ensure_render_target(*upscaler, win_w, win_h, render_scale) {
                 return;
             }
-            params.cpu.resolution = .{cast(float) render_width, cast(float) render_height};
-            blit_params.cpu.source_texture_index = gpu_texture_view_index(render_view);
-            blit_params.cpu.source_sampler_index = cast(u32) blit_sampler_handle() - 1;
-            log_bindless_indices_once();
+            params.cpu.resolution = .{cast(float) upscaler.render_width, cast(float) upscaler.render_height};
+            if upscaler.mode == .NONE {
+                blit_params.cpu.source_texture_index = gpu_texture_view_index(upscaler.render_view);
+                blit_params.cpu.source_sampler_index = cast(u32) blit_sampler_handle() - 1;
+                log_bindless_indices_once();
+            }
         }
     }
     params.cpu.time = cast(float) time;
@@ -740,7 +753,16 @@ tick :: () {
     params.cpu.camera_fov_y = PI / 3.0;
     params.cpu.camera_tan_half_fov = tan(params.cpu.camera_fov_y * 0.5);
     editor_camera_basis(*camera, *params.cpu.camera_forward, *params.cpu.camera_right, *params.cpu.camera_up);
-    if !debug_render_direct_swapchain && render_view == 0 {
+    aspect := ifx dims_ok && win_h > 0 then cast(float) win_w / cast(float) win_h else 1.0;
+    current_view := editor_camera_make_view(*camera);
+    current_proj := make_projection_matrix(params.cpu.camera_fov_y, aspect, 0.05, 160.0);
+    current_view_proj := current_proj * current_view;
+    if !upscaler.temporal_history_valid {
+        prev_view_proj = current_view_proj;
+    }
+    params.cpu.view_proj = current_view_proj;
+    params.cpu.prev_view_proj = prev_view_proj;
+    if !debug_render_direct_swapchain && upscaler.render_view == 0 {
         return;
     }
     for lod: 0..BRICKMAP_LOD_COUNT-1 {
@@ -931,31 +953,30 @@ tick :: () {
         bake_threads = cast(s32) brickmap_queues.cpu.bake_count * BRICKMAP_BRICK_TEXELS;
     }
 
-    encode_start := seconds_since_init();
-    result=, cmd_buff := gpu_start_command_recording(main_queue);
-    assert(result == .SUCCESS);
-
     if bake_threads > 0 {
         bake_encode_start := seconds_since_init();
-        result = gpu_set_pipeline(cmd_buff, compute_bake_pipeline);
+        result=, bake_cmd := gpu_start_command_recording(main_queue);
+        assert(result == .SUCCESS);
+        result = gpu_set_pipeline(bake_cmd, compute_bake_pipeline);
         assert(result == .SUCCESS, tprint("Brickmap bake set pipeline failed: %", result));
         dispatch_x := cast(u32) ((bake_threads + 63) / 64);
         if dispatch_x > 0 {
-            gpu_dispatch_buffers(cmd_buff, .[params.gpu, brickmap_queues.gpu], .[dispatch_x, 1, 1]);
+            gpu_dispatch_buffers(bake_cmd, .[params.gpu, brickmap_queues.gpu], .[dispatch_x, 1, 1]);
             publish_threads := cast(u32) brickmap_queues.cpu.bake_count;
             publish_dispatch_x := (publish_threads + 63) / 64;
             if publish_dispatch_x > 0 {
-                gpu_barrier(cmd_buff, .COMPUTE_SHADER, .COMPUTE_SHADER);
-                result = gpu_set_pipeline(cmd_buff, compute_publish_pipeline);
+                gpu_barrier(bake_cmd, .COMPUTE_SHADER, .COMPUTE_SHADER);
+                result = gpu_set_pipeline(bake_cmd, compute_publish_pipeline);
                 assert(result == .SUCCESS, tprint("Brickmap publish set pipeline failed: %", result));
-                gpu_dispatch_buffers(cmd_buff, .[params.gpu, brickmap_state.gpu, brickmap_queues.gpu], .[publish_dispatch_x, 1, 1]);
+                gpu_dispatch_buffers(bake_cmd, .[params.gpu, brickmap_state.gpu, brickmap_queues.gpu], .[publish_dispatch_x, 1, 1]);
             }
-            gpu_barrier(cmd_buff, .COMPUTE_SHADER, .PIXEL_SHADER);
+            gpu_barrier(bake_cmd, .COMPUTE_SHADER, .PIXEL_SHADER);
         }
         note_perf_sample(*cpu_bake_encode_last_ms, *cpu_bake_encode_avg_ms, cast(float) ((seconds_since_init() - bake_encode_start) * 1000.0));
-        if debug_strict_compute_sync {
-            note_perf_sample(*cpu_bake_wait_last_ms, *cpu_bake_wait_avg_ms, 0.0);
-        }
+        gpu_submit(bake_cmd);
+        bake_wait_start := seconds_since_init();
+        gpu_queue_wait_idle(main_queue);
+        note_perf_sample(*cpu_bake_wait_last_ms, *cpu_bake_wait_avg_ms, cast(float) ((seconds_since_init() - bake_wait_start) * 1000.0));
 
         if log_updates {
             log("BRICKMAP baked frame=% dirty_bricks=% threads=%", frame_count, brickmap_queues.cpu.bake_count, bake_threads);
@@ -963,24 +984,60 @@ tick :: () {
         pending_dirty_count = 0;
     }
 
+    encode_start := seconds_since_init();
+    result=, cmd_buff := gpu_start_command_recording(main_queue);
+    assert(result == .SUCCESS);
+
     if !debug_render_direct_swapchain {
         offscreen_encode_start := seconds_since_init();
-        {
-            gpu_begin_scoped_render_pass(cmd_buff, .{
-                color_targets = .[
-                    .{
-                        view = render_view,
-                        load_op = .CLEAR,
-                        store_op = .STORE,
-                        clear_color._float = .[0.03, 0.035, 0.05, 1.0],
-                    }
-                ]
-            }, .COLOR_ATTACHMENT_WRITE, .SHADER_READ);
+        if upscaler.mode == .TEMPORAL {
+            {
+                gpu_begin_scoped_render_pass(cmd_buff, .{
+                    color_targets = .[
+                        .{
+                            view = upscaler.render_view,
+                            load_op = .CLEAR,
+                            store_op = .STORE,
+                            clear_color._float = .[0.03, 0.035, 0.05, 1.0],
+                        },
+                        .{
+                            view = upscaler.temporal_motion_view,
+                            load_op = .CLEAR,
+                            store_op = .STORE,
+                            clear_color._float = .[0.0, 0.0, 0.0, 0.0],
+                        },
+                        .{
+                            view = upscaler.temporal_depth_view,
+                            load_op = .CLEAR,
+                            store_op = .STORE,
+                            clear_color._float = .[1.0, 0.0, 0.0, 0.0],
+                        },
+                    ]
+                }, .COLOR_ATTACHMENT_WRITE, .SHADER_READ);
 
-            gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
-            gpu_set_pipeline(cmd_buff, graphics_pipeline);
-            draw_result := gpu_draw_instanced_direct(cmd_buff, params.gpu, 3, 1);
-            assert(draw_result == .SUCCESS, tprint("Brickmap offscreen draw failed: %", draw_result));
+                gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
+                gpu_set_pipeline(cmd_buff, temporal_graphics_pipeline);
+                draw_result := gpu_draw_instanced_direct(cmd_buff, params.gpu, 3, 1);
+                assert(draw_result == .SUCCESS, tprint("Brickmap temporal offscreen draw failed: %", draw_result));
+            }
+        } else {
+            {
+                gpu_begin_scoped_render_pass(cmd_buff, .{
+                    color_targets = .[
+                        .{
+                            view = upscaler.render_view,
+                            load_op = .CLEAR,
+                            store_op = .STORE,
+                            clear_color._float = .[0.03, 0.035, 0.05, 1.0],
+                        }
+                    ]
+                }, .COLOR_ATTACHMENT_WRITE, .SHADER_READ);
+
+                gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
+                gpu_set_pipeline(cmd_buff, graphics_pipeline);
+                draw_result := gpu_draw_instanced_direct(cmd_buff, params.gpu, 3, 1);
+                assert(draw_result == .SUCCESS, tprint("Brickmap offscreen draw failed: %", draw_result));
+            }
         }
         note_perf_sample(*cpu_offscreen_encode_last_ms, *cpu_offscreen_encode_avg_ms, cast(float) ((seconds_since_init() - offscreen_encode_start) * 1000.0));
     }
@@ -1007,6 +1064,17 @@ tick :: () {
             assert(gizmo_draw_result == .SUCCESS, tprint("Brickmap gizmo draw failed: %", gizmo_draw_result));
         }
     } else {
+        if upscaler.mode == .SPATIAL {
+            encode(*upscaler, cmd_buff, win_w, win_h, upscaler.render_view);
+        } else if upscaler.mode == .TEMPORAL {
+            encode(*upscaler, cmd_buff, win_w, win_h, upscaler.render_view, upscaler.temporal_motion_view, upscaler.temporal_depth_view);
+        }
+
+        if upscaler.mode != .NONE {
+            blit_params.cpu.source_texture_index = gpu_texture_view_index(blit_source_view(*upscaler));
+            blit_params.cpu.source_sampler_index = cast(u32) blit_sampler_handle() - 1;
+        }
+
         gpu_begin_scoped_render_pass(cmd_buff, .{
             color_targets = .[
                 .{
@@ -1021,7 +1089,11 @@ tick :: () {
         gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
         gpu_set_pipeline(cmd_buff, blit_pipeline);
         blit_draw_result := gpu_draw_instanced(cmd_buff, 0, blit_params.gpu, 3, 1);
-        assert(blit_draw_result == .SUCCESS, tprint("Brickmap blit draw failed: %", blit_draw_result));
+        if upscaler.mode == .NONE {
+            assert(blit_draw_result == .SUCCESS, tprint("Brickmap blit draw failed: %", blit_draw_result));
+        } else {
+            assert(blit_draw_result == .SUCCESS, tprint("Brickmap MetalFX blit draw failed: %", blit_draw_result));
+        }
         if draw_any_gizmo {
             viewport := Vector2.{cast(float) win_w, cast(float) win_h};
             gizmo_draw_result := Gizmo_Render.gizmo_render_draw(*gizmo_render_ctx, cmd_buff, *gizmo_ctx, viewport, depth_mode = .NONE);
@@ -1034,6 +1106,7 @@ tick :: () {
         log_validation_frame();
     }
 
+    prev_view_proj = current_view_proj;
     note_perf_sample(*cpu_present_encode_last_ms, *cpu_present_encode_avg_ms, cast(float) ((seconds_since_init() - encode_start) * 1000.0));
     submit_and_present_with_ui(cmd_buff);
 } @on_tick
@@ -1050,12 +1123,6 @@ Gizmo :: #import "Gizmo";
 Gizmo_Render :: #import "Gizmo_Render";
 #import "Math";
 #import "Random";
-
-scaled_dim :: (dim: s32, scale: float) -> s32 {
-    s := clamp(scale, 0.25, 1.0);
-    rounded := cast(s32) floor(cast(float) dim * s + 0.5);
-    return max(cast(s32) 1, rounded);
-}
 
 blit_sampler_handle :: () -> Gpu_Sampler {
     if blit_nearest return render_point_sampler;
@@ -1088,58 +1155,6 @@ init_params_guards :: () {
         params_guard_before.cpu[i] = BRICKMAP_PARAMS_GUARD_BEFORE;
         params_guard_after.cpu[i] = BRICKMAP_PARAMS_GUARD_AFTER;
     }
-}
-
-ensure_render_target :: (win_w: s32, win_h: s32) -> bool {
-    target_w := scaled_dim(win_w, render_scale);
-    target_h := scaled_dim(win_h, render_scale);
-    if target_w == render_width && target_h == render_height && render_view != 0 {
-        return true;
-    }
-
-    // The previous offscreen target may still be referenced by in-flight render/blit work.
-    // Recreate it only after the queue is idle to avoid freeing a live Metal texture.
-    if render_view != 0 {
-        gpu_wait_idle();
-        gpu_free_texture_view(render_view);
-        render_view = 0;
-    }
-    if render_texture != 0 {
-        gpu_free(render_texture);
-        render_texture = 0;
-    }
-
-    create_result: Gpu_Result;
-    create_result, render_texture = gpu_create_texture(.{
-        type = ._2D,
-        dimensions = .[cast(u32) target_w, cast(u32) target_h, 1],
-        format = .B8G8R8A8_UNORM,
-        usage = .COLOR_ATTACHMENT | .SAMPLED,
-    });
-    if create_result != .SUCCESS || render_texture == 0 {
-        log_error("Brickmap render target creation failed (%), %x%", create_result, target_w, target_h);
-        render_width = 0;
-        render_height = 0;
-        return false;
-    }
-
-    render_view = gpu_texture_view(render_texture);
-    if render_view == 0 {
-        log_error("Brickmap render target view creation failed.");
-        gpu_free(render_texture);
-        render_texture = 0;
-        render_width = 0;
-        render_height = 0;
-        return false;
-    }
-
-    render_width = target_w;
-    render_height = target_h;
-    blit_params.cpu.source_texture_index = gpu_texture_view_index(render_view);
-    blit_params.cpu.source_sampler_index = cast(u32) blit_sampler_handle() - 1;
-    // Runtime-created offscreen target must be committed into the residency set.
-    gpu_commit_residency();
-    return true;
 }
 
 seed_initial_scene :: () {
@@ -1475,13 +1490,16 @@ mark_dirty_aabb :: (bounds: AABB, reason: string) {
         info := lod_info_cpu[lod];
         voxel_size := max(info.voxel_size, 0.0001);
         brick_world_size := voxel_size * cast(float) BRICKMAP_BRICK_RES;
+        expanded_bounds := bounds;
+        expanded_bounds.min -= .{voxel_size, voxel_size, voxel_size};
+        expanded_bounds.max += .{voxel_size, voxel_size, voxel_size};
 
-        bx0 := cast(s32) floor(bounds.min.x / brick_world_size);
-        by0 := cast(s32) floor(bounds.min.y / brick_world_size);
-        bz0 := cast(s32) floor(bounds.min.z / brick_world_size);
-        bx1 := cast(s32) floor(bounds.max.x / brick_world_size);
-        by1 := cast(s32) floor(bounds.max.y / brick_world_size);
-        bz1 := cast(s32) floor(bounds.max.z / brick_world_size);
+        bx0 := cast(s32) floor(expanded_bounds.min.x / brick_world_size);
+        by0 := cast(s32) floor(expanded_bounds.min.y / brick_world_size);
+        bz0 := cast(s32) floor(expanded_bounds.min.z / brick_world_size);
+        bx1 := cast(s32) floor(expanded_bounds.max.x / brick_world_size);
+        by1 := cast(s32) floor(expanded_bounds.max.y / brick_world_size);
+        bz1 := cast(s32) floor(expanded_bounds.max.z / brick_world_size);
         lx0 := bx0 - info.origin_brick.x;
         ly0 := by0 - info.origin_brick.y;
         lz0 := bz0 - info.origin_brick.z;

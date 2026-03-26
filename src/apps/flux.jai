@@ -49,7 +49,7 @@ have_last_mouse_px := false;
 brush_mode := Brush_Type.RAISE;
 brush_radius_px: float = 82.0;
 brush_strength: float = 0.018;
-time_scale: float = 0.35;
+flux_time_scale: float = 0.35;
 show_shadow_debug := true;
 render_grass := true;
 xz_scale: float = 2.6;
@@ -156,7 +156,6 @@ flux_ui :: () {
     using,except(Viewport) ImGui;
     Persist :: #import,file "../ui/persist_controls.jai";
 
-    inspect_globals();
 
     window_flags: WindowFlags = .AlwaysAutoResize | .NoFocusOnAppearing;
     if Begin("Flux", *flux_ui_open, window_flags) {
@@ -179,7 +178,7 @@ flux_ui :: () {
         using Persist;
         Persist.SliderFloat("Brush Radius", *brush_radius_px, 10.0, 150.0, "%.1f px");
         Persist.SliderFloat("Brush Strength", *brush_strength, 0.001, 0.025, "%.3f");
-        Persist.SliderFloat("Time Scale", *time_scale, 0.01, 2.0, "%.2f");
+        Persist.SliderFloat("Time Scale", *flux_time_scale, 0.01, 2.0, "%.2f");
         Persist.SliderFloat("Time of Day", *time_of_day, 0.0, 1.0, "%.2f");
         Persist.SliderFloat("XZ Scale", *xz_scale, 1.0, 16.0, "%.2f");
         Persist.SliderFloat("Fog", *fog_density, 0.0, 1.0, "%.3f");
@@ -369,7 +368,7 @@ on_dll_init :: () {
             cursor_delta_uv = .{0.0, 0.0},
             brush_radius_px = brush_radius_px,
             brush_strength = brush_strength,
-            time_scale = time_scale,
+            time_scale = flux_time_scale,
             use_b_as_src = 0,
             brush_active = 0,
             brush_mode = .RAISE,
@@ -436,7 +435,7 @@ tick :: () {
     control.cpu.cursor_delta_uv = .{0.0, 0.0};
     control.cpu.brush_radius_px = brush_radius_px;
     control.cpu.brush_strength = brush_strength;
-    control.cpu.time_scale = time_scale;
+    control.cpu.time_scale = flux_time_scale;
     control.cpu.brush_mode = brush_mode;
     control.cpu.brush_active = 0;
     control.cpu.frame_index = cast(u32) frame_count;

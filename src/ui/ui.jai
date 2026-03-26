@@ -16,10 +16,10 @@ fonts: struct {
 ui_opts: struct {
     // State for a window which shows all global variables and allows searching/filtering them by name or module.
     globals: struct {
-        show: bool = true;
+        show: bool = false;
         search_text: string;
     }
-    show_imgui_demo: bool;
+    show_imgui_demo: bool; // Show the imgui demo window (very useful widget/control examples)
 };
 
 ui_init :: () {

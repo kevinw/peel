@@ -5,7 +5,6 @@ ObjC :: #import "Objective_C";
 #import "Metal";
 #import "Objective_C_Tools";
 #import "Host_App_Common";
-String :: #import "String";
 
 #if PEEL_MACOS_RUNTIME_OWNER {
     peel_host_application_initialized := false;
