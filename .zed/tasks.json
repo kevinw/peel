@@ -80,6 +80,10 @@
     "command": "jai ~/src/peel/build.jai - src/apps/sand_toy.jai -run -dll"
   },
   {
+    "label": "shader_to_human",
+    "command": "jai ~/src/peel/build.jai - src/apps/shader_to_human.jai -run -dll"
+  },
+  {
     "label": "signal_field",
     "command": "jai ~/src/peel/build.jai - src/apps/signal_field.jai -run -dll"
   },
