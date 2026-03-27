@@ -50,21 +50,21 @@ shader_to_human_vertex_main :: (using in: Shader_To_Human_Vertex_In) -> Shader_T
     return out;
 } @vertex_shader
 
-draw_projected_line :: (ctx: *STH_Context, params: *Shader_To_Human_Params, a: Vector3, b: Vector3, color: Vector4) {
-    a_clip := params.view_proj * Vector4.{a.x, a.y, a.z, 1.0};
-    b_clip := params.view_proj * Vector4.{b.x, b.y, b.z, 1.0};
+draw_projected_line :: (ctx: *STH_Context, using params: *Shader_To_Human_Params, a: Vector3, b: Vector3, color: Vector4) {
+    a_clip := view_proj * Vector4.{a.x, a.y, a.z, 1.0};
+    b_clip := view_proj * Vector4.{b.x, b.y, b.z, 1.0};
     if abs(a_clip.w) < 0.00001 || abs(b_clip.w) < 0.00001 return;
-    a_ndc := Vector3.{a_clip.x / a_clip.w, a_clip.y / a_clip.w, a_clip.z / a_clip.w};
-    b_ndc := Vector3.{b_clip.x / b_clip.w, b_clip.y / b_clip.w, b_clip.z / b_clip.w};
+    a_ndc := Vector3.{a_clip.x, a_clip.y, a_clip.z} / a_clip.w;
+    b_ndc := Vector3.{b_clip.x, b_clip.y, b_clip.z} / b_clip.w;
     if a_ndc.z < 0.0 || a_ndc.z > 1.2 return;
     if b_ndc.z < 0.0 || b_ndc.z > 1.2 return;
     a_px := Vector2.{
-        (a_ndc.x * 0.5 + 0.5) * params.resolution.x,
-        (1.0 - (a_ndc.y * 0.5 + 0.5)) * params.resolution.y,
+        (a_ndc.x * 0.5 + 0.5) * resolution.x,
+        (1.0 - (a_ndc.y * 0.5 + 0.5)) * resolution.y,
     };
     b_px := Vector2.{
-        (b_ndc.x * 0.5 + 0.5) * params.resolution.x,
-        (1.0 - (b_ndc.y * 0.5 + 0.5)) * params.resolution.y,
+        (b_ndc.x * 0.5 + 0.5) * resolution.x,
+        (1.0 - (b_ndc.y * 0.5 + 0.5)) * resolution.y,
     };
     sth_draw_line(ctx, a_px, b_px, color);
 }
@@ -121,19 +121,19 @@ shader_to_human_fragment_main :: (using in: Shader_To_Human_Fragment_In, params:
     ctx.line_width = params.line_width;
 
     if (params.flags & SHOW_WATCH) != 0 {
-        panel_min := Vector2.{24.0, 24.0};
-        panel_max := Vector2.{216.0, 118.0};
+        panel_min := Vector2.{524.0, 24.0};
+        panel_max := Vector2.{716.0, 118.0};
         sth_draw_rectangle_aa(*ctx, panel_min, panel_max, .{0.92, 0.95, 1.0, 0.86}, .{0.10, 0.12, 0.16, 0.72}, 4.0);
         if (params.flags & SHOW_TEXT) != 0 {
             ctx.text_color = .{0.96, 0.98, 1.0, 0.95};
             sth_set_cursor(*ctx, panel_min + .{12.0, 12.0});
-            sth_print_txt(*ctx, 85, 86, 58, 0, 0, 0);
+            sth_print_txt(*ctx, 85, 86, 58, 0, 0, 0); // "UV:"
             sth_print_space(*ctx, 1.0);
             sth_print_float(*ctx, uv.x);
             sth_print_space(*ctx, 1.0);
             sth_print_float(*ctx, uv.y);
             sth_print_lf(*ctx);
-            sth_print_txt(*ctx, 84, 58, 0, 0, 0, 0);
+            sth_print_txt(*ctx, 84, 58, 0, 0, 0, 0); // "T:"
             sth_print_space(*ctx, 1.0);
             sth_print_float(*ctx, params.time);
         }

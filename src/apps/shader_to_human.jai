@@ -16,7 +16,7 @@ shader_to_human_params: Gpu_Buffer(Shader_To_Human_Params);
 
 shader_to_human_ui_open := true;
 shader_to_human_show_watch := true;
-shader_to_human_show_text := false;
+shader_to_human_show_text := true;
 shader_to_human_show_shapes := true;
 shader_to_human_show_coords := true;
 shader_to_human_show_projected := true;

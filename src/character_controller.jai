@@ -24,6 +24,9 @@ Character_Physics_World :: struct {
 }
 
 DEFAULT_WALK_SPEED :: 4.15;
+DEFAULT_GRAVITY :: 18.0;
+DEFAULT_STICK_TO_FLOOR_STEP :: 0.38;
+DEFAULT_WALK_STAIRS_STEP :: 0.32;
 
 Character_Controller :: struct {
     character: *CharacterVirtual;
@@ -32,6 +35,8 @@ Character_Controller :: struct {
     visual_yaw_offset: float;
     walk_speed: float = DEFAULT_WALK_SPEED;
     accel: float = 9.0;
+    jump_speed: float = 5.2;
+    gravity: float = DEFAULT_GRAVITY;
     animation_time: float;
     animation_blend: float;
 }
@@ -174,11 +179,11 @@ controller_deinit :: (controller: *Character_Controller) {
     controller.* = .{};
 }
 
-character_controller_update :: (controller: *Character_Controller, world: *Character_Physics_World, desired_move_world: Vector3, dt: float) {
-    character_controller_update_in_system(controller, world.system, desired_move_world, dt);
+character_controller_update :: (controller: *Character_Controller, world: *Character_Physics_World, desired_move_world: Vector3, dt: float, jump_pressed: bool = false) {
+    character_controller_update_in_system(controller, world.system, desired_move_world, dt, jump_pressed);
 }
 
-character_controller_update_in_system :: (controller: *Character_Controller, system: *PhysicsSystem, desired_move_world: Vector3, dt: float) {
+character_controller_update_in_system :: (controller: *Character_Controller, system: *PhysicsSystem, desired_move_world: Vector3, dt: float, jump_pressed: bool = false) {
     assert(controller.character != null);
 
     desired := desired_move_world;
@@ -200,11 +205,22 @@ character_controller_update_in_system :: (controller: *Character_Controller, sys
         horizontal_velocity = lerp(horizontal_velocity, Vector3.{0.0, 0.0, 0.0}, clamp(dt * 10.0, 0.0, 1.0));
     }
 
+    grounded := character_controller_is_grounded(controller);
     new_velocity := Vector3.{horizontal_velocity.x, current_velocity.y, horizontal_velocity.z};
+    if grounded {
+        new_velocity.y = min(0.0, new_velocity.y);
+    } else {
+        new_velocity.y -= controller.gravity * dt;
+    }
+    if jump_pressed && grounded {
+        new_velocity.y = controller.jump_speed;
+    }
     CharacterVirtual_SetLinearVelocity(controller.character, cast,force(Vec3) new_velocity);
     CharacterVirtual_UpdateGroundVelocity(controller.character);
 
     update_settings: ExtendedUpdateSettings = DEFAULT_EXTENDED_UPDATE_SETTINGS;
+    update_settings.stickToFloorStepDown = .{0.0, -DEFAULT_STICK_TO_FLOOR_STEP, 0.0};
+    update_settings.walkStairsStepUp = .{0.0, DEFAULT_WALK_STAIRS_STEP, 0.0};
     CharacterVirtual_ExtendedUpdate(
         controller.character,
         dt,
@@ -230,6 +246,11 @@ character_controller_update_in_system :: (controller: *Character_Controller, sys
 character_controller_position :: (controller: *Character_Controller) -> Vector3 {
     assert(controller.character != null);
     return cast,force(Vector3) CharacterVirtual_GetPosition(controller.character);
+}
+
+character_controller_is_grounded :: (controller: *Character_Controller) -> bool {
+    if controller.character == null return false;
+    return CharacterBase_IsSupported(cast(*CharacterBase) controller.character);
 }
 
 character_controller_root_matrix :: (controller: *Character_Controller, uniform_scale: float) -> Matrix4 {

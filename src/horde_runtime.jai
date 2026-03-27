@@ -44,6 +44,14 @@ Auto_Fire_Params :: struct {
     projectile_speed: float = 18.0;
     projectile_radius: float = 0.18;
     projectile_life: float = 2.0;
+    burst_spacing: float = 0.11;
+}
+
+Powerup_Params :: struct {
+    enabled: bool = true;
+    spawn_rate: float = 0.09;
+    pickup_radius: float = 0.48;
+    world_margin: float = 5.0;
 }
 
 Spider_Leg_Runtime :: struct {
@@ -83,6 +91,13 @@ Projectile_Runtime :: struct {
     velocity: Vector3;
 }
 
+Powerup_Runtime :: struct {
+    active: bool;
+    _pad0: [3]u8;
+    radius: float;
+    position: Vector3;
+}
+
 Enemy_Render_Mesh :: struct {
     node_index: s32;
     base_mesh_index: u32;
@@ -119,9 +134,18 @@ Horde_Runtime :: struct {
 
     spawn_params: Enemy_Spawn_Params = .{};
     auto_fire_params: Auto_Fire_Params = .{};
+    powerup_params: Powerup_Params = .{};
     player_health: float = 100.0;
+    bonus_bullets: s32;
     spawn_accumulator: float;
     shot_accumulator: float;
+    powerup_spawn_accumulator: float;
+    burst_delay_remaining: float;
+    burst_remaining: s32;
+    game_time: float;
+    death_reset_delay: float = 1.8;
+    death_reset_t: float = 1.8;
+    restart_requested: bool;
 
     collider_radius: float = 0.45;
     collider_half_height: float = 0.0;
@@ -142,10 +166,12 @@ Horde_Runtime :: struct {
 
     max_count: s32 = 256;
     projectile_max_count: s32 = 256;
+    powerup_max_count: s32 = 64;
     alive_count: s32;
     visible_count_debug: s32;
     render_instance_count_debug: s32;
     projectile_active_count: s32;
+    powerup_active_count: s32;
     debug_next_log_time: float;
 
     render_enemy_masks: bool = true;
@@ -153,6 +179,7 @@ Horde_Runtime :: struct {
 
     enemies: [..]Enemy_Runtime;
     projectiles: [..]Projectile_Runtime;
+    powerups: [..]Powerup_Runtime;
     render_meshes: [..]Enemy_Render_Mesh;
     draw_groups: [..]Enemy_Draw_Group;
 }
@@ -187,6 +214,7 @@ clear :: (using runtime: *Horde_Runtime) {
     if runtime.gpu_arena.cpu != null gpu_free_arena(runtime.gpu_arena);
     array_reset(*enemies);
     array_reset(*projectiles);
+    array_reset(*powerups);
     array_reset(*render_meshes);
     array_reset(*draw_groups);
     runtime.* = {};
@@ -195,14 +223,58 @@ clear :: (using runtime: *Horde_Runtime) {
 deinit :: (using runtime: *Horde_Runtime) {
     array_free(enemies);
     array_free(projectiles);
+    array_free(powerups);
     array_free(render_meshes);
     array_free(draw_groups);
     clear(runtime);
 }
 
 reset :: (using runtime: *Horde_Runtime, horde_bindings: Horde_Bindings, camera_pos: Vector3, sun_strength: float, time_of_day: float) {
+    preserved_allocator := allocator;
+    preserved_max_count := max_count;
+    preserved_projectile_max_count := projectile_max_count;
+    preserved_powerup_max_count := powerup_max_count;
+    preserved_spawn_params := spawn_params;
+    preserved_auto_fire_params := auto_fire_params;
+    preserved_powerup_params := powerup_params;
+    preserved_render_enemy_masks := render_enemy_masks;
+    preserved_direct_draw_debug := direct_draw_debug;
+    preserved_spider_move_height := spider_move_height;
+    preserved_spider_leg_thickness := spider_leg_thickness;
+    preserved_spider_joint_radius := spider_joint_radius;
+    preserved_spider_step_distance := spider_step_distance;
+    preserved_spider_step_height := spider_step_height;
+    preserved_spider_step_speed := spider_step_speed;
+    preserved_spider_forward_bias := spider_forward_bias;
+    preserved_spider_body_radius := spider_body_radius;
+    preserved_death_reset_delay := death_reset_delay;
     clear(runtime);
+    if preserved_allocator.proc != null allocator = preserved_allocator;
+    if allocator.proc == null allocator = context.allocator;
+    max_count = cast(s32) max(1, preserved_max_count);
+    projectile_max_count = cast(s32) max(1, preserved_projectile_max_count);
+    powerup_max_count = cast(s32) max(1, preserved_powerup_max_count);
+    spawn_params = preserved_spawn_params;
+    auto_fire_params = preserved_auto_fire_params;
+    powerup_params = preserved_powerup_params;
+    render_enemy_masks = preserved_render_enemy_masks;
+    direct_draw_debug = preserved_direct_draw_debug;
+    spider_move_height = preserved_spider_move_height;
+    spider_leg_thickness = preserved_spider_leg_thickness;
+    spider_joint_radius = preserved_spider_joint_radius;
+    spider_step_distance = preserved_spider_step_distance;
+    spider_step_height = preserved_spider_step_height;
+    spider_step_speed = preserved_spider_step_speed;
+    spider_forward_bias = preserved_spider_forward_bias;
+    spider_body_radius = preserved_spider_body_radius;
+    death_reset_delay = max(0.25, preserved_death_reset_delay);
+    death_reset_t = death_reset_delay;
     bindings = horde_bindings;
+    enemies.allocator = allocator;
+    projectiles.allocator = allocator;
+    powerups.allocator = allocator;
+    render_meshes.allocator = allocator;
+    draw_groups.allocator = allocator;
 
     scene_geo := horde_bindings.scene_geo;
     mask_model_index = scene_geo_model_index_by_name(scene_geo, "mask");
@@ -234,6 +306,8 @@ reset :: (using runtime: *Horde_Runtime, horde_bindings: Horde_Bindings, camera_
     for *enemies it.* = .{};
     array_resize(*projectiles, projectile_max_count);
     for *projectiles it.* = .{};
+    array_resize(*powerups, powerup_max_count);
+    for *powerups it.* = .{};
 
     model := scene_geo.models[mask_model_index];
     for node_index: model.node_start .. model.node_start + model.node_count - 1 {
@@ -317,6 +391,7 @@ do_ui :: (using runtime: *Horde_Runtime) {
     ImGui.Checkbox("Render Enemy Masks", *render_enemy_masks);
     ImGui.Checkbox("Enemy Direct Draw", *direct_draw_debug);
     ImGui.Checkbox("Auto Fire", *auto_fire_params.enabled);
+    ImGui.Checkbox("Powerups", *powerup_params.enabled);
     Persist.SliderInt("Enemy Target", *spawn_params.target_alive, 0, max_count, "%d");
     Persist.SliderFloat("Enemy Spawn Rate", *spawn_params.spawn_rate, 0.0, 600.0, "%.0f/s");
     Persist.SliderFloat("Enemy Speed", *spawn_params.move_speed, 0.5, 6.0, "%.2f");
@@ -325,14 +400,29 @@ do_ui :: (using runtime: *Horde_Runtime) {
     Persist.SliderFloat("Max Head Size", *spawn_params.max_head_size, 0.5, 2.0, "%.2f");
     Persist.SliderFloat("Enemy Touch DPS", *spawn_params.touch_damage_per_second, 0.0, 40.0, "%.1f");
     Persist.SliderFloat("Shots / Sec", *auto_fire_params.shots_per_second, 0.0, 10.0, "%.1f");
+    Persist.SliderFloat("Burst Spacing", *auto_fire_params.burst_spacing, 0.02, 0.4, "%.2f");
+    Persist.SliderFloat("Powerup Spawn Rate", *powerup_params.spawn_rate, 0.0, 1.0, "%.2f/s");
     ImGui.Text("Player Health: %.1f", player_health);
+    ImGui.Text("Bonus Bullets: %", bonus_bullets);
     ImGui.Text("Enemies Alive: % / %", alive_count, spawn_params.target_alive);
     ImGui.Text("Spiders: %", spider_active_count);
     ImGui.Text("Projectiles: %", projectile_active_count);
+    ImGui.Text("Powerups: %", powerup_active_count);
+    ImGui.Text("Survival Time: %.1fs", game_time);
 }
 
 update :: (runtime: *Horde_Runtime, dt: float) {
+    runtime.restart_requested = false;
+    if runtime.player_health <= 0.0 {
+        runtime.death_reset_t -= dt;
+        if runtime.death_reset_t <= 0.0 {
+            runtime.restart_requested = true;
+        }
+        return;
+    }
+    runtime.game_time += dt;
     update_enemies(runtime, dt);
+    update_powerups(runtime, dt);
     update_projectiles_pre_physics(runtime, dt);
 }
 
@@ -467,6 +557,14 @@ draw_main :: (using runtime: *Horde_Runtime, cmd_buff: Gpu_Command_Buffer, pipel
 }
 
 draw_debug :: (using runtime: *Horde_Runtime, gizmo_ctx: *Gizmo.Gizmo_Context) {
+    for powerups {
+        if !it.active continue;
+        pulse := 0.84 + 0.16 * sin(game_time * 4.2 + cast(float) it_index * 0.6);
+        color := Vector4.{0.32, 0.92, 1.25, 0.95} * pulse;
+        color.w = 0.95;
+        Gizmo.draw_sphere(gizmo_ctx, it.position, it.radius, color = color, thickness = 2.0, segments = 16);
+    }
+
     spider_color := Vector4.{0.02, 0.02, 0.025, 0.96};
     spider_leg_color := Vector4.{0.01, 0.01, 0.01, 0.9};
     spider_joint_color := Vector4.{0.06, 0.06, 0.065, 0.85};
@@ -682,7 +780,9 @@ spawn_enemy :: (using runtime: *Horde_Runtime, spawn_index: s32) -> bool {
     spawn_pos := player_pos + .{cos(spawn_angle) * spawn_radius, 0.0, sin(spawn_angle) * spawn_radius};
     min_head_size := min(spawn_params.min_head_size, spawn_params.max_head_size);
     max_head_size := max(spawn_params.min_head_size, spawn_params.max_head_size);
-    size_variation := lerp(min_head_size, max_head_size, horde_hash01(spawn_seed ^ 0x9e3779b9));
+    progression_t := clamp(game_time / 180.0, 0.0, 1.0);
+    size_growth := lerp(1.0, 1.35, progression_t);
+    size_variation := lerp(min_head_size, max_head_size, horde_hash01(spawn_seed ^ 0x9e3779b9)) * size_growth;
     enemy_kind := ifx (spawn_seed & 3) == 0 then Enemy_Kind.SPIDER else .MASK;
     scaled_collider_radius := collider_radius * size_variation;
     scaled_collider_half_height := collider_half_height * size_variation;
@@ -725,12 +825,13 @@ spawn_enemy :: (using runtime: *Horde_Runtime, spawn_index: s32) -> bool {
     body_id := BodyInterface_CreateAndAddBody(Physics.physics.body_interface, body_settings, .Activate);
     BodyInterface_SetUserData(Physics.physics.body_interface, body_id, enemy_body_user_data_make(spawn_index));
 
+    hp_scale := 1.0 + floor(game_time / 24.0);
     enemies[spawn_index] = .{
         active = true,
         body_id = body_id,
         shape = enemy_body_shape,
         kind = enemy_kind,
-        hp = 3.0,
+        hp = 2.0 + hp_scale,
         hit_flash_t = 0.0,
         yaw = spawn_angle + PI,
         visual_scale = enemy_visual_scale,
@@ -847,6 +948,51 @@ update_enemies :: (using runtime: *Horde_Runtime, dt: float) {
 }
 
 #scope_file
+update_powerups :: (using runtime: *Horde_Runtime, dt: float) {
+    powerup_active_count = 0;
+    player_pos := character_controller_position(bindings.player_controller);
+    player_pickup_pos := player_pos + .{0.0, 0.85, 0.0};
+
+    for *powerups {
+        if !it.active continue;
+        if length(player_pickup_pos - it.position) <= it.radius + powerup_params.pickup_radius {
+            it.active = false;
+            bonus_bullets += 1;
+            continue;
+        }
+        powerup_active_count += 1;
+    }
+
+    if !powerup_params.enabled || powerup_params.spawn_rate <= 0.0 return;
+
+    powerup_spawn_accumulator += powerup_params.spawn_rate * dt;
+    powerups_to_spawn := cast(s32) floor(powerup_spawn_accumulator);
+    if powerups_to_spawn <= 0 return;
+    powerup_spawn_accumulator -= cast(float) powerups_to_spawn;
+
+    ground_half_x := max(4.0, bindings.ground.size_x * 0.5 - powerup_params.world_margin);
+    ground_half_z := max(4.0, bindings.ground.size_z * 0.5 - powerup_params.world_margin);
+    for *powerups {
+        if powerups_to_spawn <= 0 break;
+        if it.active continue;
+        item_t := cast(float) cast(s32) it_index;
+        seed_base := cast(u32) floor((game_time + item_t * 13.0) * 31.0);
+        seed := seed_base ^ (cast(u32) it_index * cast(u32) 0x9e3779b9);
+        spawn_x := lerp(-ground_half_x, ground_half_x, horde_hash01(seed ^ 0x85ebca6b));
+        spawn_z := lerp(-ground_half_z, ground_half_z, horde_hash01(seed ^ 0xc2b2ae35));
+        radius := 0.38;
+        spawn_y := horde_ground_height_at(bindings.ground.*, spawn_x, spawn_z) + radius + 0.14;
+        it.* = .{
+            active = true,
+            radius = radius,
+            position = .{spawn_x, spawn_y, spawn_z},
+        };
+        powerups_to_spawn -= 1;
+        powerup_active_count += 1;
+    }
+}
+
+#scope_file
 update_projectiles_pre_physics :: (using runtime: *Horde_Runtime, dt: float) {
     projectile_active_count = 0;
     for * projectiles {
@@ -874,6 +1020,23 @@ update_projectiles_pre_physics :: (using runtime: *Horde_Runtime, dt: float) {
         projectile_active_count += 1;
     }
 
+    auto_fire_params.burst_spacing = max(0.02, auto_fire_params.burst_spacing);
+    if burst_remaining > 0 {
+        burst_delay_remaining -= dt;
+        while burst_remaining > 0 && burst_delay_remaining <= 0.0 {
+            player_pos := character_controller_position(bindings.player_controller);
+            origin := player_pos + .{0.0, 0.95, 0.0};
+            target_enemy_index := find_closest_enemy_to_player(runtime, player_pos);
+            if target_enemy_index >= 0 {
+                target_pos := cast,force(Vector3) BodyInterface_GetPosition(Physics.physics.body_interface, enemies[target_enemy_index].body_id);
+                target_pos.y += enemies[target_enemy_index].collider_half_height + enemies[target_enemy_index].collider_radius * 0.35;
+                _ = spawn_projectile(runtime, origin, target_pos - origin);
+            }
+            burst_remaining -= 1;
+            burst_delay_remaining += auto_fire_params.burst_spacing;
+        }
+    }
+
     if !auto_fire_params.enabled || auto_fire_params.shots_per_second <= 0.0 return;
     if alive_count <= 0 return;
 
@@ -882,14 +1045,11 @@ update_projectiles_pre_physics :: (using runtime: *Horde_Runtime, dt: float) {
     if shots_to_fire <= 0 return;
     shot_accumulator -= cast(float) shots_to_fire;
 
-    player_pos := character_controller_position(bindings.player_controller);
-    origin := player_pos + .{0.0, 0.95, 0.0};
     for 0..shots_to_fire-1 {
-        target_enemy_index := find_closest_enemy_to_player(runtime, player_pos);
-        if target_enemy_index < 0 break;
-        target_pos := cast,force(Vector3) BodyInterface_GetPosition(Physics.physics.body_interface, enemies[target_enemy_index].body_id);
-        target_pos.y += enemies[target_enemy_index].collider_half_height + enemies[target_enemy_index].collider_radius * 0.35;
-        spawn_projectile(runtime, origin, target_pos - origin);
+        burst_remaining += 1 + bonus_bullets;
+    }
+    if burst_remaining > 0 {
+        burst_delay_remaining = min(burst_delay_remaining, 0.0);
     }
 }
 

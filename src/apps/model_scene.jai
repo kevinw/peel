@@ -69,6 +69,8 @@ running_lizard_anim: Scene_Anim_State;
 mediapipe_body_anim: Scene_Anim_State;
 running_lizard_clip_index: s32 = -1;
 running_lizard_root: Matrix4 = Matrix4_Identity;
+running_lizard_spawn_position: Vector3;
+running_lizard_spawn_visual_yaw_offset: float = PI;
 mediapipe_body_root: Matrix4 = Matrix4_Identity;
 running_lizard_scale: float = 1.0;
 running_lizard_ground_y: float = 0.5;
@@ -479,12 +481,19 @@ tick :: () {
     normalize(*controller_right, fallback = .{1.0, 0.0, 0.0});
 
     desired_move: Vector3;
+    jump_pressed: bool;
     if #complete control_mode == {
     case .Player;
         if Input.input_button_states[cast(Input.Key_Code) #char "W"] & .DOWN desired_move += controller_forward;
         if Input.input_button_states[cast(Input.Key_Code) #char "S"] & .DOWN desired_move -= controller_forward;
         if Input.input_button_states[cast(Input.Key_Code) #char "A"] & .DOWN desired_move -= controller_right;
         if Input.input_button_states[cast(Input.Key_Code) #char "D"] & .DOWN desired_move += controller_right;
+        for Input.events_this_frame {
+            using it;
+            if type == .KEYBOARD && key_pressed && key_code == #char " " {
+                jump_pressed = true;
+            }
+        }
     case .Editor;
         //
     }
@@ -500,9 +509,16 @@ tick :: () {
 
     Gizmo.begin_frame(*gizmo_ctx);
     Gizmo.begin_frame(*gizmo_overlay_ctx);
-    character_controller_update_in_system(*running_lizard_controller, Physics.physics.system, desired_move, dt);
+    if horde_runtime.player_health <= 0.0 {
+        desired_move = .{};
+        jump_pressed = false;
+    }
+    character_controller_update_in_system(*running_lizard_controller, Physics.physics.system, desired_move, dt, jump_pressed);
     update(*horde_runtime, dt);
     Physics.tick(dt);
+    if horde_runtime.restart_requested {
+        reset_player_and_horde_game();
+    }
     if physics_gizmos_enabled {
         append_lizard_physics_gizmos();
         draw_physics_debug(*horde_runtime, *gizmo_ctx);
@@ -805,7 +821,7 @@ tick :: () {
         }
         draw_main(*horde_runtime, cmd_buff, graphics_pipeline);
 
-        should_draw_gizmos := physics_gizmos_enabled || control_mode == .Editor || horde_runtime.projectile_active_count > 0 || horde_runtime.spider_active_count > 0;
+        should_draw_gizmos := physics_gizmos_enabled || control_mode == .Editor || horde_runtime.projectile_active_count > 0 || horde_runtime.spider_active_count > 0 || horde_runtime.powerup_active_count > 0;
         if should_draw_gizmos {
             Gizmo_Render.gizmo_render_draw(*gizmo_render_ctx, cmd_buff, *gizmo_ctx, viewport, depth_mode = .TEST);
             Gizmo_Render.gizmo_render_draw(*gizmo_overlay_render_ctx, cmd_buff, *gizmo_overlay_ctx, viewport, depth_mode = .NONE);
@@ -821,6 +837,21 @@ tick :: () {
             gpu_set_pipeline(cmd_buff, debug_pick_pipeline);
             gpu_draw_instanced_direct(cmd_buff, debug_pick_params.gpu, 6, 1);
         }
+    }
+
+    if horde_runtime.player_health <= 0.0 {
+        draw := ImGui.GetForegroundDrawList();
+        viewport := ImGui.GetMainViewport();
+        ImGui.PushFont(fonts.main, fonts.LARGE_SIZE * 2.0);
+        msg := "YOU DIED";
+        size := ImGui.CalcTextSize(msg);
+        pos := Vector2.{
+            viewport.WorkPos.x + (viewport.WorkSize.x - size.x) * 0.5,
+            viewport.WorkPos.y + max(56.0, (viewport.WorkSize.y - size.y) * 0.32),
+        };
+        ImGui.ImDrawList.AddText(draw, pos + .{3.0, 3.0}, ImGui.GetColorU32(Vector4.{0.0, 0.0, 0.0, 0.82}), msg);
+        ImGui.ImDrawList.AddText(draw, pos, ImGui.GetColorU32(Vector4.{1.0, 0.15, 0.1, 0.98}), msg);
+        ImGui.PopFont();
     }
 
     submit_and_present_with_ui(cmd_buff);
@@ -1229,12 +1260,14 @@ init_player_from_compiled_node :: (instances_cpu: *[..]Scene_Instance, total_ski
     running_lizard_scale = max(max(start_scale.x, start_scale.y), start_scale.z);
     running_lizard_bounds := scene_geo_model_bounds(*scene_geo, model_index);
     running_lizard_ground_y = -running_lizard_bounds.min.y * running_lizard_scale - 0.2;
+    running_lizard_spawn_position = .{start_pos.x, running_lizard_ground_y, start_pos.z};
+    running_lizard_spawn_visual_yaw_offset = start_rot_deg.y * PI / 180.0;
 
     character_controller_init_in_system(
         *running_lizard_controller,
         Physics.physics.system,
-        .{start_pos.x, running_lizard_ground_y, start_pos.z},
-        visual_yaw_offset = start_rot_deg.y * PI / 180.0);
+        running_lizard_spawn_position,
+        visual_yaw_offset = running_lizard_spawn_visual_yaw_offset);
 
     running_lizard_root = character_controller_root_matrix(*running_lizard_controller, running_lizard_scale);
     running_lizard_model_info := scene_geo.models[model_index];
@@ -1331,6 +1364,25 @@ init_player_from_compiled_node :: (instances_cpu: *[..]Scene_Instance, total_ski
     }
 
     return running_lizard_scale, running_lizard_ground_y;
+}
+
+reset_player_and_horde_game :: () {
+    controller_deinit(*running_lizard_controller);
+    character_controller_init_in_system(
+        *running_lizard_controller,
+        Physics.physics.system,
+        running_lizard_spawn_position,
+        visual_yaw_offset = running_lizard_spawn_visual_yaw_offset);
+    running_lizard_root = character_controller_root_matrix(*running_lizard_controller, running_lizard_scale);
+    reset(*horde_runtime, .{
+        scene_geo = *scene_geo,
+        shadow_map = *shadow_map,
+        player_controller = *running_lizard_controller,
+        ground = *active_ground,
+        mask_import_basis = ifx compiled_scene_find_asset_index_by_name_for_runtime("mask") >= 0
+            then compiled_asset_import_matrix(compiled_scene.assets[compiled_scene_find_asset_index_by_name_for_runtime("mask")])
+            else Matrix4_Identity,
+    }, scene_camera.position, outdoor_rig.sun_strength, outdoor_rig.time_of_day);
 }
 
 append_mediapipe_demo_instances :: (instances_cpu: *[..]Scene_Instance, total_skin_matrix_count: *s64) {

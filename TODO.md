@@ -74,3 +74,4 @@ Sebastian Aaltonen
 - https://syllogi-graphikon.vercel.app/posts/metal-single-pass-downsampler/
 - https://www.cs.cmu.edu/~rdriley/487/papers/Thompson_1984_ReflectionsonTrustingTrust.pdf
 - https://github.com/myemural/VulkanCppExamples/tree/master
+- cascade receiver culling https://x.com/SebAaltonen/status/2036768312667902463?s=20
