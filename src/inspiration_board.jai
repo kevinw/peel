@@ -671,6 +671,13 @@ inspiration_draw_context_popup :: (using board: *Inspiration_Board) {
             CloseCurrentPopup();
         }
     }
+    Separator();
+    if MenuItem("Delete", "Del") {
+        selected_index = context_item_index;
+        inspiration_remove_selected(board);
+        context_item_index = -1;
+        CloseCurrentPopup();
+    }
 }
 
 inspiration_draw_resize_handles :: (using board: Inspiration_Board, draw: *ImGui.ImDrawList, item: Inspiration_Item) {
@@ -906,7 +913,7 @@ inspiration_asset_copy_path :: (source_path: string, modtime: Apollo_Time, size:
         return copy_string(sprint("%/%_%_.jpg", INSPIRATION_ASSET_DIR, stem, key_hash));
     }
     if found_ext {
-        return copy_string(sprint("%/%_%_%.%", INSPIRATION_ASSET_DIR, stem, key_hash, ext));
+        return copy_string(sprint("%/%_%.%", INSPIRATION_ASSET_DIR, stem, key_hash, ext));
     }
     return copy_string(sprint("%/%_%", INSPIRATION_ASSET_DIR, stem, key_hash));
 }
