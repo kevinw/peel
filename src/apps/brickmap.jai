@@ -6,6 +6,7 @@ WRITE_SHADER_OUTPUT :: true;
 #import "Jai-Shader-Transpiler";
 SHR :: #import,file "../shader_hot_reload.jai";
 #load "shaders/brickmap_shader.jai";
+#load "brickmap_graph.jai";
 
 // BRICK VISUAL FIDELITY TUNABLES
 BASE_VOXEL :: 0.08;
@@ -41,6 +42,7 @@ Brickmap_BVH_Node :: struct {
 
 Brickmap_Validation_Counters :: struct {
     scan_nonempty_cells: s32;
+    scan_valid_cells: s32;
     scan_oob_atlas_refs: s32;
     scan_duplicate_atlas_refs: s32;
     scan_above_next_atlas_refs: s32;
@@ -49,6 +51,9 @@ Brickmap_Validation_Counters :: struct {
     scan_referenced_slots: s32;
     scan_dirty_flag_cells: s32;
     scan_param_state_mismatches: s32;
+    scan_owner_mismatches: s32;
+    scan_owner_missing: s32;
+    scan_valid_unpublished: s32;
 
     shift_preserved_cells: s32;
     shift_invalidated_cells: s32;
@@ -61,18 +66,28 @@ graphics_pipeline: Gpu_Pipeline;
 temporal_graphics_pipeline: Gpu_Pipeline;
 blit_pipeline: Gpu_Pipeline;
 compute_recenter_pipeline: Gpu_Pipeline;
+compute_clear_slot_owners_pipeline: Gpu_Pipeline;
+compute_rebuild_slot_owners_pipeline: Gpu_Pipeline;
+compute_reset_queues_pipeline: Gpu_Pipeline;
+compute_full_rebuild_pipeline: Gpu_Pipeline;
 compute_prepare_pipeline: Gpu_Pipeline;
 compute_classify_pipeline: Gpu_Pipeline;
+compute_prepare_dispatch_args_pipeline: Gpu_Pipeline;
 compute_bake_pipeline: Gpu_Pipeline;
 compute_publish_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
+brickmap_compute_graph: Brickmap_Graph;
 
 params_ring: Gpu_View(Brickmap_Params);
 params: Gpu_Buffer(Brickmap_Params);
+compute_params: Gpu_Buffer(Brickmap_Params);
+render_params_ring: Gpu_View(Brickmap_Render_Params);
+render_params: Gpu_Buffer(Brickmap_Render_Params);
 brickmap_state_ring: Gpu_View(Brickmap_State);
 brickmap_state: Gpu_Buffer(Brickmap_State);
 brickmap_queues_ring: Gpu_View(Brickmap_Work_Queues);
 brickmap_queues: Gpu_Buffer(Brickmap_Work_Queues);
+brickmap_dispatch_args: Gpu_Buffer(Brickmap_Indirect_Dispatch_Pair);
 blit_params_ring: Gpu_View(Brickmap_Blit_Params);
 blit_params: Gpu_Buffer(Brickmap_Blit_Params);
 params_guard_before: Gpu_View(u8);
@@ -81,6 +96,7 @@ params_guard_after: Gpu_View(u8);
 pointer_grid_cpu: []s32;
 pointer_grid_valid_cpu: []u32;
 pointer_grid_publish_cpu: []u32;
+pointer_grid_generation_cpu: []u32;
 lod_info_cpu: [BRICKMAP_LOD_COUNT] Brickmap_Lod_Info;
 edits_storage: [BRICKMAP_MAX_EDITS] SDF_Edit;
 edits_cpu: []SDF_Edit;
@@ -113,12 +129,22 @@ pending_dirty_count: s32;
 dirty_backlog_count: s32;
 last_camera_pos: Vector3;
 force_full_rebuild := true;
+pending_full_rebuild := false;
+gpu_full_rebuild_pending := false;
 atlas_capacity_reached := false;
 brickmap_active_cache_slot: s32;
 
 ui_open := true;
 auto_edit_after: s32 = -1;
 auto_edit_done := false;
+auto_drag_near_camera := false;
+auto_drag_started := false;
+auto_drag_done := false;
+auto_drag_start_frame: s32 = 4;
+auto_drag_duration_frames: s32 = 12;
+auto_drag_edit_index: s32 = -1;
+auto_drag_from_pos: Vector3;
+auto_drag_to_pos: Vector3;
 log_updates := false;
 use_cache_raymarch := true;
 use_hw_interp := true;
@@ -133,6 +159,8 @@ cache_debug_show_selected_lod := false;
 cache_debug_show_distance := false;
 debug_force_flat_color := false;
 cache_force_lod0 := false;
+freeze_clipmap := false;
+experimental_recenter_reuse := true;
 auto_fly_forward := false;
 auto_fly_speed: float = 8.0;
 log_validation_every_frame := false;
@@ -145,7 +173,6 @@ blit_nearest := false;
 debug_autolog_once := false;
 guard_corruption_count: s32;
 guard_corruption_reported := false;
-params_ring_last_slot: s64 = -1;
 bindless_index_logged_once := false;
 BRICKMAP_RANDOM_STARTUP_EDITS :: 2000;
 BRICKMAP_RANDOM_STARTUP_SEED  :: cast(u64) 0xB17C_A11A_5EED;
@@ -176,6 +203,7 @@ focus_t: float;
 focus_duration: float = 0.25;
 validation_frame: Brickmap_Validation_Counters;
 validation_total: Brickmap_Validation_Counters;
+validation_max_nonempty_cells: s32;
 cpu_classify_wait_last_ms: float;
 cpu_classify_wait_avg_ms: float;
 cpu_bake_wait_last_ms: float;
@@ -190,14 +218,32 @@ cpu_offscreen_encode_last_ms: float;
 cpu_offscreen_encode_avg_ms: float;
 cpu_present_encode_last_ms: float;
 cpu_present_encode_avg_ms: float;
+last_classify_graph_stats: Brickmap_Graph_Stats;
+last_bake_graph_stats: Brickmap_Graph_Stats;
+validation_first_mismatch_cell: s32;
+validation_first_mismatch_slot: s32;
+validation_first_mismatch_expect_lod: s32;
+validation_first_mismatch_expect_bx: s32;
+validation_first_mismatch_expect_by: s32;
+validation_first_mismatch_expect_bz: s32;
+validation_first_mismatch_owner_lod: s32;
+validation_first_mismatch_owner_bx: s32;
+validation_first_mismatch_owner_by: s32;
+validation_first_mismatch_owner_bz: s32;
 
 on_dll_init :: () {
+    init(*brickmap_compute_graph);
     graphics_source := cast([]u8) get_transpiled(.METAL, brickmap_vertex_main, brickmap_fragment_main);
     temporal_graphics_source := cast([]u8) get_transpiled(.METAL, brickmap_vertex_main, brickmap_temporal_fragment_main);
     blit_source := cast([]u8) get_transpiled(.METAL, brickmap_blit_vertex_main, brickmap_blit_fragment_main);
     recenter_source := cast([]u8) get_transpiled(.METAL, brickmap_recenter_compute);
+    clear_slot_owners_source := cast([]u8) get_transpiled(.METAL, brickmap_clear_slot_owners_compute);
+    rebuild_slot_owners_source := cast([]u8) get_transpiled(.METAL, brickmap_rebuild_slot_owners_compute);
+    reset_queues_source := cast([]u8) get_transpiled(.METAL, brickmap_reset_queues_compute);
+    full_rebuild_source := cast([]u8) get_transpiled(.METAL, brickmap_full_rebuild_cells_compute);
     prepare_source := cast([]u8) get_transpiled(.METAL, brickmap_prepare_dirty_compute);
     classify_source := cast([]u8) get_transpiled(.METAL, brickmap_classify_dirty_compute);
+    prepare_dispatch_args_source := cast([]u8) get_transpiled(.METAL, brickmap_prepare_dispatch_args_compute);
     compute_source  := cast([]u8) get_transpiled(.METAL, brickmap_bake_compute);
     publish_source  := cast([]u8) get_transpiled(.METAL, brickmap_publish_compute);
 
@@ -226,6 +272,26 @@ on_dll_init :: () {
     recenter_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_recenter_pipeline, recenter_source, .METAL, brickmap_recenter_compute);
     assert(recenter_ok, "Brickmap recenter compute pipeline hot-reload registration failed.");
 
+    compute_clear_slot_owners_pipeline = gpu_create_compute_pipeline(clear_slot_owners_source);
+    assert(compute_clear_slot_owners_pipeline != 0, "Brickmap clear slot owners compute pipeline creation failed.");
+    clear_slot_owners_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_clear_slot_owners_pipeline, clear_slot_owners_source, .METAL, brickmap_clear_slot_owners_compute);
+    assert(clear_slot_owners_ok, "Brickmap clear slot owners compute pipeline hot-reload registration failed.");
+
+    compute_rebuild_slot_owners_pipeline = gpu_create_compute_pipeline(rebuild_slot_owners_source);
+    assert(compute_rebuild_slot_owners_pipeline != 0, "Brickmap rebuild slot owners compute pipeline creation failed.");
+    rebuild_slot_owners_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_rebuild_slot_owners_pipeline, rebuild_slot_owners_source, .METAL, brickmap_rebuild_slot_owners_compute);
+    assert(rebuild_slot_owners_ok, "Brickmap rebuild slot owners compute pipeline hot-reload registration failed.");
+
+    compute_reset_queues_pipeline = gpu_create_compute_pipeline(reset_queues_source);
+    assert(compute_reset_queues_pipeline != 0, "Brickmap reset queues compute pipeline creation failed.");
+    reset_queues_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_reset_queues_pipeline, reset_queues_source, .METAL, brickmap_reset_queues_compute);
+    assert(reset_queues_ok, "Brickmap reset queues compute pipeline hot-reload registration failed.");
+
+    compute_full_rebuild_pipeline = gpu_create_compute_pipeline(full_rebuild_source);
+    assert(compute_full_rebuild_pipeline != 0, "Brickmap full rebuild compute pipeline creation failed.");
+    full_rebuild_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_full_rebuild_pipeline, full_rebuild_source, .METAL, brickmap_full_rebuild_cells_compute);
+    assert(full_rebuild_ok, "Brickmap full rebuild compute pipeline hot-reload registration failed.");
+
     compute_prepare_pipeline = gpu_create_compute_pipeline(prepare_source);
     assert(compute_prepare_pipeline != 0, "Brickmap prepare compute pipeline creation failed.");
     prepare_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_prepare_pipeline, prepare_source, .METAL, brickmap_prepare_dirty_compute);
@@ -235,6 +301,11 @@ on_dll_init :: () {
     assert(compute_classify_pipeline != 0, "Brickmap classify compute pipeline creation failed.");
     classify_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_classify_pipeline, classify_source, .METAL, brickmap_classify_dirty_compute);
     assert(classify_ok, "Brickmap classify compute pipeline hot-reload registration failed.");
+
+    compute_prepare_dispatch_args_pipeline = gpu_create_compute_pipeline(prepare_dispatch_args_source);
+    assert(compute_prepare_dispatch_args_pipeline != 0, "Brickmap prepare dispatch args compute pipeline creation failed.");
+    prepare_dispatch_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_prepare_dispatch_args_pipeline, prepare_dispatch_args_source, .METAL, brickmap_prepare_dispatch_args_compute);
+    assert(prepare_dispatch_ok, "Brickmap prepare dispatch args compute pipeline hot-reload registration failed.");
 
     compute_bake_pipeline = gpu_create_compute_pipeline(compute_source);
     assert(compute_bake_pipeline != 0, "Brickmap bake compute pipeline creation failed.");
@@ -254,22 +325,30 @@ on_dll_init :: () {
     blit_params_ring = gpu_alloc_view(*gpu_arena, Brickmap_Blit_Params, BRICKMAP_PARAM_RING_SLOTS);
     params_guard_before = gpu_alloc_view(*gpu_arena, u8, 4096);
     params_ring = gpu_alloc_view(*gpu_arena, Brickmap_Params, BRICKMAP_PARAM_RING_SLOTS);
+    render_params_ring = gpu_alloc_view(*gpu_arena, Brickmap_Render_Params, BRICKMAP_PARAM_RING_SLOTS);
     params_guard_after = gpu_alloc_view(*gpu_arena, u8, 4096);
     brickmap_state_ring = gpu_alloc_view(*gpu_arena, Brickmap_State, 2);
     brickmap_queues_ring = gpu_alloc_view(*gpu_arena, Brickmap_Work_Queues, 2);
+    brickmap_dispatch_args = gpu_alloc_buffer(*gpu_arena, Brickmap_Indirect_Dispatch_Pair);
+    compute_params = gpu_alloc_buffer(*gpu_arena, Brickmap_Params);
 
     assert(params_ring.cpu.data != null, "Brickmap params ring alloc failed.");
+    assert(compute_params.cpu != null, "Brickmap compute params alloc failed.");
+    assert(render_params_ring.cpu.data != null, "Brickmap render params ring alloc failed.");
     assert(blit_params_ring.cpu.data != null, "Brickmap blit params ring alloc failed.");
     assert(params_guard_before.cpu.data != null, "Brickmap params before-guard alloc failed.");
     assert(params_guard_after.cpu.data != null, "Brickmap params after-guard alloc failed.");
+    assert(brickmap_dispatch_args.cpu != null, "Brickmap dispatch args alloc failed.");
     assert(brickmap_state_ring.cpu.data != null, "Brickmap state alloc failed.");
     assert(brickmap_queues_ring.cpu.data != null, "Brickmap work queues alloc failed.");
 
     params = brickmap_params_ring_slot(params_ring, 0);
+    render_params = brickmap_params_ring_slot(render_params_ring, 0);
     blit_params = brickmap_params_ring_slot(blit_params_ring, 0);
 
     for i: 0..BRICKMAP_PARAM_RING_SLOTS-1 {
         params_ring.cpu[i] = .{};
+        render_params_ring.cpu[i] = .{};
         blit_params_ring.cpu[i] = .{};
     }
     for i: 0..1 {
@@ -277,6 +356,8 @@ on_dll_init :: () {
         brickmap_queues_ring.cpu[i] = .{};
     }
     params.cpu.* = .{};
+    compute_params.cpu.* = .{};
+    render_params.cpu.* = .{};
     init_params_guards();
     set_active_cache_slot(0);
     edits_cpu = edits_storage;
@@ -317,6 +398,7 @@ on_dll_init :: () {
     params.cpu.atlas_albedo_texture_index = gpu_texture_view_index(atlas_albedo_view);
     params.cpu.atlas_sampler_linear_index = cast(u32) atlas_linear_sampler - 1;
     params.cpu.atlas_sampler_point_index = cast(u32) atlas_point_sampler - 1;
+    fill_render_params_from_compute_params();
     render_sampler = gpu_create_sampler(.{
         min_filter = .LINEAR, mag_filter = .LINEAR, mip_filter = .NEAREST,
         address_mode_u = .CLAMP_TO_EDGE, address_mode_v = .CLAMP_TO_EDGE, address_mode_w = .CLAMP_TO_EDGE,
@@ -335,6 +417,11 @@ on_dll_init :: () {
     try_parse_env_int("BRICKMAP_SKIP_CLASSIFY", *skip_classify_debug);
     try_parse_env_int("BRICKMAP_AUTO_FLY_FORWARD", *auto_fly_forward);
     try_parse_env_int("BRICKMAP_AUTO_FLY_SPEED", *auto_fly_speed);
+    try_parse_env_int("BRICKMAP_AUTO_DRAG_NEAR_CAMERA", *auto_drag_near_camera);
+    try_parse_env_int("BRICKMAP_AUTO_DRAG_START", *auto_drag_start_frame);
+    try_parse_env_int("BRICKMAP_AUTO_DRAG_FRAMES", *auto_drag_duration_frames);
+    try_parse_env_int("BRICKMAP_FREEZE_CLIPMAP", *freeze_clipmap);
+    try_parse_env_int("BRICKMAP_EXPERIMENTAL_RECENTER_REUSE", *experimental_recenter_reuse);
     try_parse_env_int("BRICKMAP_LOG_VALIDATION", *log_validation_every_frame);
     try_parse_env_int("BRICKMAP_DEBUG_WAIT_IDLE", *debug_wait_idle_every_frame);
     try_parse_env_int("BRICKMAP_DEBUG_STRICT_COMPUTE_SYNC", *debug_strict_compute_sync);
@@ -346,8 +433,7 @@ on_dll_init :: () {
     params.cpu.atlas_alloc_next = 0;
     update_lod_origins(true);
     clear_cache();
-    mark_all_edits_dirty("init");
-    force_full_rebuild = false;
+    force_full_rebuild = true;
     if log_updates {
         log("BRICKMAP init_dirty_complete pending=% atlas_used=%", pending_dirty_count, next_atlas_index);
     }
@@ -447,9 +533,8 @@ ui :: () {
 
             if changed {
                 rebuild_bvh();
-                new_bounds := edit_bounds(selected_edit);
-                mark_dirty_aabb(old_bounds, "inspector_old");
-                mark_dirty_aabb(new_bounds, "inspector_new");
+                _ = old_bounds;
+                request_full_rebuild("inspector_edit");
             }
         }
         if TreeNode("Debug Info") {
@@ -509,6 +594,20 @@ ui :: () {
                 cpu_bake_encode_avg_ms,
                 cpu_offscreen_encode_avg_ms,
                 cpu_present_encode_avg_ms);
+            if TreeNode("Graph Pass Timings") {
+                defer TreePop();
+                Text("Classify graph total encode/wait: % / %", last_classify_graph_stats.encode_ms, last_classify_graph_stats.wait_ms);
+                for i: 0..last_classify_graph_stats.pass_count-1 {
+                    if i >= BRICKMAP_GRAPH_MAX_STATS_PASSES break;
+                    Text("%  % / %", last_classify_graph_stats.pass_names[i], last_classify_graph_stats.pass_encode_ms[i], last_classify_graph_stats.pass_wait_ms[i]);
+                }
+                Separator();
+                Text("Bake graph total encode/wait: % / %", last_bake_graph_stats.encode_ms, last_bake_graph_stats.wait_ms);
+                for i: 0..last_bake_graph_stats.pass_count-1 {
+                    if i >= BRICKMAP_GRAPH_MAX_STATS_PASSES break;
+                    Text("%  % / %", last_bake_graph_stats.pass_names[i], last_bake_graph_stats.pass_encode_ms[i], last_bake_graph_stats.pass_wait_ms[i]);
+                }
+            }
             Text("Auto edit after frame: %", auto_edit_after);
             Text("Auto edit done: %", ifx auto_edit_done then "yes" else "no");
             Separator();
@@ -547,24 +646,19 @@ tick :: () {
     assert(result == .SUCCESS);
     if !swapchain_image return;
 
-    frame_number := cast(s64) gpu_submission_frame_index();
-    slot := brickmap_params_ring_index(frame_number);
-    params = brickmap_params_ring_slot(params_ring, frame_number);
-    blit_params = brickmap_params_ring_slot(blit_params_ring, frame_number);
-    if params_ring_last_slot >= 0 && slot != params_ring_last_slot {
-        source_slot := params_ring_last_slot;
-        completed_frame_number := gpu_completed_submission_frame_index();
-        if completed_frame_number >= 0 {
-            completed_slot := brickmap_params_ring_index(completed_frame_number);
-            if completed_slot != slot source_slot = completed_slot;
-        }
-
-        params.cpu.* = params_ring.cpu[source_slot];
-        blit_params.cpu.* = blit_params_ring.cpu[source_slot];
-    }
-    params_ring_last_slot = slot;
-    set_active_cache_slot(brickmap_active_cache_slot);
+    // Known-good baseline: the brickmap cache/state buffers are shared and mutated on CPU
+    // every frame. Until we have a stricter resource lifetime model, force the GPU idle
+    // before touching them so render/compute cannot observe partially updated state.
     main_queue := gpu_get_queue(.MAIN, 0);
+    gpu_queue_wait_idle(main_queue);
+
+    // Known-good baseline: use a single params slot. The brickmap cache/state still
+    // needs to follow the active cache slot after a recenter preserve step.
+    params = brickmap_params_ring_slot(params_ring, 0);
+    render_params = brickmap_params_ring_slot(render_params_ring, 0);
+    blit_params = brickmap_params_ring_slot(blit_params_ring, 0);
+    set_active_cache_slot(brickmap_active_cache_slot);
+    sync_params_pointer_grid_from_state();
     if debug_wait_idle_every_frame {
         gpu_queue_wait_idle(main_queue);
     }
@@ -701,6 +795,9 @@ tick :: () {
         apply_runtime_edit();
         auto_edit_done = true;
     }
+    if auto_drag_near_camera && !auto_drag_done {
+        update_auto_drag_repro();
+    }
 
     camera_moved := distance(camera.position, last_camera_pos) > 0.35;
     if camera_moved {
@@ -713,9 +810,8 @@ tick :: () {
     }
     recenter_pending := update_lod_origins(can_recenter);
 
-    if force_full_rebuild {
-        params.cpu.full_rebuild_requested = 1;
-        force_full_rebuild = false;
+    if force_full_rebuild || pending_full_rebuild {
+        perform_pending_full_rebuild();
         recenter_pending = false;
     }
 
@@ -772,6 +868,7 @@ tick :: () {
         params.cpu.lod_origin_brick_z[lod] = info.origin_brick.z;
         params.cpu.lod_voxel_size[lod] = info.voxel_size;
     }
+    fill_render_params_from_compute_params();
     hovered_edit = -1;
     draw_any_gizmo := (draw_brick_debug || edit_manip_enabled) && dims_ok && win_w > 0 && win_h > 0;
     if draw_any_gizmo {
@@ -832,9 +929,8 @@ tick :: () {
                 if obj_i >= 0 && obj_i < manip_objects.count {
                     apply_manip_to_edit(selected_edit, manip_objects[obj_i]);
                     rebuild_bvh();
-                    new_bounds := edit_bounds(selected_edit);
-                    mark_dirty_aabb(old_bounds, "manip_old");
-                    mark_dirty_aabb(new_bounds, "manip_new");
+                    _ = old_bounds;
+                    request_full_rebuild("manip_edit");
                 }
             }
 
@@ -865,12 +961,17 @@ tick :: () {
             hovered_edit = -1;
         }
     }
+    if pending_full_rebuild {
+        perform_pending_full_rebuild();
+        recenter_pending = false;
+    }
     pending_dirty_count = count_dirty_flags();
     dirty_backlog_count = 0;
 
     // Upload edits after manip/picking so compute sees latest changes this frame.
     edit_count := cast(s32) params.cpu.edit_count;
     for i: 0..edit_count-1 {
+        sanitize_edit_for_gpu(*edits_cpu[i], i);
         e := edits_cpu[i];
         using params.cpu;
         edit_shape[i] = e.shape;
@@ -880,9 +981,10 @@ tick :: () {
         edit_rotation[i] = e.rotation;
         edit_albedo[i] = e.albedo;
     }
+    fill_render_params_from_compute_params();
     params.cpu.dirty_count = 0;
     bake_threads: s32 = 0;
-    if recenter_pending || pending_dirty_count > 0 || params.cpu.full_rebuild_requested != 0 {
+    if recenter_pending || pending_dirty_count > 0 || gpu_full_rebuild_pending {
         active_state_gpu := brickmap_state.gpu;
         active_queue_gpu := brickmap_queues.gpu;
         next_cache_slot := brickmap_active_cache_slot;
@@ -898,88 +1000,136 @@ tick :: () {
         debug_bake_total_voxels = 0;
         debug_bake_bricks_touched = 0;
 
-        encode_start := seconds_since_init();
-        result=, classify_cmd := gpu_start_command_recording(main_queue);
-        assert(result == .SUCCESS);
+        inter_pass_sync: Brickmap_Graph_Sync = .WAIT_IDLE;
+        recenter_sync: Brickmap_Graph_Sync = .WAIT_IDLE;
+        owner_rebuild_sync: Brickmap_Graph_Sync = .WAIT_IDLE;
+        setup_sync: Brickmap_Graph_Sync = .WAIT_IDLE;
+        prepare_sync: Brickmap_Graph_Sync = .WAIT_IDLE;
+
+        compute_params.cpu.* = params.cpu.*;
+
+        reset(*brickmap_compute_graph);
         if recenter_pending {
             next_cache_slot = 1 - brickmap_active_cache_slot;
             next_state := brickmap_cache_slot(brickmap_state_ring, next_cache_slot);
             next_queue := brickmap_cache_slot(brickmap_queues_ring, next_cache_slot);
-            result = gpu_set_pipeline(classify_cmd, compute_recenter_pipeline);
-            assert(result == .SUCCESS, tprint("Brickmap recenter set pipeline failed: %", result));
-            gpu_dispatch_buffers(classify_cmd, .[params.gpu, brickmap_state.gpu, brickmap_queues.gpu, next_state.gpu, next_queue.gpu], .[(BRICKMAP_TOTAL_GRID_CELLS + 63) / 64, 1, 1]);
-            gpu_barrier(classify_cmd, .COMPUTE_SHADER, .COMPUTE_SHADER);
             active_state_gpu = next_state.gpu;
             active_queue_gpu = next_queue.gpu;
-        } else {
-            brickmap_queues.cpu.candidate_count = 0;
-            brickmap_queues.cpu.bake_count = 0;
+            add_compute_pass(*brickmap_compute_graph, "Recenter", compute_recenter_pipeline,
+                .[compute_params.gpu, brickmap_state.gpu, brickmap_queues.gpu, next_state.gpu, next_queue.gpu],
+                .[(BRICKMAP_TOTAL_GRID_CELLS + 63) / 64, 1, 1],
+                .PARAMS | .STATE | .QUEUES, .STATE | .QUEUES, recenter_sync);
+            add_compute_pass(*brickmap_compute_graph, "ClearSlotOwners", compute_clear_slot_owners_pipeline,
+                .[compute_params.gpu, active_state_gpu],
+                .[(cast(u32) (BRICKMAP_MAX_BRICKS + 63)) / 64, 1, 1],
+                .PARAMS | .STATE, .PARAMS | .STATE, inter_pass_sync);
+            add_compute_pass(*brickmap_compute_graph, "RebuildSlotOwners", compute_rebuild_slot_owners_pipeline,
+                .[compute_params.gpu, active_state_gpu],
+                .[(cast(u32) (max(BRICKMAP_TOTAL_GRID_CELLS, BRICKMAP_MAX_BRICKS) + 63)) / 64, 1, 1],
+                .PARAMS | .STATE, .PARAMS | .STATE, owner_rebuild_sync);
         }
-        if recenter_pending {
-            next_queue := brickmap_cache_slot(brickmap_queues_ring, next_cache_slot);
-            next_queue.cpu.candidate_count = 0;
-            next_queue.cpu.bake_count = 0;
-        } else {
-            brickmap_queues.cpu.candidate_count = 0;
-            brickmap_queues.cpu.bake_count = 0;
+
+        add_compute_pass(*brickmap_compute_graph, "ResetQueues", compute_reset_queues_pipeline,
+            .[active_queue_gpu], .[1, 1, 1], .QUEUES, .QUEUES, setup_sync);
+
+        if gpu_full_rebuild_pending {
+            add_compute_pass(*brickmap_compute_graph, "FullRebuildInvalidate", compute_full_rebuild_pipeline,
+                .[compute_params.gpu, active_state_gpu, active_queue_gpu], .[(BRICKMAP_TOTAL_GRID_CELLS + 63) / 64, 1, 1],
+                .PARAMS | .STATE | .QUEUES, .PARAMS | .STATE | .QUEUES, setup_sync);
         }
-        result = gpu_set_pipeline(classify_cmd, compute_prepare_pipeline);
-        assert(result == .SUCCESS, tprint("Brickmap prepare set pipeline failed: %", result));
-        gpu_dispatch_buffers(classify_cmd, .[params.gpu, active_state_gpu, active_queue_gpu], .[(BRICKMAP_TOTAL_GRID_CELLS + 63) / 64, 1, 1]);
-        gpu_barrier(classify_cmd, .COMPUTE_SHADER, .COMPUTE_SHADER);
-        result = gpu_set_pipeline(classify_cmd, compute_classify_pipeline);
-        assert(result == .SUCCESS, tprint("Brickmap classify set pipeline failed: %", result));
-        gpu_dispatch_buffers(classify_cmd, .[params.gpu, active_state_gpu, active_queue_gpu], .[(BRICKMAP_TOTAL_GRID_CELLS + 63) / 64, 1, 1]);
-        gpu_barrier(classify_cmd, .COMPUTE_SHADER, .COMPUTE_SHADER);
-        note_perf_sample(*cpu_classify_encode_last_ms, *cpu_classify_encode_avg_ms, cast(float) ((seconds_since_init() - encode_start) * 1000.0));
-        gpu_submit(classify_cmd);
-        wait_start := seconds_since_init();
-        gpu_queue_wait_idle(main_queue);
-        note_perf_sample(*cpu_classify_wait_last_ms, *cpu_classify_wait_avg_ms, cast(float) ((seconds_since_init() - wait_start) * 1000.0));
+
+        add_compute_pass(*brickmap_compute_graph, "PrepareDirty", compute_prepare_pipeline,
+            .[compute_params.gpu, active_state_gpu, active_queue_gpu], .[(BRICKMAP_TOTAL_GRID_CELLS + 63) / 64, 1, 1],
+            .PARAMS | .QUEUES, .QUEUES, prepare_sync);
+        add_compute_pass(*brickmap_compute_graph, "ClassifyDirty", compute_classify_pipeline,
+            .[compute_params.gpu, active_state_gpu, active_queue_gpu], .[(BRICKMAP_TOTAL_GRID_CELLS + 63) / 64, 1, 1],
+            .PARAMS | .STATE | .QUEUES, .PARAMS | .STATE | .QUEUES, .NONE);
+        add_buffer_barrier_pass(*brickmap_compute_graph, "QueuesForIndirectArgs", active_queue_gpu,
+            .COMPUTE_SHADER, .SHADER_WRITE,
+            .DRAW_INDIRECT, .INDIRECT_READ);
+        add_compute_pass(*brickmap_compute_graph, "PrepareDispatchArgs", compute_prepare_dispatch_args_pipeline,
+            .[active_queue_gpu, brickmap_dispatch_args.gpu], .[1, 1, 1],
+            .QUEUES, .QUEUES, .NONE);
+        add_buffer_barrier_pass(*brickmap_compute_graph, "DispatchArgsForBake", brickmap_dispatch_args.gpu,
+            .COMPUTE_SHADER, .SHADER_WRITE,
+            .DRAW_INDIRECT, .INDIRECT_READ);
+
+        classify_stats := execute(*brickmap_compute_graph, main_queue);
+        last_classify_graph_stats = classify_stats;
+        note_perf_sample(*cpu_classify_encode_last_ms, *cpu_classify_encode_avg_ms, classify_stats.encode_ms);
+        note_perf_sample(*cpu_classify_wait_last_ms, *cpu_classify_wait_avg_ms, classify_stats.wait_ms);
 
         if recenter_pending {
             set_active_cache_slot(next_cache_slot);
         }
+        gpu_full_rebuild_pending = false;
+        if log_updates {
+            log("BRICKMAP indirect args bake=%x%x% publish=%x%x%",
+                brickmap_dispatch_args.cpu.bake_x, brickmap_dispatch_args.cpu.bake_y, brickmap_dispatch_args.cpu.bake_z,
+                brickmap_dispatch_args.cpu.publish_x, brickmap_dispatch_args.cpu.publish_y, brickmap_dispatch_args.cpu.publish_z);
+        }
+        bake_threads = 1;
+    }
 
+    if bake_threads > 0 {
+        publish_args_gpu := brickmap_dispatch_args.gpu + cast(Gpu_Ptr) (size_of(u32) * 3);
+        reset(*brickmap_compute_graph);
+        add_compute_pass_indirect(*brickmap_compute_graph, "Bake", compute_bake_pipeline,
+            .[compute_params.gpu, brickmap_queues.gpu], brickmap_dispatch_args.gpu,
+            .PARAMS | .QUEUES, .ATLAS_SDF | .ATLAS_ALBEDO, .NONE);
+        add_compute_pass_indirect(*brickmap_compute_graph, "Publish", compute_publish_pipeline,
+            .[compute_params.gpu, brickmap_state.gpu, brickmap_queues.gpu], publish_args_gpu,
+            .PARAMS | .STATE | .QUEUES | .ATLAS_SDF | .ATLAS_ALBEDO, .PARAMS | .STATE, .WAIT_IDLE);
+
+        bake_stats := execute(*brickmap_compute_graph, main_queue);
+        last_bake_graph_stats = bake_stats;
+        note_perf_sample(*cpu_bake_encode_last_ms, *cpu_bake_encode_avg_ms, bake_stats.encode_ms);
+        note_perf_sample(*cpu_bake_wait_last_ms, *cpu_bake_wait_avg_ms, bake_stats.wait_ms);
+
+        sync_params_pointer_grid_from_state();
+        params.cpu.atlas_alloc_next = compute_params.cpu.atlas_alloc_next;
+        params.cpu.debug_classify_surface = compute_params.cpu.debug_classify_surface;
+        params.cpu.debug_classify_existing = compute_params.cpu.debug_classify_existing;
+        params.cpu.debug_classify_new_alloc = compute_params.cpu.debug_classify_new_alloc;
+        params.cpu.debug_classify_rejected_capacity = compute_params.cpu.debug_classify_rejected_capacity;
+        params.cpu.debug_bake_total_voxels = compute_params.cpu.debug_bake_total_voxels;
+        params.cpu.debug_bake_bricks_touched = compute_params.cpu.debug_bake_bricks_touched;
+        params.cpu.debug_bake_seen_atlas = compute_params.cpu.debug_bake_seen_atlas;
+        params.cpu.debug_gpu_seen_edit_count = compute_params.cpu.debug_gpu_seen_edit_count;
+        params.cpu.debug_gpu_seen_watch_shape = compute_params.cpu.debug_gpu_seen_watch_shape;
+        params.cpu.debug_gpu_seen_watch_op = compute_params.cpu.debug_gpu_seen_watch_op;
+        params.cpu.debug_gpu_seen_watch_pos_radius = compute_params.cpu.debug_gpu_seen_watch_pos_radius;
+        params.cpu.debug_gpu_scene_at_camera = compute_params.cpu.debug_gpu_scene_at_camera;
+        params.cpu.debug_gpu_scene_at_watch_center = compute_params.cpu.debug_gpu_scene_at_watch_center;
         params.cpu.debug_classify_out_count = brickmap_queues.cpu.bake_count;
         params.cpu.dirty_count = brickmap_queues.cpu.bake_count;
-        params.cpu.full_rebuild_requested = 0;
-        next_atlas_index = cast(s32) min(params.cpu.atlas_alloc_next, cast(u32) BRICKMAP_MAX_BRICKS);
+        next_atlas_index = cast(s32) min(compute_params.cpu.atlas_alloc_next, cast(u32) BRICKMAP_MAX_BRICKS);
+        if log_updates {
+            log("BRICKMAP classify_done pending_before=% classify_out=% atlas_next=% ptr_cells_now=% gpu(edit_count=% watch=% shape=% op=% posr=% sdf_cam=% sdf_watch=%)",
+                pending_dirty_count,
+                params.cpu.debug_classify_out_count,
+                next_atlas_index,
+                count_allocated_cells(),
+                params.cpu.debug_gpu_seen_edit_count,
+                params.cpu.debug_watch_edit_index,
+                params.cpu.debug_gpu_seen_watch_shape,
+                params.cpu.debug_gpu_seen_watch_op,
+                params.cpu.debug_gpu_seen_watch_pos_radius,
+                params.cpu.debug_gpu_scene_at_camera,
+                params.cpu.debug_gpu_scene_at_watch_center);
+        }
         if params.cpu.debug_classify_rejected_capacity > 0 {
             atlas_capacity_reached = true;
         } else if next_atlas_index < BRICKMAP_MAX_BRICKS {
             atlas_capacity_reached = false;
         }
-        bake_threads = cast(s32) brickmap_queues.cpu.bake_count * BRICKMAP_BRICK_TEXELS;
-    }
-
-    if bake_threads > 0 {
-        bake_encode_start := seconds_since_init();
-        result=, bake_cmd := gpu_start_command_recording(main_queue);
-        assert(result == .SUCCESS);
-        result = gpu_set_pipeline(bake_cmd, compute_bake_pipeline);
-        assert(result == .SUCCESS, tprint("Brickmap bake set pipeline failed: %", result));
-        dispatch_x := cast(u32) ((bake_threads + 63) / 64);
-        if dispatch_x > 0 {
-            gpu_dispatch_buffers(bake_cmd, .[params.gpu, brickmap_queues.gpu], .[dispatch_x, 1, 1]);
-            publish_threads := cast(u32) brickmap_queues.cpu.bake_count;
-            publish_dispatch_x := (publish_threads + 63) / 64;
-            if publish_dispatch_x > 0 {
-                gpu_barrier(bake_cmd, .COMPUTE_SHADER, .COMPUTE_SHADER);
-                result = gpu_set_pipeline(bake_cmd, compute_publish_pipeline);
-                assert(result == .SUCCESS, tprint("Brickmap publish set pipeline failed: %", result));
-                gpu_dispatch_buffers(bake_cmd, .[params.gpu, brickmap_state.gpu, brickmap_queues.gpu], .[publish_dispatch_x, 1, 1]);
-            }
-            gpu_barrier(bake_cmd, .COMPUTE_SHADER, .PIXEL_SHADER);
+        if log_updates {
+            log("BRICKMAP bake_done bricks=% ptr_cells_now=% atlas_used=%",
+                brickmap_queues.cpu.bake_count, count_allocated_cells(), next_atlas_index);
         }
-        note_perf_sample(*cpu_bake_encode_last_ms, *cpu_bake_encode_avg_ms, cast(float) ((seconds_since_init() - bake_encode_start) * 1000.0));
-        gpu_submit(bake_cmd);
-        bake_wait_start := seconds_since_init();
-        gpu_queue_wait_idle(main_queue);
-        note_perf_sample(*cpu_bake_wait_last_ms, *cpu_bake_wait_avg_ms, cast(float) ((seconds_since_init() - bake_wait_start) * 1000.0));
 
         if log_updates {
-            log("BRICKMAP baked frame=% dirty_bricks=% threads=%", frame_count, brickmap_queues.cpu.bake_count, bake_threads);
+            log("BRICKMAP baked frame=% dirty_bricks=%", frame_count, brickmap_queues.cpu.bake_count);
         }
         pending_dirty_count = 0;
     }
@@ -1102,6 +1252,7 @@ tick :: () {
     }
 
     validation_scan_state();
+    validation_assert_known_good();
     if log_validation_every_frame {
         log_validation_frame();
     }
@@ -1127,6 +1278,56 @@ Gizmo_Render :: #import "Gizmo_Render";
 blit_sampler_handle :: () -> Gpu_Sampler {
     if blit_nearest return render_point_sampler;
     return render_sampler;
+}
+
+fill_render_params_from_compute_params :: () {
+    render_params.cpu.resolution = params.cpu.resolution;
+    render_params.cpu.camera_fov_y = params.cpu.camera_fov_y;
+    render_params.cpu.camera_tan_half_fov = params.cpu.camera_tan_half_fov;
+    render_params.cpu.time = params.cpu.time;
+
+    render_params.cpu.view_proj = params.cpu.view_proj;
+    render_params.cpu.prev_view_proj = params.cpu.prev_view_proj;
+    render_params.cpu.cache_state = cast(*Brickmap_State) brickmap_state.gpu;
+
+    render_params.cpu.camera_pos = params.cpu.camera_pos;
+    render_params.cpu.camera_forward = params.cpu.camera_forward;
+    render_params.cpu.camera_right = params.cpu.camera_right;
+    render_params.cpu.camera_up = params.cpu.camera_up;
+
+    render_params.cpu.atlas_texture_index = params.cpu.atlas_texture_index;
+    render_params.cpu.atlas_albedo_texture_index = params.cpu.atlas_albedo_texture_index;
+    render_params.cpu.atlas_sampler_linear_index = params.cpu.atlas_sampler_linear_index;
+    render_params.cpu.atlas_sampler_point_index = params.cpu.atlas_sampler_point_index;
+    render_params.cpu.use_cache_raymarch = params.cpu.use_cache_raymarch;
+    render_params.cpu.use_hw_interp = params.cpu.use_hw_interp;
+    render_params.cpu.atlas_debug_overlay = params.cpu.atlas_debug_overlay;
+    render_params.cpu.atlas_debug_fullscreen = params.cpu.atlas_debug_fullscreen;
+    render_params.cpu.pointer_grid_debug = params.cpu.pointer_grid_debug;
+    render_params.cpu.bake_debug_gradient = params.cpu.bake_debug_gradient;
+    render_params.cpu.cache_debug_show_selected_lod = params.cpu.cache_debug_show_selected_lod;
+    render_params.cpu.cache_debug_show_distance = params.cpu.cache_debug_show_distance;
+    render_params.cpu.cache_debug_show_cell_state = params.cpu.cache_debug_show_cell_state;
+    render_params.cpu.debug_force_flat_color = params.cpu.debug_force_flat_color;
+    render_params.cpu.cache_force_lod0 = params.cpu.cache_force_lod0;
+    render_params.cpu.atlas_debug_slice = params.cpu.atlas_debug_slice;
+    render_params.cpu.frame_index = params.cpu.frame_index;
+    render_params.cpu.lod0_origin_brick_x = params.cpu.lod_origin_brick_x[0];
+    render_params.cpu.lod0_origin_brick_y = params.cpu.lod_origin_brick_y[0];
+    render_params.cpu.lod0_origin_brick_z = params.cpu.lod_origin_brick_z[0];
+    render_params.cpu.lod1_origin_brick_x = params.cpu.lod_origin_brick_x[1];
+    render_params.cpu.lod1_origin_brick_y = params.cpu.lod_origin_brick_y[1];
+    render_params.cpu.lod1_origin_brick_z = params.cpu.lod_origin_brick_z[1];
+    render_params.cpu.lod2_origin_brick_x = params.cpu.lod_origin_brick_x[2];
+    render_params.cpu.lod2_origin_brick_y = params.cpu.lod_origin_brick_y[2];
+    render_params.cpu.lod2_origin_brick_z = params.cpu.lod_origin_brick_z[2];
+    render_params.cpu.lod3_origin_brick_x = params.cpu.lod_origin_brick_x[3];
+    render_params.cpu.lod3_origin_brick_y = params.cpu.lod_origin_brick_y[3];
+    render_params.cpu.lod3_origin_brick_z = params.cpu.lod_origin_brick_z[3];
+    render_params.cpu.lod0_voxel_size = params.cpu.lod_voxel_size[0];
+    render_params.cpu.lod1_voxel_size = params.cpu.lod_voxel_size[1];
+    render_params.cpu.lod2_voxel_size = params.cpu.lod_voxel_size[2];
+    render_params.cpu.lod3_voxel_size = params.cpu.lod_voxel_size[3];
 }
 
 log_bindless_indices_once :: () {
@@ -1219,12 +1420,72 @@ apply_runtime_edit :: () {
     new_bounds := edit_bounds(0);
 
     rebuild_bvh();
-    mark_dirty_aabb(old_bounds, "auto_edit_old");
-    mark_dirty_aabb(new_bounds, "auto_edit_new");
+    _ = old_bounds;
+    _ = new_bounds;
+    request_full_rebuild("auto_edit");
 
     if log_updates {
         log("BRICKMAP runtime edit applied at frame=%", frame_count);
     }
+}
+
+update_auto_drag_repro :: () {
+    if auto_drag_done return;
+    if frame_count < auto_drag_start_frame return;
+
+    if !auto_drag_started {
+        auto_drag_edit_index = find_nearest_edit_to_camera();
+        assert(auto_drag_edit_index >= 0, "BRICKMAP auto drag found no edit near camera.");
+        auto_drag_started = true;
+        dragged_edit := edits_cpu[auto_drag_edit_index];
+        params.cpu.debug_watch_edit_index = cast(u32) auto_drag_edit_index;
+        auto_drag_from_pos = dragged_edit.position;
+        auto_drag_to_pos = auto_drag_from_pos + .{0.0, 1.0, 0.0};
+        selected_edit = auto_drag_edit_index;
+        if log_updates {
+            log("BRICKMAP auto drag start edit=% shape=% op=% pos=% radius=% half=% blend=% rot=% from=% to=% start=% duration=%",
+                auto_drag_edit_index,
+                dragged_edit.shape,
+                dragged_edit.op,
+                dragged_edit.position,
+                dragged_edit.radius,
+                dragged_edit.half_extents,
+                dragged_edit.blend,
+                dragged_edit.rotation,
+                auto_drag_from_pos,
+                auto_drag_to_pos,
+                auto_drag_start_frame,
+                auto_drag_duration_frames);
+        }
+    }
+
+    duration := max(auto_drag_duration_frames, 1);
+    drag_frame := frame_count - auto_drag_start_frame;
+    t := clamp(cast(float) drag_frame / cast(float) duration, 0.0, 1.0);
+    edits_cpu[auto_drag_edit_index].position = lerp(auto_drag_from_pos, auto_drag_to_pos, t);
+    rebuild_bvh();
+    request_full_rebuild("manip_edit");
+
+    if t >= 1.0 {
+        auto_drag_done = true;
+        if log_updates {
+            log("BRICKMAP auto drag done edit=% frame=%", auto_drag_edit_index, frame_count);
+        }
+    }
+}
+
+find_nearest_edit_to_camera :: () -> s32 {
+    edit_count := cast(s32) params.cpu.edit_count;
+    best_index: s32 = -1;
+    best_dist2 := 1.0e30;
+    for i: 0..edit_count-1 {
+        d2 := length_squared(edits_cpu[i].position - camera.position);
+        if d2 < best_dist2 {
+            best_dist2 = d2;
+            best_index = i;
+        }
+    }
+    return best_index;
 }
 
 rebuild_bvh :: () {
@@ -1266,6 +1527,36 @@ mark_all_edits_dirty :: (reason: string) {
     }
 }
 
+request_full_rebuild :: (reason: string) {
+    pending_full_rebuild = true;
+    if log_updates && frame_count > 0 {
+        log("BRICKMAP full rebuild requested reason=%", reason);
+    }
+}
+
+mark_all_cells_dirty :: (reason: string) {
+    for cell: 0..BRICKMAP_TOTAL_GRID_CELLS-1 {
+        pointer_grid_generation_cpu[cell] += 1;
+        brickmap_queues.cpu.dirty_flags[cell] = 1;
+    }
+    pending_dirty_count = BRICKMAP_TOTAL_GRID_CELLS;
+    if log_updates && frame_count > 0 {
+        log("BRICKMAP full clipmap dirty reason=% cells=%", reason, pending_dirty_count);
+    }
+    sync_params_pointer_grid_from_state();
+}
+
+perform_pending_full_rebuild :: () {
+    if !force_full_rebuild && !pending_full_rebuild return;
+    gpu_full_rebuild_pending = true;
+    pending_dirty_count = BRICKMAP_TOTAL_GRID_CELLS;
+    if log_updates && frame_count > 0 {
+        log("BRICKMAP full rebuild prepared dirty=% edits=%", pending_dirty_count, params.cpu.edit_count);
+    }
+    pending_full_rebuild = false;
+    force_full_rebuild = false;
+}
+
 update_lod_origins :: (camera_moved: bool) -> bool {
     if !camera_moved return false;
 
@@ -1287,10 +1578,17 @@ update_lod_origins :: (camera_moved: bool) -> bool {
         local_x := camera_brick_x - origin_x;
         local_z := camera_brick_z - origin_z;
 
-        if local_x < margin origin_x = camera_brick_x - BRICKMAP_GRID_RES / 2;
-        if local_x > max_local origin_x = camera_brick_x - BRICKMAP_GRID_RES / 2;
-        if local_z < margin origin_z = camera_brick_z - BRICKMAP_GRID_RES / 2;
-        if local_z > max_local origin_z = camera_brick_z - BRICKMAP_GRID_RES / 2;
+        if freeze_clipmap {
+            if info.voxel_size <= 0.0 {
+                origin_x = camera_brick_x - BRICKMAP_GRID_RES / 2;
+                origin_z = camera_brick_z - BRICKMAP_GRID_RES / 2;
+            }
+        } else {
+            if local_x < margin origin_x = camera_brick_x - BRICKMAP_GRID_RES / 2;
+            if local_x > max_local origin_x = camera_brick_x - BRICKMAP_GRID_RES / 2;
+            if local_z < margin origin_z = camera_brick_z - BRICKMAP_GRID_RES / 2;
+            if local_z > max_local origin_z = camera_brick_z - BRICKMAP_GRID_RES / 2;
+        }
 
         params.cpu.prev_lod_origin_brick_x[lod] = info.origin_brick.x;
         params.cpu.prev_lod_origin_brick_y[lod] = info.origin_brick.y;
@@ -1304,19 +1602,20 @@ update_lod_origins :: (camera_moved: bool) -> bool {
         lod_info_cpu[lod].voxel_size = voxel_size;
     }
 
-    if changed {
-        if force_full_rebuild {
-            params.cpu.full_rebuild_requested = 1;
-        }
+    if !changed return false;
+
+    if experimental_recenter_reuse {
         if log_updates {
-            if force_full_rebuild {
-                log("BRICKMAP clipmap recentered; scheduling GPU rebuild");
-            } else {
-                log("BRICKMAP clipmap recentered; scheduling GPU recenter");
-            }
+            log("BRICKMAP clipmap origin changed; scheduling conservative recenter");
         }
+        return true;
     }
-    return changed && !force_full_rebuild;
+
+    pending_full_rebuild = true;
+    if log_updates {
+        log("BRICKMAP clipmap origin changed; scheduling CPU-side full rebuild");
+    }
+    return false;
 }
 
 clear_cache :: () {
@@ -1324,6 +1623,14 @@ clear_cache :: () {
         pointer_grid_cpu[i] = -1;
         pointer_grid_valid_cpu[i] = 0;
         pointer_grid_publish_cpu[i] = 0;
+        pointer_grid_generation_cpu[i] = 0;
+    }
+    for i: 0..BRICKMAP_MAX_BRICKS-1 {
+        brickmap_state.cpu.slot_owner_lod[i] = -1;
+        brickmap_state.cpu.slot_owner_bx[i] = 0;
+        brickmap_state.cpu.slot_owner_by[i] = 0;
+        brickmap_state.cpu.slot_owner_bz[i] = 0;
+        brickmap_state.cpu.slot_generation[i] = 0;
     }
     for i: 0..BRICKMAP_TOTAL_GRID_CELLS-1 {
         brickmap_queues.cpu.dirty_flags[i] = 0;
@@ -1331,6 +1638,7 @@ clear_cache :: () {
     next_atlas_index = 0;
     params.cpu.atlas_alloc_next = 0;
     params.cpu.full_rebuild_requested = 0;
+    gpu_full_rebuild_pending = false;
     pending_dirty_count = 0;
     dirty_backlog_count = 0;
     sync_params_pointer_grid_from_state();
@@ -1360,6 +1668,7 @@ shift_lod_cache_for_origin_delta :: (lod: s32,
                     pointer_grid_cpu[base + idx] = -1;
                     pointer_grid_valid_cpu[base + idx] = 0;
                     pointer_grid_publish_cpu[base + idx] = 0;
+                    pointer_grid_generation_cpu[base + idx] += 1;
                     brickmap_queues.cpu.dirty_flags[base + idx] = 0;
 
                     bx := new_origin_x + lx;
@@ -1381,11 +1690,13 @@ shift_lod_cache_for_origin_delta :: (lod: s32,
     shifted: [BRICKMAP_GRID_CELLS] s32;
     shifted_valid: [BRICKMAP_GRID_CELLS] u32;
     shifted_publish: [BRICKMAP_GRID_CELLS] u32;
+    shifted_generation: [BRICKMAP_GRID_CELLS] u32;
     shifted_dirty: [BRICKMAP_GRID_CELLS] bool;
     for i: 0..BRICKMAP_GRID_CELLS-1 {
         shifted[i] = -1;
         shifted_valid[i] = 0;
         shifted_publish[i] = 0;
+        shifted_generation[i] = 0;
         shifted_dirty[i] = false;
     }
 
@@ -1406,6 +1717,7 @@ shift_lod_cache_for_origin_delta :: (lod: s32,
                 shifted[new_idx] = pointer_grid_cpu[base + old_idx];
                 shifted_valid[new_idx] = pointer_grid_valid_cpu[base + old_idx];
                 shifted_publish[new_idx] = pointer_grid_publish_cpu[base + old_idx];
+                shifted_generation[new_idx] = pointer_grid_generation_cpu[base + old_idx];
                 shifted_dirty[new_idx] = brickmap_queues.cpu.dirty_flags[base + old_idx] != 0;
                 if shifted[new_idx] >= 0 {
                     validation_frame.shift_preserved_cells += 1;
@@ -1418,6 +1730,7 @@ shift_lod_cache_for_origin_delta :: (lod: s32,
         pointer_grid_cpu[base + i] = shifted[i];
         pointer_grid_valid_cpu[base + i] = shifted_valid[i];
         pointer_grid_publish_cpu[base + i] = shifted_publish[i];
+        pointer_grid_generation_cpu[base + i] = shifted_generation[i];
         if shifted_dirty[i] {
             brickmap_queues.cpu.dirty_flags[base + i] = 1;
         } else {
@@ -1446,6 +1759,7 @@ shift_lod_cache_for_origin_delta :: (lod: s32,
                 pointer_grid_cpu[base + idx] = -1;
                 pointer_grid_valid_cpu[base + idx] = 0;
                 pointer_grid_publish_cpu[base + idx] = 0;
+                pointer_grid_generation_cpu[base + idx] += 1;
                 brickmap_queues.cpu.dirty_flags[base + idx] = 0;
 
                 bx := new_origin_x + lx;
@@ -1468,6 +1782,7 @@ shift_lod_cache_for_origin_delta :: (lod: s32,
 try_enqueue_dirty_cell :: (lod: s32, lx: s32, ly: s32, lz: s32, bx: s32, by: s32, bz: s32) -> bool {
     cell_local := flatten_3d(lx, ly, lz, BRICKMAP_GRID_RES);
     cell := lod * BRICKMAP_GRID_CELLS + cell_local;
+    pointer_grid_generation_cpu[cell] += 1;
     if brickmap_queues.cpu.dirty_flags[cell] != 0 return true;
     brickmap_queues.cpu.dirty_flags[cell] = 1;
     return true;
@@ -1519,6 +1834,7 @@ mark_dirty_aabb :: (bounds: AABB, reason: string) {
                 for lx: lx0..lx1 {
                     cell_local := flatten_3d(lx, ly, lz, BRICKMAP_GRID_RES);
                     cell := lod * BRICKMAP_GRID_CELLS + cell_local;
+                    pointer_grid_generation_cpu[cell] += 1;
                     if brickmap_queues.cpu.dirty_flags[cell] != 0 continue;
                     brickmap_queues.cpu.dirty_flags[cell] = 1;
                 }
@@ -1532,6 +1848,7 @@ mark_dirty_aabb :: (bounds: AABB, reason: string) {
         log("BRICKMAP mark_dirty_done reason=% queued_bricks=% atlas_new=% pending_total=% atlas_used=%",
             reason, queued, atlas_new, pending_dirty_count, next_atlas_index);
     }
+    sync_params_pointer_grid_from_state();
 }
 
 count_dirty_flags :: () -> s32 {
@@ -1571,6 +1888,12 @@ sync_params_pointer_grid_from_state :: () {
     params.cpu.pointer_grid = brickmap_state.cpu.pointer_grid;
     params.cpu.pointer_grid_valid = brickmap_state.cpu.pointer_grid_valid;
     params.cpu.pointer_grid_publish_frame = brickmap_state.cpu.pointer_grid_publish_frame;
+    params.cpu.pointer_grid_generation = brickmap_state.cpu.pointer_grid_generation;
+    params.cpu.slot_owner_lod = brickmap_state.cpu.slot_owner_lod;
+    params.cpu.slot_owner_bx = brickmap_state.cpu.slot_owner_bx;
+    params.cpu.slot_owner_by = brickmap_state.cpu.slot_owner_by;
+    params.cpu.slot_owner_bz = brickmap_state.cpu.slot_owner_bz;
+    params.cpu.slot_generation = brickmap_state.cpu.slot_generation;
 }
 
 bvh_query_overlap :: (bounds: AABB, out_indices: *[BRICKMAP_MAX_EDITS] s32) -> s32 {
@@ -1752,6 +2075,8 @@ build_debug_gizmos :: () {
 
 validation_begin_frame :: () {
     validation_frame = .{};
+    validation_first_mismatch_cell = -1;
+    validation_first_mismatch_slot = -1;
 }
 
 validation_scan_state :: () {
@@ -1762,7 +2087,8 @@ validation_scan_state :: () {
         v := pointer_grid_cpu[i];
         if params.cpu.pointer_grid[i] != pointer_grid_cpu[i] ||
            params.cpu.pointer_grid_valid[i] != pointer_grid_valid_cpu[i] ||
-           params.cpu.pointer_grid_publish_frame[i] != pointer_grid_publish_cpu[i] {
+           params.cpu.pointer_grid_publish_frame[i] != pointer_grid_publish_cpu[i] ||
+           params.cpu.pointer_grid_generation[i] != pointer_grid_generation_cpu[i] {
             validation_frame.scan_param_state_mismatches += 1;
         }
         if brickmap_queues.cpu.dirty_flags[i] != 0 {
@@ -1781,6 +2107,44 @@ validation_scan_state :: () {
         if v >= next_atlas_index {
             validation_frame.scan_above_next_atlas_refs += 1;
         }
+        if pointer_grid_valid_cpu[i] != 0 {
+            validation_frame.scan_valid_cells += 1;
+            if pointer_grid_publish_cpu[i] == 0 {
+                validation_frame.scan_valid_unpublished += 1;
+            }
+
+            lod := i / BRICKMAP_GRID_CELLS;
+            local_idx := i - lod * BRICKMAP_GRID_CELLS;
+            lz := local_idx / (BRICKMAP_GRID_RES * BRICKMAP_GRID_RES);
+            remain := local_idx - lz * BRICKMAP_GRID_RES * BRICKMAP_GRID_RES;
+            ly := remain / BRICKMAP_GRID_RES;
+            lx := remain - ly * BRICKMAP_GRID_RES;
+            expect_bx := lod_info_cpu[lod].origin_brick.x + lx;
+            expect_by := lod_info_cpu[lod].origin_brick.y + ly;
+            expect_bz := lod_info_cpu[lod].origin_brick.z + lz;
+
+            owner_lod := brickmap_state.cpu.slot_owner_lod[v];
+            owner_bx := brickmap_state.cpu.slot_owner_bx[v];
+            owner_by := brickmap_state.cpu.slot_owner_by[v];
+            owner_bz := brickmap_state.cpu.slot_owner_bz[v];
+            if owner_lod < 0 {
+                validation_frame.scan_owner_missing += 1;
+            } else if owner_lod != lod || owner_bx != expect_bx || owner_by != expect_by || owner_bz != expect_bz {
+                validation_frame.scan_owner_mismatches += 1;
+                if validation_first_mismatch_cell < 0 {
+                    validation_first_mismatch_cell = cast(s32) i;
+                    validation_first_mismatch_slot = cast(s32) v;
+                    validation_first_mismatch_expect_lod = cast(s32) lod;
+                    validation_first_mismatch_expect_bx = cast(s32) expect_bx;
+                    validation_first_mismatch_expect_by = cast(s32) expect_by;
+                    validation_first_mismatch_expect_bz = cast(s32) expect_bz;
+                    validation_first_mismatch_owner_lod = cast(s32) owner_lod;
+                    validation_first_mismatch_owner_bx = cast(s32) owner_bx;
+                    validation_first_mismatch_owner_by = cast(s32) owner_by;
+                    validation_first_mismatch_owner_bz = cast(s32) owner_bz;
+                }
+            }
+        }
         if seen[v] {
             validation_frame.scan_duplicate_atlas_refs += 1;
         } else {
@@ -1794,22 +2158,73 @@ validation_scan_state :: () {
             validation_frame.scan_holes_below_next += 1;
         }
     }
+
+    if validation_frame.scan_nonempty_cells > validation_max_nonempty_cells {
+        validation_max_nonempty_cells = validation_frame.scan_nonempty_cells;
+    }
 }
 
 log_validation_frame :: () {
     v := validation_frame;
-    log("BRICKMAP_VAL frame=% cam=[%,%,%] pending=% dirty=% atlas=%/% ptr=% val(nonempty=% oob=% dup=% above=% neg=% holes=% refs=% dirty_flags=%) shift(keep=% inval=% requeue=% drop=% overflow=%)",
+    log("BRICKMAP_VAL frame=% cam=[%,%,%] pending=% dirty=% atlas=%/% ptr=% val(nonempty=% valid=% oob=% dup=% above=% neg=% holes=% refs=% dirty_flags=% owner_mismatch=% owner_missing=% valid_unpublished=% max_seen=%) shift(keep=% inval=% requeue=% drop=% overflow=%)",
         frame_count,
         camera.position.x, camera.position.y, camera.position.z,
         pending_dirty_count,
         params.cpu.dirty_count,
         next_atlas_index, BRICKMAP_MAX_BRICKS,
         count_allocated_cells(),
-        v.scan_nonempty_cells, v.scan_oob_atlas_refs, v.scan_duplicate_atlas_refs, v.scan_above_next_atlas_refs,
+        v.scan_nonempty_cells, v.scan_valid_cells, v.scan_oob_atlas_refs, v.scan_duplicate_atlas_refs, v.scan_above_next_atlas_refs,
         v.scan_negative_nonempty_refs, v.scan_holes_below_next, v.scan_referenced_slots, v.scan_dirty_flag_cells,
+        v.scan_owner_mismatches, v.scan_owner_missing, v.scan_valid_unpublished, validation_max_nonempty_cells,
         v.shift_preserved_cells, v.shift_invalidated_cells, v.shift_requeued_cells, v.shift_dropped_cells, v.enqueue_overflow);
     if v.scan_param_state_mismatches > 0 {
         log_error("BRICKMAP_VAL param/state mismatches=%", v.scan_param_state_mismatches);
+    }
+    if v.scan_owner_mismatches > 0 && validation_first_mismatch_cell >= 0 {
+        log_error("BRICKMAP_VAL first_owner_mismatch cell=% slot=% expect=(lod=% bx=% by=% bz=%) owner=(lod=% bx=% by=% bz=%)",
+            validation_first_mismatch_cell,
+            validation_first_mismatch_slot,
+            validation_first_mismatch_expect_lod,
+            validation_first_mismatch_expect_bx,
+            validation_first_mismatch_expect_by,
+            validation_first_mismatch_expect_bz,
+            validation_first_mismatch_owner_lod,
+            validation_first_mismatch_owner_bx,
+            validation_first_mismatch_owner_by,
+            validation_first_mismatch_owner_bz);
+    }
+}
+
+validation_assert_known_good :: () {
+    v := validation_frame;
+    assert(v.scan_param_state_mismatches == 0, "Brickmap param/state mismatches=%", v.scan_param_state_mismatches);
+    assert(v.scan_oob_atlas_refs == 0, "Brickmap OOB atlas refs=%", v.scan_oob_atlas_refs);
+    assert(v.scan_negative_nonempty_refs == 0, "Brickmap negative nonempty refs=%", v.scan_negative_nonempty_refs);
+    assert(v.scan_duplicate_atlas_refs == 0, "Brickmap duplicate atlas refs=%", v.scan_duplicate_atlas_refs);
+    if v.scan_owner_mismatches > 0 && validation_first_mismatch_cell >= 0 {
+        log_error("BRICKMAP_VAL first_owner_mismatch cell=% slot=% expect=(lod=% bx=% by=% bz=%) owner=(lod=% bx=% by=% bz=%)",
+            validation_first_mismatch_cell,
+            validation_first_mismatch_slot,
+            validation_first_mismatch_expect_lod,
+            validation_first_mismatch_expect_bx,
+            validation_first_mismatch_expect_by,
+            validation_first_mismatch_expect_bz,
+            validation_first_mismatch_owner_lod,
+            validation_first_mismatch_owner_bx,
+            validation_first_mismatch_owner_by,
+            validation_first_mismatch_owner_bz);
+    }
+    assert(v.scan_owner_mismatches == 0, "Brickmap slot owner mismatches=%", v.scan_owner_mismatches);
+    assert(v.scan_owner_missing == 0, "Brickmap slot owner missing=%", v.scan_owner_missing);
+    assert(v.scan_valid_unpublished == 0, "Brickmap valid but unpublished cells=%", v.scan_valid_unpublished);
+
+    // If the scene has already built up a substantial cache, a sudden collapse to nearly-empty
+    // after a synchronous rebuild is a correctness bug, not a transient we want to hide.
+    if validation_max_nonempty_cells > 256 && params.cpu.edit_count > 100 {
+        min_expected := max(validation_max_nonempty_cells / 4, 128);
+        assert(v.scan_nonempty_cells >= min_expected,
+            "Brickmap populated cells collapsed unexpectedly. current=% max_seen=% min_expected=%",
+            v.scan_nonempty_cells, validation_max_nonempty_cells, min_expected);
     }
 }
 
@@ -2073,27 +2488,82 @@ edit_to_manip_object :: (edit_index: s32) -> Manip_Object {
 
 apply_manip_to_edit :: (edit_index: s32, obj: Manip_Object) {
     e := *edits_cpu[edit_index];
-    e.position = obj.position;
-    e.rotation = .{obj.rotation.x, obj.rotation.y, obj.rotation.z, obj.rotation.w};
+
+    new_position := obj.position;
+    new_rotation := Quaternion.{obj.rotation.x, obj.rotation.y, obj.rotation.z, obj.rotation.w};
+    if !vector3_is_finite(new_position) || !quat_is_finite(new_rotation) || !vector3_is_finite(obj.scale) || !vector3_is_finite(obj.half_extents) {
+        log("BRICKMAP manip rejected invalid transform edit=% pos=% rot=% scale=% half=%",
+            edit_index, new_position, new_rotation, obj.scale, obj.half_extents);
+        return;
+    }
+    _ = normalize_or_identity(*new_rotation);
+
+    if manip_ctx.mode == .TRANSLATE {
+        e.position = new_position;
+    } else if manip_ctx.mode == .ROTATE {
+        e.rotation = .{new_rotation.x, new_rotation.y, new_rotation.z, new_rotation.w};
+    } else {
+        e.position = new_position;
+        e.rotation = .{new_rotation.x, new_rotation.y, new_rotation.z, new_rotation.w};
+    }
 
     effective_half := Vector3.{
-        obj.half_extents.x * obj.scale.x,
-        obj.half_extents.y * obj.scale.y,
-        obj.half_extents.z * obj.scale.z,
+        obj.half_extents.x * abs(obj.scale.x),
+        obj.half_extents.y * abs(obj.scale.y),
+        obj.half_extents.z * abs(obj.scale.z),
     };
     effective_half.x = max(effective_half.x, 0.02);
     effective_half.y = max(effective_half.y, 0.02);
     effective_half.z = max(effective_half.z, 0.02);
-    if #complete e.shape == {
-    case .Sphere;
-        r := max(max(effective_half.x, effective_half.y), effective_half.z);
-        e.radius = max(r, 0.02);
-        e.half_extents = .{e.radius, e.radius, e.radius};
-    case .Box;
-        e.half_extents = effective_half;
-        e.radius = length(effective_half);
+    if manip_ctx.mode == .SCALE {
+        if #complete e.shape == {
+        case .Sphere;
+            r := max(max(effective_half.x, effective_half.y), effective_half.z);
+            e.radius = max(r, 0.02);
+            e.half_extents = .{e.radius, e.radius, e.radius};
+        case .Box;
+            e.half_extents = effective_half;
+            e.radius = length(effective_half);
+        }
     }
     edits_cpu[edit_index] = e;
+}
+
+sanitize_edit_for_gpu :: (e: *SDF_Edit, edit_index: s32) {
+    if !vector3_is_finite(e.position) {
+        log("BRICKMAP sanitize invalid edit position idx=% pos=%", edit_index, e.position);
+        e.position = .{};
+    }
+    q := Quaternion.{e.rotation.x, e.rotation.y, e.rotation.z, e.rotation.w};
+    if !quat_is_finite(q) {
+        log("BRICKMAP sanitize invalid edit rotation idx=% rot=%", edit_index, q);
+        q = .{w = 1.0};
+    }
+    _ = normalize_or_identity(*q);
+    e.rotation = .{q.x, q.y, q.z, q.w};
+
+    if !is_finite(e.radius) || e.radius < 0.02 {
+        e.radius = 0.02;
+    }
+
+    if !vector3_is_finite(e.half_extents) {
+        log("BRICKMAP sanitize invalid edit extents idx=% half=%", edit_index, e.half_extents);
+        e.half_extents = .{e.radius, e.radius, e.radius};
+    }
+    e.half_extents.x = max(abs(e.half_extents.x), 0.02);
+    e.half_extents.y = max(abs(e.half_extents.y), 0.02);
+    e.half_extents.z = max(abs(e.half_extents.z), 0.02);
+    if !is_finite(e.blend) || e.blend < 0.0 {
+        e.blend = 0.0;
+    }
+}
+
+vector3_is_finite :: (v: Vector3) -> bool {
+    return is_finite(v.x) && is_finite(v.y) && is_finite(v.z);
+}
+
+quat_is_finite :: (q: Quaternion) -> bool {
+    return is_finite(q.x) && is_finite(q.y) && is_finite(q.z) && is_finite(q.w);
 }
 
 edit_focus_center_radius :: (edit_index: s32) -> (center: Vector3, radius: float) {
@@ -2216,4 +2686,5 @@ set_active_cache_slot :: (slot: s32) {
     pointer_grid_cpu = brickmap_state.cpu.pointer_grid;
     pointer_grid_valid_cpu = brickmap_state.cpu.pointer_grid_valid;
     pointer_grid_publish_cpu = brickmap_state.cpu.pointer_grid_publish_frame;
+    pointer_grid_generation_cpu = brickmap_state.cpu.pointer_grid_generation;
 }

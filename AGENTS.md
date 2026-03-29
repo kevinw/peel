@@ -15,6 +15,7 @@ They are built with our `build.jai` metaprogram.
 `jai build.jai - src/apps/textured_triangle.jai -run` builds and runs a single app after compilation.
 `jai build.jai - src/apps/textured_triangle.jai -run -dll` builds the app as a DLL and runs it via the host DLL loader, so subsequent dll builds can live reload the new app code without restarting. Globals are automatically copied by name when possible from the old DLL's address space to the new one's via the `modules/Globals_Reload.jai` metaprogramming plugin. 
 `jai build.jai` builds all apps in parallel--useful for a smoke test after a big change.
+Do not overlap `jai build.jai - ... -run` invocations for the same target. `-run` already includes a build step, and running two of them concurrently against the same app can stomp shared `.build/<app>/` artifacts and produce bogus linker or shader-validation failures. This came up repeatedly with `brickmap`, so for that target in particular, keep build/run repros strictly sequential.
 
 For visual/UI tasks in peel, there are environment variables to allow you to do visual verification using framebuffer/readback snapshot tooling (for example, after first implementation and after coordinate/layout fixes), rather than relying only on code inspection. For example PEEL_SNAPSHOT=1 will capture a snapshot of the framebuffer and save it out to a jpeg. Or PEEL_MAX_FRAMES=30 will run the app for 30 frames and exit. See src/readback_stats.jai and src/framebuffer_tools.jai.
 
