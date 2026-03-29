@@ -133,6 +133,24 @@ pending_full_rebuild := false;
 gpu_full_rebuild_pending := false;
 atlas_capacity_reached := false;
 brickmap_active_cache_slot: s32;
+control_mode: enum { Player; Editor; } = .Player;
+physics_gizmos_enabled := false;
+player_controller: Character_Controller;
+player_edit_index: s32 = -1;
+player_camera_eye_height: float = 1.25;
+player_move_speed: float = 7.0;
+player_push_radius: float = 1.45;
+player_push_strength: float = 18.0;
+player_pull_strength: float = 4.5;
+physics_body_ids: [BRICKMAP_MAX_EDITS] BodyID;
+physics_body_active: [BRICKMAP_MAX_EDITS] bool;
+physics_body_gravitate: [BRICKMAP_MAX_EDITS] bool;
+physics_body_shape_cache: [BRICKMAP_MAX_EDITS] SDF_Shape;
+physics_body_radius_cache: [BRICKMAP_MAX_EDITS] float;
+physics_body_half_extents_cache: [BRICKMAP_MAX_EDITS] Vector3;
+physics_sync_suppress_edit: s32 = -1;
+physics_step_dirty_accum_valid := false;
+physics_step_dirty_bounds: AABB;
 
 ui_open := true;
 auto_edit_after: s32 = -1;
@@ -174,7 +192,7 @@ debug_autolog_once := false;
 guard_corruption_count: s32;
 guard_corruption_reported := false;
 bindless_index_logged_once := false;
-BRICKMAP_RANDOM_STARTUP_EDITS :: 2000;
+BRICKMAP_RANDOM_STARTUP_EDITS :: 520;
 BRICKMAP_RANDOM_STARTUP_SEED  :: cast(u64) 0xB17C_A11A_5EED;
 
 gizmo_ctx: Gizmo.Gizmo_Context;
@@ -433,6 +451,7 @@ on_dll_init :: () {
     params.cpu.atlas_alloc_next = 0;
     update_lod_origins(true);
     clear_cache();
+    init_brickmap_physics();
     force_full_rebuild = true;
     if log_updates {
         log("BRICKMAP init_dirty_complete pending=% atlas_used=%", pending_dirty_count, next_atlas_index);
@@ -456,6 +475,7 @@ on_dll_init :: () {
 } @on_dll_init
 
 on_unload :: () {
+    deinit_brickmap_physics();
     deinit(*upscaler);
     gpu_free(render_sampler);
     gpu_free(render_point_sampler);
@@ -477,7 +497,12 @@ ui :: () {
     SetNextWindowSize(.{560.0, 420.0}, .FirstUseEver);
     if Begin("Brickmap", *ui_open) {
         Text("Sparse brickmap SDF raymarch prototype");
-        Text("RMB look, Alt+LMB orbit, WASDQE fly, Shift boost");
+        Text("P toggles Player/Editor. Player: RMB look, WASD move, Space jump.");
+        Text("Editor: RMB look, Alt+LMB orbit, WASDQE fly, Shift boost");
+        is_player := control_mode == .Player;
+        if toggle("Player Mode (P)", *is_player) {
+            control_mode = ifx is_player then .Player else .Editor;
+        }
         _ = toggle("Use Cache Raymarch", *use_cache_raymarch, .{56.0, 0.0}, true, 0.09);
         _ = toggle("Use HW 3D Interp", *use_hw_interp, .{56.0, 0.0}, true, 0.09);
         SliderFloat("Render Scale", *render_scale, 0.25, 1.0);
@@ -501,8 +526,11 @@ ui :: () {
         Checkbox("Cache Debug: Force LOD0", *cache_force_lod0);
         Checkbox("Draw Brick Debug", *draw_brick_debug);
         Checkbox("Edit Manip", *edit_manip_enabled);
+        Checkbox("Physics Gizmos", *physics_gizmos_enabled);
+        Physics.debug_draw_enabled = physics_gizmos_enabled;
         Text("Selected edit: %", selected_edit);
         Text("Hovered edit: %", hovered_edit);
+        Text("Control Mode: %", control_mode);
         if edit_manip_enabled {
             Text("Manip mode/space: % / %", manip_ctx.mode, manip_ctx.space);
         }
@@ -532,6 +560,7 @@ ui :: () {
             }
 
             if changed {
+                sync_edit_body_from_edit(selected_edit);
                 new_bounds := edit_bounds(selected_edit);
                 rebuild_bvh();
                 mark_edit_change_dirty(old_bounds, new_bounds, "inspector_edit");
@@ -692,14 +721,28 @@ tick :: () {
     for Input.events_this_frame {
         using it;
         if type != .KEYBOARD || !key_pressed continue;
-        if !edit_manip_enabled continue;
-        using manip_ctx;
         if key_code == {
-            case #char "1"; mode = .TRANSLATE;
-            case #char "2"; mode = .ROTATE;
-            case #char "3"; mode = .SCALE;
-            case #char "4"; space = .WORLD;
-            case #char "5"; space = .LOCAL;
+        case #char "P";
+            if control_mode == .Player {
+                control_mode = .Editor;
+            } else {
+                control_mode = .Player;
+            }
+        case #char "1";
+            if !edit_manip_enabled || control_mode != .Editor continue;
+            manip_ctx.mode = .TRANSLATE;
+        case #char "2";
+            if !edit_manip_enabled || control_mode != .Editor continue;
+            manip_ctx.mode = .ROTATE;
+        case #char "3";
+            if !edit_manip_enabled || control_mode != .Editor continue;
+            manip_ctx.mode = .SCALE;
+        case #char "4";
+            if !edit_manip_enabled || control_mode != .Editor continue;
+            manip_ctx.space = .WORLD;
+        case #char "5";
+            if !edit_manip_enabled || control_mode != .Editor continue;
+            manip_ctx.space = .LOCAL;
         }
     }
 
@@ -740,9 +783,14 @@ tick :: () {
         }
     }
 
-    camera_input := editor_camera_update(*camera, dt, mx, my, mouse_ok,
-        allow_move = !io.WantTextInput && !orbit_drag_active,
-        allow_look = right_down && !io.WantCaptureMouse && !orbit_drag_active);
+    camera_input: Editor_Camera_Update_Result;
+    if control_mode == .Editor {
+        camera_input = editor_camera_update(*camera, dt, mx, my, mouse_ok,
+            allow_move = !io.WantTextInput && !orbit_drag_active,
+            allow_look = right_down && !io.WantCaptureMouse && !orbit_drag_active);
+    } else {
+        camera_input = .{};
+    }
     if focus_active {
         if orbit_drag_active || right_down || camera_input.moved || camera_input.looked {
             focus_active = false;
@@ -750,7 +798,7 @@ tick :: () {
             focus_update_camera(dt);
         }
     }
-    if auto_fly_forward {
+    if auto_fly_forward && control_mode == .Editor {
         cam_forward, cam_right, cam_up: Vector3;
         editor_camera_basis(*camera, *cam_forward, *cam_right, *cam_up);
         camera.position += cam_forward * (auto_fly_speed * cast(float) dt);
@@ -870,7 +918,7 @@ tick :: () {
     }
     fill_render_params_from_compute_params();
     hovered_edit = -1;
-    draw_any_gizmo := (draw_brick_debug || edit_manip_enabled) && dims_ok && win_w > 0 && win_h > 0;
+    draw_any_gizmo := (draw_brick_debug || (edit_manip_enabled && control_mode == .Editor) || physics_gizmos_enabled) && dims_ok && win_w > 0 && win_h > 0;
     if draw_any_gizmo {
         viewport := Vector2.{cast(float) win_w, cast(float) win_h};
         view := editor_camera_make_view(*camera);
@@ -882,7 +930,7 @@ tick :: () {
             build_debug_gizmos();
         }
 
-        if edit_manip_enabled {
+        if edit_manip_enabled && control_mode == .Editor {
             ray_origin, ray_dir, ray_ok := mouse_world_ray(
                 .{cast(float) win_w, cast(float) win_h}, params.cpu.camera_tan_half_fov,
                 camera.position, params.cpu.camera_forward, params.cpu.camera_right, params.cpu.camera_up,
@@ -928,6 +976,7 @@ tick :: () {
                 obj_i := cast(s64) manip_ctx.selected_index;
                 if obj_i >= 0 && obj_i < manip_objects.count {
                     apply_manip_to_edit(selected_edit, manip_objects[obj_i]);
+                    sync_edit_body_from_edit(selected_edit);
                     new_bounds := edit_bounds(selected_edit);
                     rebuild_bvh();
                     mark_edit_change_dirty(old_bounds, new_bounds, "manip_edit");
@@ -965,6 +1014,16 @@ tick :: () {
         perform_pending_full_rebuild();
         recenter_pending = false;
     }
+    ensure_edit_physics_bodies();
+    physics_sync_suppress_edit = ifx manip_ctx.active && selected_edit >= 0 then selected_edit else -1;
+    if control_mode == .Player {
+        update_player_mode(dt, mouse_ok, right_down, cast(s32) mx, cast(s32) my);
+    } else {
+        Physics.tick(cast(float32) dt);
+        sync_edits_from_physics();
+        sync_player_edit_from_controller();
+    }
+    physics_sync_suppress_edit = -1;
     pending_dirty_count = count_dirty_flags();
     dirty_backlog_count = 0;
 
@@ -1278,12 +1337,15 @@ tick :: () {
 #load "../editor_camera.jai";
 #load "../ui/toggle_widget.jai";
 #load "../ui/manip.jai";
+#load "../character_controller.jai";
 
 using,only(try_parse_env_int) _ :: #import "Env_Vars";
 Input :: #import "Input";
 ImGui :: #import "ImGui";
 Gizmo :: #import "Gizmo";
 Gizmo_Render :: #import "Gizmo_Render";
+Physics :: #import "Physics";
+#import "JoltC";
 #import "Math";
 #import "Random";
 
@@ -1385,9 +1447,9 @@ seed_initial_scene :: () {
         shape: SDF_Shape = ifx random_get_zero_to_one() < 0.5 then SDF_Shape.Sphere else SDF_Shape.Box;
         op: SDF_Op = ifx random_get_zero_to_one() < 0.82 then SDF_Op.Union else SDF_Op.Subtract;
         pos := Vector3.{
-            random_get_within_range(-80.0, 80.0),
-            random_get_within_range(-1.2, 3.0),
-            random_get_within_range(-86.0, 80.0),
+            random_get_within_range(-22.0, 22.0),
+            random_get_within_range(-0.8, 2.8),
+            random_get_within_range(-28.0, 18.0),
         };
         albedo := random_edit_albedo();
 
@@ -1395,6 +1457,7 @@ seed_initial_scene :: () {
         if random_get_zero_to_one() < 0.4 {
             blend = random_get_within_range(0.2, 1.0);
         }
+        gravitate := op == .Union && random_get_zero_to_one() < 0.3;
 
         if #complete shape == {
         case .Box;
@@ -1408,14 +1471,17 @@ seed_initial_scene :: () {
                 random_get_within_range(-PI, PI),
                 random_get_within_range(-PI, PI),
             };
-            add_box(*count, pos, half_extents, euler, op = op, albedo = albedo, blend = blend);
+            add_box(*count, pos, half_extents, euler, op = op, albedo = albedo, blend = blend, gravitate = gravitate);
         case .Sphere;
             radius := random_get_within_range(0.35, 1.65);
-            add_sphere(*count, pos, radius, op = op, albedo = albedo, blend = blend);
+            add_sphere(*count, pos, radius, op = op, albedo = albedo, blend = blend, gravitate = gravitate);
         }
 
         if count >= BRICKMAP_MAX_EDITS break;
     }
+
+    player_edit_index = count;
+    add_sphere(*count, camera.position + .{0.0, 0.62, 0.0}, 0.56, albedo = .{0.96, 0.96, 0.98}, blend = 0.18);
 
     params.cpu.edit_count = cast(u32) count;
 }
@@ -1428,6 +1494,7 @@ apply_runtime_edit :: () {
     // Animated CSG punch to validate edit->BVH->brickmap update path.
     edits_cpu[0].position += .{1.35, 0.75, -0.55};
     edits_cpu[0].op = .Union;
+    sync_edit_body_from_edit(0);
 
     new_bounds := edit_bounds(0);
 
@@ -1474,6 +1541,7 @@ update_auto_drag_repro :: () {
     t := clamp(cast(float) drag_frame / cast(float) duration, 0.0, 1.0);
     old_bounds := edit_bounds(auto_drag_edit_index);
     edits_cpu[auto_drag_edit_index].position = lerp(auto_drag_from_pos, auto_drag_to_pos, t);
+    sync_edit_body_from_edit(auto_drag_edit_index);
     new_bounds := edit_bounds(auto_drag_edit_index);
     rebuild_bvh();
     mark_edit_change_dirty(old_bounds, new_bounds, "manip_edit");
@@ -2017,7 +2085,7 @@ random_edit_albedo :: () -> Vector3 {
     };
 }
 
-add_sphere :: (count: *s32, pos: Vector3, radius: float, op: SDF_Op = .Union, albedo: Vector3 = .{0.48, 0.52, 0.58}, blend: float = 0) {
+add_sphere :: (count: *s32, pos: Vector3, radius: float, op: SDF_Op = .Union, albedo: Vector3 = .{0.48, 0.52, 0.58}, blend: float = 0, gravitate: bool = false) {
     if count.* >= BRICKMAP_MAX_EDITS return;
     edits_cpu[count.*] = .{
         shape = .Sphere,
@@ -2029,10 +2097,11 @@ add_sphere :: (count: *s32, pos: Vector3, radius: float, op: SDF_Op = .Union, al
         albedo = .{albedo.x, albedo.y, albedo.z, 1.0},
         blend = blend,
     };
+    physics_body_gravitate[count.*] = gravitate;
     count.* += 1;
 }
 
-add_box :: (count: *s32, pos: Vector3, half_extents: Vector3, euler: Vector3 = .{0.0, 0.0, 0.0}, op: SDF_Op = .Union, albedo: Vector3 = .{0.48, 0.52, 0.58}, blend: float = 0.0) {
+add_box :: (count: *s32, pos: Vector3, half_extents: Vector3, euler: Vector3 = .{0.0, 0.0, 0.0}, op: SDF_Op = .Union, albedo: Vector3 = .{0.48, 0.52, 0.58}, blend: float = 0.0, gravitate: bool = false) {
     if count.* >= BRICKMAP_MAX_EDITS return;
     q := quat_from_euler_xyz(euler);
     edits_cpu[count.*] = .{
@@ -2045,6 +2114,7 @@ add_box :: (count: *s32, pos: Vector3, half_extents: Vector3, euler: Vector3 = .
         albedo = .{albedo.x, albedo.y, albedo.z, 1.0},
         blend = blend,
     };
+    physics_body_gravitate[count.*] = gravitate;
     count.* += 1;
 }
 
@@ -2063,6 +2133,261 @@ pointer_grid_max_atlas_index :: () -> s32 {
         if v > max_i max_i = v;
     }
     return max_i;
+}
+
+edit_has_physics_body :: (edit_index: s32) -> bool {
+    if edit_index < 0 || cast(s64) edit_index >= edits_cpu.count return false;
+    if edit_index == player_edit_index return false;
+    return edits_cpu[edit_index].op == .Union;
+}
+
+destroy_edit_physics_body :: (edit_index: s32) {
+    if edit_index < 0 || cast(s64) edit_index >= physics_body_active.count return;
+    if !physics_body_active[edit_index] return;
+    Physics.destroy_body(physics_body_ids[edit_index]);
+    physics_body_ids[edit_index] = 0;
+    physics_body_active[edit_index] = false;
+}
+
+create_dynamic_body_for_edit :: (edit_index: s32) {
+    if edit_index < 0 || cast(s64) edit_index >= edits_cpu.count return;
+    if !edit_has_physics_body(edit_index) {
+        destroy_edit_physics_body(edit_index);
+        return;
+    }
+
+    destroy_edit_physics_body(edit_index);
+
+    e := edits_cpu[edit_index];
+    shape: *Shape;
+    if e.shape == {
+    case .Sphere;
+        shape = cast(*Shape) SphereShape_Create(e.radius);
+    case .Box;
+        half_jph := cast,force(Vec3) e.half_extents;
+        shape = cast(*Shape) BoxShape_Create(*half_jph, JPH_DEFAULT_CONVEX_RADIUS);
+    }
+    assert(shape != null, "Brickmap edit physics shape creation failed for edit %.", edit_index);
+    defer Shape_Destroy(shape);
+
+    pos_jph := cast,force(Vec3) e.position;
+    rot_jph := cast,force(Quat) Quaternion.{e.rotation.x, e.rotation.y, e.rotation.z, e.rotation.w};
+    body_settings := BodyCreationSettings_Create3(shape, *pos_jph, *rot_jph, .Dynamic, Physics.Layers.MOVING);
+    assert(body_settings != null, "Brickmap edit physics settings creation failed for edit %.", edit_index);
+    defer BodyCreationSettings_Destroy(body_settings);
+    BodyCreationSettings_SetFriction(body_settings, 0.85);
+    BodyCreationSettings_SetRestitution(body_settings, 0.02);
+    BodyCreationSettings_SetLinearDamping(body_settings, 0.55);
+    BodyCreationSettings_SetAngularDamping(body_settings, 0.72);
+    BodyCreationSettings_SetMotionQuality(body_settings, .LinearCast);
+
+    body_id := BodyInterface_CreateAndAddBody(Physics.physics.body_interface, body_settings, .Activate);
+    physics_body_ids[edit_index] = body_id;
+    physics_body_active[edit_index] = true;
+    physics_body_shape_cache[edit_index] = e.shape;
+    physics_body_radius_cache[edit_index] = e.radius;
+    physics_body_half_extents_cache[edit_index] = e.half_extents;
+}
+
+physics_shape_changed :: (edit_index: s32) -> bool {
+    if !physics_body_active[edit_index] return true;
+    e := edits_cpu[edit_index];
+    if physics_body_shape_cache[edit_index] != e.shape return true;
+    if abs(physics_body_radius_cache[edit_index] - e.radius) > 0.0001 return true;
+    cached_half := physics_body_half_extents_cache[edit_index];
+    if length_squared(cached_half - e.half_extents) > 0.0001 return true;
+    return false;
+}
+
+sync_edit_body_from_edit :: (edit_index: s32) {
+    if !edit_has_physics_body(edit_index) {
+        destroy_edit_physics_body(edit_index);
+        return;
+    }
+    if !physics_body_active[edit_index] || physics_shape_changed(edit_index) {
+        create_dynamic_body_for_edit(edit_index);
+        return;
+    }
+
+    e := edits_cpu[edit_index];
+    pos_jph := cast,force(RVec3) e.position;
+    rot_jph := cast,force(Quat) Quaternion.{e.rotation.x, e.rotation.y, e.rotation.z, e.rotation.w};
+    BodyInterface_SetPositionAndRotationWhenChanged(Physics.physics.body_interface, physics_body_ids[edit_index], *pos_jph, *rot_jph, .Activate);
+    BodyInterface_ActivateBody(Physics.physics.body_interface, physics_body_ids[edit_index]);
+}
+
+ensure_edit_physics_bodies :: () {
+    edit_count := cast(s32) params.cpu.edit_count;
+    for i: 0..edit_count-1 {
+        if edit_has_physics_body(i) {
+            if !physics_body_active[i] || physics_shape_changed(i) {
+                create_dynamic_body_for_edit(i);
+            }
+        } else {
+            destroy_edit_physics_body(i);
+        }
+    }
+    for i: edit_count..BRICKMAP_MAX_EDITS-1 {
+        destroy_edit_physics_body(cast(s32) i);
+    }
+}
+
+physics_dirty_accum_add :: (bounds: AABB) {
+    if !physics_step_dirty_accum_valid {
+        physics_step_dirty_bounds = bounds;
+        physics_step_dirty_accum_valid = true;
+        return;
+    }
+    physics_step_dirty_bounds = aabb_union(physics_step_dirty_bounds, bounds);
+}
+
+sync_edits_from_physics :: () {
+    edit_count := cast(s32) params.cpu.edit_count;
+    physics_step_dirty_accum_valid = false;
+    any_changed := false;
+    for i: 0..edit_count-1 {
+        if !physics_body_active[i] continue;
+        if i == physics_sync_suppress_edit continue;
+
+        old_bounds := edit_bounds(i);
+        pos := cast,force(Vector3) BodyInterface_GetPosition(Physics.physics.body_interface, physics_body_ids[i]);
+        rot := cast,force(Quaternion) BodyInterface_GetRotation(Physics.physics.body_interface, physics_body_ids[i]);
+        e := edits_cpu[i];
+        moved := length_squared(e.position - pos) > 0.000025;
+        rotated := 1.0 - abs(dot(Vector4.{e.rotation.x, e.rotation.y, e.rotation.z, e.rotation.w}, Vector4.{rot.x, rot.y, rot.z, rot.w})) > 0.00005;
+        if !moved && !rotated continue;
+
+        e.position = pos;
+        e.rotation = .{rot.x, rot.y, rot.z, rot.w};
+        edits_cpu[i] = e;
+        new_bounds := edit_bounds(i);
+        physics_dirty_accum_add(old_bounds);
+        physics_dirty_accum_add(new_bounds);
+        physics_dirty_accum_add(aabb_union(old_bounds, new_bounds));
+        any_changed = true;
+    }
+
+    if any_changed {
+        rebuild_bvh();
+        mark_dirty_aabb(physics_step_dirty_bounds, "physics_step");
+    }
+}
+
+sync_player_edit_from_controller :: () {
+    if player_edit_index < 0 || cast(s64) player_edit_index >= edits_cpu.count return;
+    old_bounds := edit_bounds(player_edit_index);
+    player_pos := character_controller_position(*player_controller);
+    edits_cpu[player_edit_index].position = player_pos + .{0.0, 0.42, 0.0};
+    edits_cpu[player_edit_index].rotation = .{0.0, 0.0, 0.0, 1.0};
+    new_bounds := edit_bounds(player_edit_index);
+    rebuild_bvh();
+    mark_edit_change_dirty(old_bounds, new_bounds, "player_step");
+}
+
+apply_player_push_impulses :: (dt: float) {
+    player_center := character_controller_position(*player_controller) + .{0.0, 0.42, 0.0};
+    player_vel := cast,force(Vector3) CharacterVirtual_GetLinearVelocity(player_controller.character);
+    player_speed2 := length_squared(Vector3.{player_vel.x, 0.0, player_vel.z});
+    if player_speed2 < 0.01 return;
+
+    edit_count := cast(s32) params.cpu.edit_count;
+    for i: 0..edit_count-1 {
+        if !physics_body_active[i] continue;
+        body_pos := cast,force(Vector3) BodyInterface_GetPosition(Physics.physics.body_interface, physics_body_ids[i]);
+        to_body := body_pos - player_center;
+        horizontal := Vector3.{to_body.x, 0.0, to_body.z};
+        dist2 := length_squared(horizontal);
+        push_range := player_push_radius + max(edits_cpu[i].radius, 0.45);
+        if dist2 > push_range * push_range continue;
+
+        dir := normalize_or_zero(horizontal);
+        if length_squared(dir) < 0.0001 {
+            dir = normalize_or_zero(Vector3.{player_vel.x, 0.0, player_vel.z});
+        }
+        impulse := dir * (player_push_strength * dt * 60.0);
+        impulse.y = 0.18;
+        impulse_jph := cast,force(Vec3) impulse;
+        BodyInterface_AddImpulse(Physics.physics.body_interface, physics_body_ids[i], *impulse_jph);
+        BodyInterface_ActivateBody(Physics.physics.body_interface, physics_body_ids[i]);
+    }
+}
+
+apply_player_pull_forces :: (dt: float) {
+    player_center := character_controller_position(*player_controller) + .{0.0, 0.62, 0.0};
+    edit_count := cast(s32) params.cpu.edit_count;
+    for i: 0..edit_count-1 {
+        if !physics_body_active[i] continue;
+        if !physics_body_gravitate[i] continue;
+
+        body_pos := cast,force(Vector3) BodyInterface_GetPosition(Physics.physics.body_interface, physics_body_ids[i]);
+        to_player := player_center - body_pos;
+        dist2 := length_squared(to_player);
+        if dist2 <= 0.05 || dist2 > 64.0 continue;
+
+        dir := normalize_or_zero(to_player);
+        falloff := clamp(1.0 - sqrt(dist2) / 8.0, 0.0, 1.0);
+        force := dir * (player_pull_strength * falloff);
+        force.y += 0.35 * falloff;
+        force_jph := cast,force(Vec3) force;
+        BodyInterface_AddForce(Physics.physics.body_interface, physics_body_ids[i], *force_jph);
+        BodyInterface_ActivateBody(Physics.physics.body_interface, physics_body_ids[i]);
+    }
+}
+
+update_player_mode :: (dt: float, mouse_ok: bool, right_down: bool, mx: s32, my: s32) {
+    if control_mode != .Player return;
+
+    _ = editor_camera_update(*camera, dt, mx, my, mouse_ok,
+        allow_move = false,
+        allow_look = right_down && !ImGui.GetIO().WantCaptureMouse && !orbit_drag_active);
+
+    cam_forward, cam_right, cam_up: Vector3;
+    editor_camera_basis(*camera, *cam_forward, *cam_right, *cam_up);
+    forward := normalize_or_zero(Vector3.{cam_forward.x, 0.0, cam_forward.z});
+    right := normalize_or_zero(Vector3.{cam_right.x, 0.0, cam_right.z});
+
+    desired_move := Vector3.{};
+    if (Input.input_button_states[#char "W"] & .DOWN) != 0 desired_move += forward;
+    if (Input.input_button_states[#char "S"] & .DOWN) != 0 desired_move -= forward;
+    if (Input.input_button_states[#char "D"] & .DOWN) != 0 desired_move += right;
+    if (Input.input_button_states[#char "A"] & .DOWN) != 0 desired_move -= right;
+    desired_move = normalize_or_zero(desired_move) * player_move_speed;
+    jump_pressed := (Input.input_button_states[Input.Key_Code.SPACEBAR] & .START) != 0;
+
+    character_controller_update_in_system(*player_controller, Physics.physics.system, desired_move, dt, jump_pressed);
+    apply_player_push_impulses(dt);
+    apply_player_pull_forces(dt);
+    Physics.tick(cast(float32) dt);
+    sync_edits_from_physics();
+    sync_player_edit_from_controller();
+
+    player_eye := character_controller_position(*player_controller) + .{0.0, player_camera_eye_height, 0.0};
+    camera.position = player_eye;
+}
+
+init_brickmap_physics :: () {
+    Physics.configure_test_environment(
+        spawn_spheres = false,
+        include_static_box = false,
+        create_floor = true,
+        floor_half_extent = .{140.0, 1.0, 140.0},
+        floor_center = .{0.0, -1.0, 0.0});
+    Physics.init();
+    Physics.debug_draw_enabled = physics_gizmos_enabled;
+    ensure_edit_physics_bodies();
+    start_pos := camera.position;
+    start_pos.y = max(start_pos.y, 1.2);
+    player_controller.radius = 0.52;
+    player_controller.height = 1.25;
+    player_controller.jump_speed = 5.8;
+    player_controller.accel = 11.0;
+    character_controller_init_in_system(*player_controller, Physics.physics.system, start_pos, walk_speed = player_move_speed, visual_yaw_offset = 0.0);
+}
+
+deinit_brickmap_physics :: () {
+    for i: 0..BRICKMAP_MAX_EDITS-1 destroy_edit_physics_body(cast(s32) i);
+    controller_deinit(*player_controller);
+    Physics.deinit();
 }
 
 build_debug_gizmos :: () {
@@ -2595,6 +2920,12 @@ vector3_is_finite :: (v: Vector3) -> bool {
 
 quat_is_finite :: (q: Quaternion) -> bool {
     return is_finite(q.x) && is_finite(q.y) && is_finite(q.z) && is_finite(q.w);
+}
+
+normalize_or_zero :: (v: Vector3) -> Vector3 {
+    len2 := length_squared(v);
+    if len2 <= 1.0e-8 return .{};
+    return v / sqrt(len2);
 }
 
 edit_focus_center_radius :: (edit_index: s32) -> (center: Vector3, radius: float) {

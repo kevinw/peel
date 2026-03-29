@@ -33,6 +33,8 @@ Character_Controller :: struct {
     shape: *Shape;
     facing_yaw: float;
     visual_yaw_offset: float;
+    height: float = 0.85;
+    radius: float = 0.34;
     walk_speed: float = DEFAULT_WALK_SPEED;
     accel: float = 9.0;
     jump_speed: float = 5.2;
@@ -142,8 +144,8 @@ character_controller_init_in_system :: (
     using settings;
     using settings.base;
 
-    character_height :: 0.85;
-    character_radius :: 0.34;
+    character_height := controller.height;
+    character_radius := controller.radius;
     shape_offset := Vec3.{0.0, 0.5 * character_height + character_radius, 0.0};
     capsule_shape := CapsuleShape_Create(0.5 * character_height, character_radius);
     controller.shape = RotatedTranslatedShape_Create(*shape_offset, null, xx capsule_shape);
