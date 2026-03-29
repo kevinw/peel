@@ -532,9 +532,9 @@ ui :: () {
             }
 
             if changed {
+                new_bounds := edit_bounds(selected_edit);
                 rebuild_bvh();
-                _ = old_bounds;
-                request_full_rebuild("inspector_edit");
+                mark_edit_change_dirty(old_bounds, new_bounds, "inspector_edit");
             }
         }
         if TreeNode("Debug Info") {
@@ -928,9 +928,9 @@ tick :: () {
                 obj_i := cast(s64) manip_ctx.selected_index;
                 if obj_i >= 0 && obj_i < manip_objects.count {
                     apply_manip_to_edit(selected_edit, manip_objects[obj_i]);
+                    new_bounds := edit_bounds(selected_edit);
                     rebuild_bvh();
-                    _ = old_bounds;
-                    request_full_rebuild("manip_edit");
+                    mark_edit_change_dirty(old_bounds, new_bounds, "manip_edit");
                 }
             }
 
@@ -1003,7 +1003,7 @@ tick :: () {
         inter_pass_sync: Brickmap_Graph_Sync = .WAIT_IDLE;
         recenter_sync: Brickmap_Graph_Sync = .WAIT_IDLE;
         owner_rebuild_sync: Brickmap_Graph_Sync = .WAIT_IDLE;
-        setup_sync: Brickmap_Graph_Sync = .WAIT_IDLE;
+        setup_sync: Brickmap_Graph_Sync = .NONE;
         prepare_sync: Brickmap_Graph_Sync = .WAIT_IDLE;
 
         compute_params.cpu.* = params.cpu.*;
@@ -1031,11 +1031,23 @@ tick :: () {
 
         add_compute_pass(*brickmap_compute_graph, "ResetQueues", compute_reset_queues_pipeline,
             .[active_queue_gpu], .[1, 1, 1], .QUEUES, .QUEUES, setup_sync);
+        add_buffer_barrier_pass(*brickmap_compute_graph, "QueuesAfterReset", active_queue_gpu,
+            .COMPUTE_SHADER, .SHADER_WRITE,
+            .COMPUTE_SHADER, .SHADER_READ | .SHADER_WRITE);
 
         if gpu_full_rebuild_pending {
             add_compute_pass(*brickmap_compute_graph, "FullRebuildInvalidate", compute_full_rebuild_pipeline,
                 .[compute_params.gpu, active_state_gpu, active_queue_gpu], .[(BRICKMAP_TOTAL_GRID_CELLS + 63) / 64, 1, 1],
                 .PARAMS | .STATE | .QUEUES, .PARAMS | .STATE | .QUEUES, setup_sync);
+            add_buffer_barrier_pass(*brickmap_compute_graph, "ParamsAfterFullRebuild", compute_params.gpu,
+                .COMPUTE_SHADER, .SHADER_WRITE,
+                .COMPUTE_SHADER, .SHADER_READ | .SHADER_WRITE);
+            add_buffer_barrier_pass(*brickmap_compute_graph, "StateAfterFullRebuild", active_state_gpu,
+                .COMPUTE_SHADER, .SHADER_WRITE,
+                .COMPUTE_SHADER, .SHADER_READ | .SHADER_WRITE);
+            add_buffer_barrier_pass(*brickmap_compute_graph, "QueuesAfterFullRebuild", active_queue_gpu,
+                .COMPUTE_SHADER, .SHADER_WRITE,
+                .COMPUTE_SHADER, .SHADER_READ | .SHADER_WRITE);
         }
 
         add_compute_pass(*brickmap_compute_graph, "PrepareDirty", compute_prepare_pipeline,
@@ -1420,9 +1432,7 @@ apply_runtime_edit :: () {
     new_bounds := edit_bounds(0);
 
     rebuild_bvh();
-    _ = old_bounds;
-    _ = new_bounds;
-    request_full_rebuild("auto_edit");
+    mark_edit_change_dirty(old_bounds, new_bounds, "auto_edit");
 
     if log_updates {
         log("BRICKMAP runtime edit applied at frame=%", frame_count);
@@ -1462,9 +1472,11 @@ update_auto_drag_repro :: () {
     duration := max(auto_drag_duration_frames, 1);
     drag_frame := frame_count - auto_drag_start_frame;
     t := clamp(cast(float) drag_frame / cast(float) duration, 0.0, 1.0);
+    old_bounds := edit_bounds(auto_drag_edit_index);
     edits_cpu[auto_drag_edit_index].position = lerp(auto_drag_from_pos, auto_drag_to_pos, t);
+    new_bounds := edit_bounds(auto_drag_edit_index);
     rebuild_bvh();
-    request_full_rebuild("manip_edit");
+    mark_edit_change_dirty(old_bounds, new_bounds, "manip_edit");
 
     if t >= 1.0 {
         auto_drag_done = true;
@@ -1525,6 +1537,25 @@ mark_all_edits_dirty :: (reason: string) {
     for i: 0..count-1 {
         mark_dirty_aabb(bvh.edit_bounds[i], reason);
     }
+}
+
+mark_edit_change_dirty :: (old_bounds: AABB, new_bounds: AABB, reason: string) {
+    mark_dirty_aabb(old_bounds, reason);
+    mark_dirty_aabb(new_bounds, reason);
+
+    swept_bounds := AABB.{
+        min = .{
+            min(old_bounds.min.x, new_bounds.min.x),
+            min(old_bounds.min.y, new_bounds.min.y),
+            min(old_bounds.min.z, new_bounds.min.z),
+        },
+        max = .{
+            max(old_bounds.max.x, new_bounds.max.x),
+            max(old_bounds.max.y, new_bounds.max.y),
+            max(old_bounds.max.z, new_bounds.max.z),
+        },
+    };
+    mark_dirty_aabb(swept_bounds, reason);
 }
 
 request_full_rebuild :: (reason: string) {

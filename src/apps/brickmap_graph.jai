@@ -116,6 +116,8 @@ execute :: (graph: *Brickmap_Graph, queue: Gpu_Queue, log_passes: bool = false) 
     stats: Brickmap_Graph_Stats;
     if graph.passes.count == 0 return stats;
     result: Gpu_Result;
+    active_cmd: Gpu_Command_Buffer;
+    cmd_open := false;
 
     dispatch_pass_buffers :: (cmd: Gpu_Command_Buffer, pass: Brickmap_Graph_Pass) #expand {
         if pass.buffer_count == {
@@ -125,6 +127,30 @@ execute :: (graph: *Brickmap_Graph, queue: Gpu_Queue, log_passes: bool = false) 
         case 4; gpu_dispatch_buffers(cmd, .[pass.buffers[0], pass.buffers[1], pass.buffers[2], pass.buffers[3]], pass.dispatch);
         case 5; gpu_dispatch_buffers(cmd, .[pass.buffers[0], pass.buffers[1], pass.buffers[2], pass.buffers[3], pass.buffers[4]], pass.dispatch);
         case; assert(false, "Brickmap graph pass '%' has unsupported buffer_count=%", pass.name, pass.buffer_count);
+        }
+    }
+
+    ensure_cmd :: () #expand {
+        if !cmd_open {
+            result=, active_cmd = gpu_start_command_recording(queue);
+            assert(result == .SUCCESS, "Brickmap graph failed to start command recording: %", result);
+            cmd_open = true;
+        }
+    }
+
+    flush_cmd :: (wait_after_submit: bool, stats_index: s32 = -1) #expand {
+        if !cmd_open return;
+        gpu_submit(active_cmd);
+        cmd_open = false;
+        if wait_after_submit {
+            wait_start := seconds_since_init();
+            gpu_queue_wait_idle(queue);
+            wait_ms := cast(float) ((seconds_since_init() - wait_start) * 1000.0);
+            stats.wait_ms += wait_ms;
+            idx := stats_index;
+            if idx >= 0 && idx < BRICKMAP_GRAPH_MAX_STATS_PASSES {
+                stats.pass_wait_ms[idx] = wait_ms;
+            }
         }
     }
 
@@ -143,49 +169,50 @@ execute :: (graph: *Brickmap_Graph, queue: Gpu_Queue, log_passes: bool = false) 
         }
 
         encode_start := seconds_since_init();
-        result=, cmd := gpu_start_command_recording(queue);
-        assert(result == .SUCCESS, "Brickmap graph pass '%' failed to start command recording: %", pass.name, result);
-
         if pass.barrier_buffer != 0 {
-            result = gpu_buffer_barrier(cmd, pass.barrier_buffer, pass.barrier_src_stage, pass.barrier_src_access, pass.barrier_dst_stage, pass.barrier_dst_access);
-            assert(result == .SUCCESS, "Brickmap graph barrier pass '%' failed: %", pass.name, result);
+            // Our current Metal path implements compute-write -> indirect-read as a
+            // conservative queue-completion boundary. If we already have batched work
+            // recorded, submit and wait here so the next pass sees the finished writes.
+            if (pass.barrier_dst_access & .INDIRECT_READ) != 0 {
+                flush_cmd(true, cast(s32) pass_index);
+            } else {
+                ensure_cmd();
+                result = gpu_buffer_barrier(active_cmd, pass.barrier_buffer, pass.barrier_src_stage, pass.barrier_src_access, pass.barrier_dst_stage, pass.barrier_dst_access);
+                assert(result == .SUCCESS, "Brickmap graph barrier pass '%' failed: %", pass.name, result);
+            }
         } else {
-            result = gpu_set_pipeline(cmd, pass.pipeline);
+            ensure_cmd();
+            result = gpu_set_pipeline(active_cmd, pass.pipeline);
             assert(result == .SUCCESS, "Brickmap graph pass '%' failed to set pipeline: %", pass.name, result);
 
             if pass.indirect_dispatch != 0 {
                 if pass.buffer_count == {
-                case 1; result = gpu_indirect_dispatch_buffers(cmd, .[pass.buffers[0]], pass.indirect_dispatch);
-                case 2; result = gpu_indirect_dispatch_buffers(cmd, .[pass.buffers[0], pass.buffers[1]], pass.indirect_dispatch);
-                case 3; result = gpu_indirect_dispatch_buffers(cmd, .[pass.buffers[0], pass.buffers[1], pass.buffers[2]], pass.indirect_dispatch);
-                case 4; result = gpu_indirect_dispatch_buffers(cmd, .[pass.buffers[0], pass.buffers[1], pass.buffers[2], pass.buffers[3]], pass.indirect_dispatch);
-                case 5; result = gpu_indirect_dispatch_buffers(cmd, .[pass.buffers[0], pass.buffers[1], pass.buffers[2], pass.buffers[3], pass.buffers[4]], pass.indirect_dispatch);
+                case 1; result = gpu_indirect_dispatch_buffers(active_cmd, .[pass.buffers[0]], pass.indirect_dispatch);
+                case 2; result = gpu_indirect_dispatch_buffers(active_cmd, .[pass.buffers[0], pass.buffers[1]], pass.indirect_dispatch);
+                case 3; result = gpu_indirect_dispatch_buffers(active_cmd, .[pass.buffers[0], pass.buffers[1], pass.buffers[2]], pass.indirect_dispatch);
+                case 4; result = gpu_indirect_dispatch_buffers(active_cmd, .[pass.buffers[0], pass.buffers[1], pass.buffers[2], pass.buffers[3]], pass.indirect_dispatch);
+                case 5; result = gpu_indirect_dispatch_buffers(active_cmd, .[pass.buffers[0], pass.buffers[1], pass.buffers[2], pass.buffers[3], pass.buffers[4]], pass.indirect_dispatch);
                 case; assert(false, "Brickmap graph pass '%' has unsupported buffer_count=%", pass.name, pass.buffer_count);
                 }
                 assert(result == .SUCCESS, "Brickmap graph indirect pass '%' failed to dispatch: %", pass.name, result);
             } else {
-                dispatch_pass_buffers(cmd, pass);
+                dispatch_pass_buffers(active_cmd, pass);
             }
         }
-        gpu_submit(cmd);
         pass_encode_ms := cast(float) ((seconds_since_init() - encode_start) * 1000.0);
         stats.encode_ms += pass_encode_ms;
 
-        pass_wait_ms: float;
         if pass.sync_after == .WAIT_IDLE {
-            wait_start := seconds_since_init();
-            gpu_queue_wait_idle(queue);
-            pass_wait_ms = cast(float) ((seconds_since_init() - wait_start) * 1000.0);
-            stats.wait_ms += pass_wait_ms;
+            flush_cmd(true, cast(s32) pass_index);
         }
 
         if pass_index < BRICKMAP_GRAPH_MAX_STATS_PASSES {
             stats.pass_names[pass_index] = pass.name;
             stats.pass_encode_ms[pass_index] = pass_encode_ms;
-            stats.pass_wait_ms[pass_index] = pass_wait_ms;
         }
         stats.pass_count += 1;
     }
 
+    flush_cmd(false);
     return stats;
 }
