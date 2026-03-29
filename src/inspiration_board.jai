@@ -285,7 +285,6 @@ do_ui :: (using board: *Inspiration_Board) {
     if !app_ui_enabled return;
     ensure_content_loaded(board);
     process_async_completions(board);
-    inspiration_consume_dropped_paths(board);
 
     using,except(Viewport) ImGui;
 
@@ -312,6 +311,7 @@ do_ui :: (using board: *Inspiration_Board) {
     last_canvas_min = .{canvas_min.x, canvas_min.y};
     last_canvas_max = .{canvas_min.x + canvas_size.x, canvas_min.y + canvas_size.y};
     canvas_hovered = IsItemHovered();
+    inspiration_consume_dropped_paths(board);
 
     draw := GetWindowDrawList();
     canvas_max := ImVec2.{canvas_min.x + canvas_size.x, canvas_min.y + canvas_size.y};
@@ -353,11 +353,10 @@ process_input_events :: (using board: *Inspiration_Board, events: []Input.Event)
     for events {
         if it.type != .DRAG_AND_DROP_FILES continue;
         if !open continue;
-        ensure_content_loaded(board);
         #if _VERBOSE log("Inspiration DnD: input event delivered with % files", it.files.count);
         for path: it.files {
             #if _VERBOSE log("Inspiration DnD: input event path '%'", path);
-            inspiration_add_image(board, path);
+            inspiration_board_note_dropped_file(path);
         }
     }
 }
@@ -383,7 +382,7 @@ inspiration_board_on_unload :: () {
 
 #scope_file
 
-inspiration_add_image :: (using board: *Inspiration_Board, path: string) {
+inspiration_add_image :: (using board: *Inspiration_Board, path: string, drop_world: Vector2) {
     #if _VERBOSE log("Inspiration Add: begin '%'", path);
     if !inspiration_path_looks_like_image(path) return;
 
@@ -418,8 +417,8 @@ inspiration_add_image :: (using board: *Inspiration_Board, path: string) {
         source_path = normalized,
         source_modtime = modtime,
         source_size = size,
-        x = cast(float) items.count * 80.0,
-        y = cast(float) items.count * 60.0,
+        x = drop_world.x,
+        y = drop_world.y,
         width = 320.0,
         height = 240.0,
     };
@@ -440,9 +439,10 @@ inspiration_add_image :: (using board: *Inspiration_Board, path: string) {
 inspiration_consume_dropped_paths :: (using board: *Inspiration_Board) {
     if dropped_paths.count <= 0 return;
     #if _VERBOSE log("Inspiration DnD: consuming % queued dropped paths", dropped_paths.count);
+    drop_world := inspiration_safe_drop_world(board);
     for path: dropped_paths {
         #if _VERBOSE log("Inspiration DnD: consume '%'", path);
-        inspiration_add_image(board, path);
+        inspiration_add_image(board, path, drop_world);
         if path.count != 0 free(path);
     }
     array_reset(*dropped_paths);
@@ -453,6 +453,7 @@ inspiration_remove_selected :: (using board: *Inspiration_Board) {
     if selected_index < 0 || selected_index >= items.count return;
     item := items[selected_index];
     array_ordered_remove_by_index(*items, cast(int) selected_index);
+    inspiration_delete_item_files(item);
     inspiration_release_item(*item);
     if selected_index >= items.count selected_index = cast(s32) items.count - 1;
     dirty = true;
@@ -465,6 +466,18 @@ inspiration_release_item :: (item: *Inspiration_Item) {
     if item.url.count != 0 free(item.url);
     if item.thumb_cache_path.count != 0 free(item.thumb_cache_path);
     item.* = .{};
+}
+
+inspiration_delete_item_files :: (item: Inspiration_Item) {
+    if item.thumb_cache_path.count != 0 && File_Utilities.file_exists(item.thumb_cache_path) {
+        ok := File.file_delete(item.thumb_cache_path);
+        #if _VERBOSE log("Inspiration Delete: thumb '%' ok=%", item.thumb_cache_path, ok);
+    }
+
+    if item.source_path.count != 0 && String.starts_with(item.source_path, INSPIRATION_ASSET_DIR) && File_Utilities.file_exists(item.source_path) {
+        ok := File.file_delete(item.source_path);
+        #if _VERBOSE log("Inspiration Delete: asset '%' ok=%", item.source_path, ok);
+    }
 }
 
 inspiration_handle_canvas_input :: (using board: *Inspiration_Board, canvas_min: ImGui.ImVec2, canvas_size: ImGui.ImVec2) {
@@ -567,25 +580,28 @@ inspiration_draw_items :: (using board: *Inspiration_Board, draw: *ImGui.ImDrawL
         }
 
         hovered := inspiration_point_in_rect(mouse_v, min_screen, max_screen);
-        if hovered hovered_index = cast(s32) it_index;
-        if hovered && it.url.count != 0 && drag_mode == .NONE {
+        selected := selected_index == cast(s32) it_index;
+        handle_hover_mode := ifx selected then inspiration_resize_handle_hit(board.*, it.*, mouse_v) else .NONE;
+        interactive_hovered := hovered || handle_hover_mode != .NONE;
+        if interactive_hovered hovered_index = cast(s32) it_index;
+        if handle_hover_mode != .NONE && drag_mode == .NONE {
+            SetMouseCursor(inspiration_resize_cursor(handle_hover_mode));
+        } else if hovered && it.url.count != 0 && drag_mode == .NONE {
             SetMouseCursor(.Hand);
         }
-
-        selected := selected_index == cast(s32) it_index;
         border_col := ifx selected then GetColorU32(ImVec4.{1.0, 0.78, 0.2, 1.0}) else ifx hovered then GetColorU32(ImVec4.{0.8, 0.84, 1.0, 0.55}) else GetColorU32(ImVec4.{1.0, 1.0, 1.0, 0.15});
         border_thickness := ifx selected then 2.5 else 1.0;
         ImDrawList.AddRect(draw, .{min_screen.x, min_screen.y}, .{max_screen.x, max_screen.y}, border_col, 4.0, .None, border_thickness);
 
-        if hovered && drag_mode == .NONE && IsMouseClicked(.Right, false) {
+        if interactive_hovered && drag_mode == .NONE && IsMouseClicked(.Right, false) {
             selected_index = cast(s32) it_index;
             context_item_index = cast(s32) it_index;
             inspiration_set_url_buffer(board, it.url);
             OpenPopup("InspirationItemMenu");
         }
 
-        if hovered && drag_mode == .NONE && IsMouseClicked(.Left, false) {
-            mode := inspiration_resize_handle_hit(board.*, it.*, mouse_v);
+        if interactive_hovered && drag_mode == .NONE && IsMouseClicked(.Left, false) {
+            mode := handle_hover_mode;
             was_selected := selected;
             selected_index = cast(s32) it_index;
             drag_item_index = cast(s32) it_index;
@@ -884,6 +900,29 @@ inspiration_screen_to_world :: (using board: Inspiration_Board, screen: Vector2)
     return (screen - last_canvas_min - view_offset) / zoom;
 }
 
+inspiration_safe_drop_world :: (board: *Inspiration_Board) -> Vector2 {
+    if board.zoom <= 0.0001 {
+        return .{0.0, 0.0};
+    }
+
+    mouse := ImGui.GetMousePos();
+    mouse_screen := Vector2.{mouse.x, mouse.y};
+    mouse_valid := ImGui.IsMousePosValid();
+    screen_valid := is_finite(mouse_screen.x) && is_finite(mouse_screen.y);
+    if mouse_valid && screen_valid {
+        return inspiration_screen_to_world(board.*, mouse_screen);
+    }
+
+    canvas_center_screen := (board.last_canvas_min + board.last_canvas_max) * 0.5;
+    if is_finite(canvas_center_screen.x) && is_finite(canvas_center_screen.y) {
+        #if _VERBOSE log("Inspiration DnD: mouse position invalid, falling back to canvas center %", canvas_center_screen);
+        return inspiration_screen_to_world(board.*, canvas_center_screen);
+    }
+
+    #if _VERBOSE log("Inspiration DnD: mouse and canvas invalid, falling back to origin");
+    return .{0.0, 0.0};
+}
+
 inspiration_point_in_rect :: (p: Vector2, min: Vector2, max: Vector2) -> bool {
     return p.x >= min.x && p.y >= min.y && p.x <= max.x && p.y <= max.y;
 }
@@ -895,6 +934,16 @@ inspiration_point_near :: (a: Vector2, b: Vector2, radius: float) -> bool {
 
 inspiration_drag_mode_is_resize :: (mode: Inspiration_Drag_Mode) -> bool {
     return mode == .RESIZE_TL || mode == .RESIZE_TR || mode == .RESIZE_BL || mode == .RESIZE_BR;
+}
+
+inspiration_resize_cursor :: (mode: Inspiration_Drag_Mode) -> ImGui.MouseCursor {
+    if mode == {
+    case .RESIZE_TL; #through;
+    case .RESIZE_BR; return .ResizeNWSE;
+    case .RESIZE_TR; #through;
+    case .RESIZE_BL; return .ResizeNESW;
+    }
+    return .Arrow;
 }
 
 inspiration_thumbnail_cache_path :: (source_path: string, modtime: Apollo_Time, size: s64) -> string {

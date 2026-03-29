@@ -111,11 +111,10 @@ tick :: () {
         }
         End();
 
-        draw_list := GetForegroundDrawList();
-        PushPopFont(fonts.main, 200);
-        draw_list.AddText(draw_list, {100, 100}, 0xffffffff, "Hello triangle.");
+        //draw_list := GetForegroundDrawList();
+        //PushPopFont(fonts.main, 200);
+        //draw_list.AddText(draw_list, {100, 100}, 0xffffffff, "Hello triangle.");
     }
-
 
     submit_and_present_with_ui(cmd_buff);
 } @on_tick

@@ -1,4 +1,4 @@
 # peel inspiration board v1
-view 697.121704 566.229858 0.818937
-item "/Users/kev/Downloads/GlowingBun2.png" -608.740234 -605.779175 320 221.25 "https://alextardif.com/eden.html"
-item "./inspiration/assets/Ferdinand_Keller_10018993788449718527.jpeg" -202.444382 -502.178528 320 273.75 ""
+view 656.584961 509.768738 0.740089
+item "/Users/kev/Downloads/GlowingBun2.png" -890.336487 -673.285461 612.628784 423.575378 "https://alextardif.com/eden.html"
+item "./inspiration/assets/Ferdinand_Keller_10018993788449718527.jpeg" -258.72467 -653.078247 806.426636 689.872803 ""
