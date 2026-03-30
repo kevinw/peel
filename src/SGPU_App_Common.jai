@@ -379,15 +379,6 @@ host_quit :: (quit_ctx: Quit_Ctx) {
 }
 
 host_init :: (init_ctx: Init_Ctx) -> bool {
-    #if !RELEASE && OS == .MACOS {
-        using,only(setenv) POSIX :: #import "POSIX";
-        if perf_gpu_validation_enabled() {
-            setenv("MTL_LOG_TO_STDERR", "1", 1);
-            setenv("MTL_DEBUG_LAYER", "1", 1);
-            setenv("MTL_LOG_LEVEL", "MTLLogLevelDebug", 1);
-            setenv("MTL_LOG_BUFFER_SIZE", "2048", 1);
-        }
-    }
 
     max_frames = init_ctx.max_frames;
     reload_on_frame = 0;
@@ -577,15 +568,6 @@ perf_capture_finish_and_check :: () {
     assert(avg_fps >= PERF_CAPTURE_MIN_FPS,
         tprint("Performance regression: avg fps % is below threshold % (frames %..%).",
             avg_fps, PERF_CAPTURE_MIN_FPS, PERF_CAPTURE_START_FRAME, PERF_CAPTURE_END_FRAME));
-}
-
-perf_gpu_validation_enabled :: () -> bool {
-    #if OS != .MACOS return true;
-    using,only(getenv) POSIX :: #import "POSIX";
-    v := getenv("PEEL_GPU_VALIDATION");
-    if v == null return true;
-    if v[0] == #char "0" return false;
-    return true;
 }
 
 #if OS == .WINDOWS  #import "Windows_Utils";
