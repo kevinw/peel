@@ -20,6 +20,7 @@ Do not overlap `jai build.jai - ... -run` invocations for the same target. `-run
 For visual/UI tasks in peel, there are environment variables to allow you to do visual verification using framebuffer/readback snapshot tooling (for example, after first implementation and after coordinate/layout fixes), rather than relying only on code inspection. For example PEEL_SNAPSHOT=1 will capture a snapshot of the framebuffer and save it out to a jpeg. Or PEEL_MAX_FRAMES=30 will run the app for 30 frames and exit. See src/readback_stats.jai and src/framebuffer_tools.jai.
 
 Hard-fail is usually better than fallback paths: because we're rapidly iterating, keeping tests and app builds green is important, but too many fallback paths can make the code harder to understand and maintain, so we try to keep the garden healthy: the ergonomics of the app code, and the slimness of the codebase, matter.
+Similarly, prefer removing temporary compatibility shims once the new path exists. This repo is a WIP framework, so compatibility hacks and source-parsing fallbacks are usually worse than tightening the API and failing fast.
 
 # Jai language notes and style guide
 
