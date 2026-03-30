@@ -197,26 +197,33 @@ main :: () {
 #scope_file
 
 setup_env_vars :: () {
-    #if !RELEASE && OS == .MACOS {
+    #if RELEASE return;
+
+    #if OS == .MACOS {
+        if !perf_gpu_validation_enabled() return;
+
         using,only(setenv) POSIX :: #import "POSIX";
-        if perf_gpu_validation_enabled() {
-            setenv("MTL_SHADER_VALIDATION", "1", 1);
-            setenv("MTL_SHADER_VALIDATION_REPORT_TO_STDERR", "1", 1);
-            setenv("MTL_LOG_TO_STDERR", "1", 1);
-            setenv("MTL_DEBUG_LAYER", "1", 1);
-            setenv("MTL_LOG_LEVEL", "MTLLogLevelDebug", 1);
-            setenv("MTL_LOG_BUFFER_SIZE", "2048", 1);
-        }
+        setenv("MTL_SHADER_VALIDATION", "1", 1);
+        setenv("MTL_SHADER_VALIDATION_REPORT_TO_STDERR", "1", 1);
+        setenv("MTL_LOG_TO_STDERR", "1", 1);
+        setenv("MTL_DEBUG_LAYER", "1", 1);
+        setenv("MTL_LOG_LEVEL", "MTLLogLevelDebug", 1);
+        setenv("MTL_LOG_BUFFER_SIZE", "2048", 1);
     }
 }
 
-perf_gpu_validation_enabled :: () -> bool {
-    #if OS != .MACOS return true;
-    using,only(getenv) POSIX :: #import "POSIX";
-    v := getenv("PEEL_GPU_VALIDATION");
-    if v == null return true;
-    if v[0] == #char "0" return false;
-    return true;
+#if OS == .MACOS {
+    perf_gpu_validation_enabled :: () -> bool {
+        using,only(getenv) POSIX :: #import "POSIX";
+        v := getenv("PEEL_GPU_VALIDATION");
+        if v == null return true;
+        if v[0] == #char "0" return false;
+        return true;
+    }
+} else {
+    perf_gpu_validation_enabled :: () -> bool {
+        return false;
+    }
 }
 
 
