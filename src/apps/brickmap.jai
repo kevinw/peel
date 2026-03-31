@@ -115,6 +115,7 @@ camera: Editor_Camera = .{
     position = .{4.0, 2.0, 7.0},
     yaw = -0.55,
     pitch = -0.12,
+    fov_y = PI / 3.0,
     move_speed = 7.0,
     boost_multiplier = 2.0,
     mouse_sensitivity = 0.0058,
@@ -379,7 +380,7 @@ on_dll_init :: () {
     init_params_guards();
     set_active_cache_slot(0);
     edits_cpu = edits_storage;
-    params.cpu.camera_fov_y = PI / 3.0;
+    params.cpu.camera_fov_y = camera.fov_y;
     params.cpu.camera_tan_half_fov = tan(params.cpu.camera_fov_y * 0.5);
 
     texture_result, atlas_texture= := gpu_create_texture(.{
@@ -787,7 +788,8 @@ tick :: () {
     if control_mode == .Editor {
         camera_input = editor_camera_update(*camera, dt, mx, my, mouse_ok,
             allow_move = !io.WantTextInput && !orbit_drag_active,
-            allow_look = right_down && !io.WantCaptureMouse && !orbit_drag_active);
+            allow_look = right_down && !io.WantCaptureMouse && !orbit_drag_active,
+            allow_zoom = !io.WantCaptureMouse && !orbit_drag_active);
     } else {
         camera_input = .{};
     }
@@ -894,7 +896,7 @@ tick :: () {
     params.cpu.frame_index = cast(u32) frame_count;
     params.cpu.atlas_debug_slice = clamp(atlas_debug_slice, 0.0, 1.0);
     params.cpu.camera_pos = camera.position;
-    params.cpu.camera_fov_y = PI / 3.0;
+    params.cpu.camera_fov_y = camera.fov_y;
     params.cpu.camera_tan_half_fov = tan(params.cpu.camera_fov_y * 0.5);
     editor_camera_basis(*camera, *params.cpu.camera_forward, *params.cpu.camera_right, *params.cpu.camera_up);
     aspect := ifx dims_ok && win_h > 0 then cast(float) win_w / cast(float) win_h else 1.0;
@@ -2339,7 +2341,8 @@ update_player_mode :: (dt: float, mouse_ok: bool, right_down: bool, mx: s32, my:
 
     _ = editor_camera_update(*camera, dt, mx, my, mouse_ok,
         allow_move = false,
-        allow_look = right_down && !ImGui.GetIO().WantCaptureMouse && !orbit_drag_active);
+        allow_look = right_down && !ImGui.GetIO().WantCaptureMouse && !orbit_drag_active,
+        allow_zoom = !ImGui.GetIO().WantCaptureMouse && !orbit_drag_active);
 
     cam_forward, cam_right, cam_up: Vector3;
     editor_camera_basis(*camera, *cam_forward, *cam_right, *cam_up);

@@ -4,13 +4,17 @@ Editor_Camera :: struct {
     position: Vector3;
     yaw: float;
     pitch: float;
+    fov_y: float = PI / 3.2;
 
     world_up: Vector3 = .{0.0, 1.0, 0.0};
     move_speed: float = 5.0;
     boost_multiplier: float = 2.0;
     mouse_sensitivity: float = 0.0032;
+    mouse_wheel_fov_sensitivity: float = 0.08;
     pitch_min: float = -1.5;
     pitch_max: float = 1.5;
+    fov_y_min: float = PI / 12.0;
+    fov_y_max: float = PI * 0.9;
     move_planar: bool;
 
     prev_mouse: Vector2;
@@ -61,6 +65,10 @@ editor_camera_make_view :: (camera: *Editor_Camera) -> Matrix4 {
         x_is_forward = false);
 }
 
+editor_camera_make_projection :: (camera: *Editor_Camera, aspect: float, z_near: float, z_far: float) -> Matrix4 {
+    return make_projection_matrix(camera.fov_y, aspect, z_near, z_far);
+}
+
 editor_camera_update :: (
     using camera: *Editor_Camera,
     dt: float,
@@ -69,8 +77,17 @@ editor_camera_update :: (
     mouse_valid: bool,
     allow_move: bool = true,
     allow_look: bool = false,
+    allow_zoom: bool = true,
 ) -> Editor_Camera_Update_Result {
     result: Editor_Camera_Update_Result;
+
+    if allow_zoom && mouse_valid {
+        wheel := ImGui.GetIO().MouseWheel;
+        if wheel != 0.0 {
+            fov_y -= wheel * mouse_wheel_fov_sensitivity;
+            fov_y = clamp(fov_y, fov_y_min, fov_y_max);
+        }
+    }
 
     if allow_look && mouse_valid {
         mouse := Vector2.{cast(float) mouse_x, cast(float) mouse_y};
@@ -142,4 +159,5 @@ editor_camera_angles_from_forward :: (forward: Vector3) -> (yaw: float, pitch: f
 }
 
 #import "Math";
+ImGui :: #import "ImGui";
 Input :: #import "Input";

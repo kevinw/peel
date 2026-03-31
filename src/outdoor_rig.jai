@@ -50,7 +50,7 @@ apply_scene_lighting :: (rig: Outdoor_Rig, params: []Scene_Draw_Params_CPU, view
     }
 }
 
-apply_ground_lighting :: (rig: Outdoor_Rig, shadow_params: *Scene_Draw_Params_CPU, draw_params: *Ground_Draw_Params_CPU, view_proj: Matrix4, camera_pos: Vector3, light_dir: Vector3) {
+apply_ground_lighting :: (rig: Outdoor_Rig, shadow_params: *Ground_Draw_Params_CPU, draw_params: *Ground_Draw_Params_CPU, view_proj: Matrix4, camera_pos: Vector3, light_dir: Vector3) {
     shadow_params.view_proj = view_proj;
     shadow_params.camera_pos = camera_pos;
     shadow_params.light_dir = light_dir;

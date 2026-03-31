@@ -55,6 +55,7 @@ Grass_Shadow_Params_CPU    :: CPU_Struct(Grass_Shadow_Params);
 graphics_pipeline: Gpu_Pipeline;
 pick_pipeline: Gpu_Pipeline;
 ground_pipeline: Gpu_Pipeline;
+ground_shadow_pipeline: Gpu_Pipeline;
 shadow_pipeline: Gpu_Pipeline;
 grass_pipeline: Gpu_Pipeline;
 grass_shadow_pipeline: Gpu_Pipeline;
@@ -88,7 +89,7 @@ scene_depth_h: u32;
 ground_vertices: Gpu_View(Scene_Vertex);
 ground_indices: Gpu_View(u32);
 ground_instance: Gpu_Buffer(Scene_Instance);
-ground_shadow_params: Gpu_Buffer(Scene_Draw_Params_CPU);
+ground_shadow_params: Gpu_Buffer(Ground_Draw_Params_CPU);
 ground_draw_params: Gpu_Buffer(Ground_Draw_Params_CPU);
 ground_texture: Gpu_Texture;
 ground_texture_view: Gpu_Texture_View;
@@ -211,6 +212,7 @@ on_dll_init :: () {
     graphics_source     := cast([]u8) get_transpiled(.METAL, model_scene_vertex_main, model_scene_fragment_main);
     pick_source         := cast([]u8) get_transpiled(.METAL, model_scene_vertex_main, model_scene_pick_fragment_main);
     ground_source       := cast([]u8) get_transpiled(.METAL, ground_vertex_main, ground_fragment_main);
+    ground_shadow_source:= cast([]u8) get_transpiled(.METAL, ground_shadow_vertex_main, ground_shadow_fragment_main);
     shadow_source       := cast([]u8) get_transpiled(.METAL, model_scene_shadow_vertex_main, model_scene_shadow_fragment_main);
     grass_source        := cast([]u8) get_transpiled(.METAL, model_scene_grass_vertex_main, model_scene_grass_fragment_main);
     grass_shadow_source := cast([]u8) get_transpiled(.METAL, model_scene_grass_shadow_vertex_main, model_scene_grass_shadow_fragment_main);
@@ -242,6 +244,7 @@ on_dll_init :: () {
     graphics_pipeline     = gpu_create_graphics_pipeline(graphics_source, main_raster);
     pick_pipeline         = gpu_create_graphics_pipeline(pick_source, pick_raster);
     ground_pipeline       = gpu_create_graphics_pipeline(ground_source, main_raster);
+    ground_shadow_pipeline= gpu_create_graphics_pipeline(ground_shadow_source, shadow_raster);
     shadow_pipeline       = gpu_create_graphics_pipeline(shadow_source, shadow_raster);
     grass_pipeline        = gpu_create_graphics_pipeline(grass_source, grass_main_raster);
     grass_shadow_pipeline = gpu_create_graphics_pipeline(grass_shadow_source, shadow_raster);
@@ -294,6 +297,7 @@ on_unload :: () {
     gpu_delete(*grass_shadow_pipeline);
     gpu_delete(*grass_pipeline);
     gpu_delete(*pick_pipeline);
+    gpu_delete(*ground_shadow_pipeline);
     gpu_delete(*shadow_pipeline);
     gpu_delete(*ground_pipeline);
     shadow_map_deinit(*shadow_map);
@@ -471,7 +475,8 @@ tick :: () {
     case .Editor;
         _ = editor_camera_update(*scene_camera, dt, mx, my, mouse_ok,
             allow_move = !io.WantCaptureKeyboard,
-            allow_look = right_down && !io.WantCaptureMouse);
+            allow_look = right_down && !io.WantCaptureMouse,
+            allow_zoom = !io.WantCaptureMouse);
         editor_camera_basis(*scene_camera, *controller_forward, *controller_right, *controller_up);
     }
 
@@ -539,7 +544,7 @@ tick :: () {
             camera_forward = cam_forward,
             camera_right = cam_right,
             camera_up = cam_up,
-            fov_y = PI / 3.2,
+            fov_y = scene_camera.fov_y,
             mouse_pos = .{cast(float) mx, cast(float) my},
             mouse_valid = mouse_ok,
             mouse_down = left_down,
@@ -577,7 +582,7 @@ tick :: () {
     editor_camera_basis(*scene_camera, *cam_forward, *cam_right, *cam_up);
     view := editor_camera_make_view(*scene_camera);
     aspect := ifx win_h > 0 then cast(float) win_w / cast(float) win_h else 1.0;
-    proj := make_projection_matrix(PI / 3.2, aspect, 0.05, 250.0);
+    proj := editor_camera_make_projection(*scene_camera, aspect, 0.05, 250.0);
     view_proj := proj * view;
     viewport := Vector2.{max(1.0, cast(float) win_w), max(1.0, cast(float) win_h)};
     ensure_scene_pick_target(cast(u32) max(1, win_w), cast(u32) max(1, win_h));
@@ -711,8 +716,9 @@ tick :: () {
             ],
         }, .COLOR_ATTACHMENT_WRITE, .SHADER_READ);
         gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .LESS, depth_mode = .READ | .WRITE});
-        gpu_set_pipeline(cmd_buff, shadow_pipeline);
+        gpu_set_pipeline(cmd_buff, ground_shadow_pipeline);
         draw_result := gpu_draw_instanced_direct(cmd_buff, ground_shadow_params.gpu, ground_index_count, 1);
+        gpu_set_pipeline(cmd_buff, shadow_pipeline);
         if render_grass && grass_shadow_params.cpu != null && grass_shadow_instance_count > 0 {
             gpu_set_pipeline(cmd_buff, grass_shadow_pipeline);
             draw_result = gpu_draw_instanced_direct(cmd_buff, grass_shadow_params.gpu, 6, grass_shadow_instance_count);
@@ -1924,7 +1930,7 @@ init_ground_plane :: (ground: Scene_File.Scene_Procedural_Ground_Desc) {
     ground_vertices = gpu_alloc_view(Scene_Vertex, ground_vertices_cpu.count, label = "model scene ground vertices");
     ground_indices = gpu_alloc_view(u32, ground_indices_cpu.count, label = "model scene ground indices");
     ground_instance = gpu_alloc_buffer(Scene_Instance, label = "model scene ground instance");
-    ground_shadow_params = gpu_alloc_buffer(Scene_Draw_Params_CPU, label = "model scene ground shadow params");
+    ground_shadow_params = gpu_alloc_buffer(Ground_Draw_Params_CPU, label = "model scene ground shadow params");
     ground_draw_params = gpu_alloc_buffer(Ground_Draw_Params_CPU, label = "model scene ground params");
     grass_shadow_params = gpu_alloc_buffer(Grass_Shadow_Params_CPU, label = "model scene grass shadow params");
     grass_draw_params = gpu_alloc_buffer(Grass_Draw_Params, label = "model scene grass params");
@@ -1940,21 +1946,16 @@ init_ground_plane :: (ground: Scene_File.Scene_Procedural_Ground_Desc) {
     ground_shadow_params.cpu.* = .{
         vertices = ground_vertices.gpu,
         indices = ground_indices.gpu,
-        materials = 0,
         instances = ground_instance.gpu,
-        morph_vertex_deltas = 0,
-        morph_weights = 0,
-        skin_matrices = 0,
         view_proj = Matrix4_Identity,
         light_dir = normalize(.{0.35, -1.0, 0.25}),
         sun_params = .{outdoor_rig.sun_strength, outdoor_rig.time_of_day, 0.0, 0.0},
         camera_pos = scene_camera.position,
-        material_index = 0,
-        object_id = 0,
-        mesh_base_vertex = 0,
-        skin_matrix_count = 0,
-        morph_target_count = 0,
-        morph_vertex_count = 0,
+        sampler_index = 0,
+        base_color_texture_index = 0,
+        normal_texture_index = 0,
+        roughness_texture_index = 0,
+        ao_texture_index = 0,
     };
     ground_draw_params.cpu.* = .{
         vertices = ground_vertices.gpu,

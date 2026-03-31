@@ -171,6 +171,7 @@ camera: Editor_Camera = .{
     position = .{0.0, 1.35, 4.5},
     yaw = 0.0,
     pitch = -0.20,
+    fov_y = PI / 3.0,
     move_speed = 5.0,
     boost_multiplier = 2.2,
     mouse_sensitivity = 0.0060,
@@ -337,12 +338,13 @@ tick :: () {
     io := ImGui.GetIO();
     _ = editor_camera_update(*camera, editor_dt, mx, my, mouse_ok,
         allow_move = !io.WantCaptureKeyboard,
-        allow_look = right_down && !io.WantCaptureMouse);
+        allow_look = right_down && !io.WantCaptureMouse,
+        allow_zoom = !io.WantCaptureMouse);
 
     cam_forward, cam_right, cam_up: Vector3;
     editor_camera_basis(*camera, *cam_forward, *cam_right, *cam_up);
     view := editor_camera_make_view(*camera);
-    proj := make_projection_matrix(PI / 3.0, aspect, 0.05, 120.0);
+    proj := editor_camera_make_projection(*camera, aspect, 0.05, 120.0);
     Gizmo_Render.gizmo_render_set_view_projection(*gizmo_render_ctx, proj * view);
     Gizmo.begin_frame(*gizmo_ctx);
     Gizmo.draw_grid_xz(*gizmo_ctx, center = .{0.0, 0.0, 0.0}, half_extent = 10.0, spacing = 1.0, major_every = 5, line_thickness = 1.0);
@@ -354,7 +356,7 @@ tick :: () {
         camera_forward = cam_forward,
         camera_right   = cam_right,
         camera_up      = cam_up,
-        fov_y = PI / 3.0,
+        fov_y = camera.fov_y,
         mouse_pos = .{cast(float) mx, cast(float) my},
         mouse_valid = mouse_ok,
         mouse_down = left_down,
@@ -384,7 +386,7 @@ tick :: () {
     if !ensure_render_target(win_w, win_h) return;
 
     params.cpu.resolution = .{cast(float) render_width, cast(float) render_height};
-    params.cpu.camera_fov_y = PI / 3.0;
+    params.cpu.camera_fov_y = camera.fov_y;
     params.cpu.camera_tan_half_fov = tan(params.cpu.camera_fov_y * 0.5);
     params.cpu.time = cast(float) frame_count * (1.0 / 60.0);
     params.cpu.camera_pos = camera.position;

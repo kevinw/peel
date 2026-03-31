@@ -10,6 +10,12 @@ Scene_Vertex :: struct {
     _pad0: Vector2;
 }
 
+LOD_Simplify_Attributes :: struct {
+    uv: [2]float;
+    normal: [3]float;
+    tangent: [4]float;
+}
+
 Scene_Material :: struct {
     base_color_factor: Vector4;
     base_color_texture_index: u32;
@@ -573,12 +579,23 @@ compute_model_bounds_from_geo :: (geo: *Scene_Geo, model_index: s32) -> Scene_Bo
 
 Hash_Table :: #import "Hash_Table";
 using,only(Table, table_find, table_reset, table_set) _ :: Hash_Table;
-IMPORTED_SCENE_CACHE_VERSION : u32 : 17;
+IMPORTED_SCENE_CACHE_VERSION : u32 : 19;
 IMPORTED_SCENE_CACHE_MAGIC : u32 : 0x53474d44; // SGMD
+
+STATIC_MESH_LOD_TARGET_RATIOS :: float.[0.18, 0.02, 0.002];
+STATIC_MESH_LOD_TARGET_TRIANGLE_CAPS :: u32.[50000, 5000, 500];
+STATIC_MESH_LOD_TARGET_ERRORS :: float.[0.03, 0.20, 0.45];
+STATIC_MESH_LOD_ATTRIBUTE_WEIGHTS :: float.[
+    2.25, 2.25, // uv
+    0.40, 0.40, 0.40, // normal xyz
+    0.20, 0.20, 0.20, 0.08, // tangent xyzw
+];
+STATIC_MESH_LOD_SIMPLIFY_OPTIONS : u32 : cast(u32) meshopt.Simplify.Regularize;
 
 imported_scene_cache_path :: (model_paths: []string) -> string {
     builder: String_Builder;
     append(*builder, tprint("v%|", IMPORTED_SCENE_CACHE_VERSION));
+    append(*builder, tprint("recipe=%|", imported_scene_recipe_hash()));
     for model_paths {
         modtime, size, _ := file_modtime_and_size(it);
         append(*builder, tprint("%|%|%|", it, size, modtime));
@@ -593,6 +610,7 @@ imported_scene_cache_path :: (model_paths: []string) -> string {
 imported_scene_serialize :: (builder: *[..]u8, scene: Imported_Scene) -> bool {
     cache_put(builder, IMPORTED_SCENE_CACHE_MAGIC);
     cache_put(builder, IMPORTED_SCENE_CACHE_VERSION);
+    cache_put(builder, imported_scene_recipe_hash());
     cache_put(builder, geo_cache_type_hash(type_info(Imported_Scene)));
     return geo_cache_put_reflected(builder, *scene, type_info(Imported_Scene));
 }
@@ -604,11 +622,29 @@ imported_scene_deserialize :: (scene: *Imported_Scene, source_in: string) -> boo
     if !cache_get(*source, *magic) return false, false;
     if !cache_get(*source, *version) return false, false;
     if magic != IMPORTED_SCENE_CACHE_MAGIC || version != IMPORTED_SCENE_CACHE_VERSION return false, false;
+    recipe_hash: u64;
+    if !cache_get(*source, *recipe_hash) return false, false;
+    if recipe_hash != imported_scene_recipe_hash() return false, false;
     schema_hash: u64;
     if !cache_get(*source, *schema_hash) return false, false;
     if schema_hash != geo_cache_type_hash(type_info(Imported_Scene)) return false, false;
     if !geo_cache_get_reflected(*source, scene, type_info(Imported_Scene)) return false, false;
     return true, source.count == 0;
+}
+
+imported_scene_recipe_hash :: () -> u64 {
+    builder: String_Builder;
+    builder.allocator = temp;
+    append(*builder, "static_lod|");
+    for STATIC_MESH_LOD_TARGET_RATIOS append(*builder, tprint("%|", it));
+    for STATIC_MESH_LOD_TARGET_TRIANGLE_CAPS append(*builder, tprint("%|", it));
+    for STATIC_MESH_LOD_TARGET_ERRORS append(*builder, tprint("%|", it));
+    append(*builder, "weights|");
+    for STATIC_MESH_LOD_ATTRIBUTE_WEIGHTS append(*builder, tprint("%|", it));
+    append(*builder, tprint("simplify_options=%|", STATIC_MESH_LOD_SIMPLIFY_OPTIONS));
+    append(*builder, tprint("meshlets=%|%|", SCENE_GEO_MESHLET_MAX_VERTICES, SCENE_GEO_MESHLET_MAX_TRIANGLES));
+    key := builder_to_string(*builder,, temp);
+    return fnv1a_hash(key.data, key.count);
 }
 
 cache_put :: (builder: *[..]u8, x: $T) {
@@ -1194,10 +1230,6 @@ build_static_mesh_lods :: (imported: *Imported_Scene, mesh_index: s32) {
     if mesh.skin_bone_count != 0 return;
     if mesh.morph_target_count != 0 return;
     if mesh.index_count < 192 return;
-
-    target_ratios := float.[0.18, 0.02, 0.002];
-    target_triangle_caps := u32.[50000, 5000, 500];
-    target_errors := float.[0.03, 0.20, 0.45];
     source_triangle_count := cast(u64) mesh.index_count / 3;
 
     source_indices := NewArray(mesh.index_count, u32);
@@ -1207,12 +1239,22 @@ build_static_mesh_lods :: (imported: *Imported_Scene, mesh_index: s32) {
     }
     vertex_positions := cast(*float)(imported.vertices.data + mesh.base_vertex);
     vertex_positions_stride := cast(u64) size_of(Scene_Vertex);
+    simplify_attributes := NewArray(mesh.vertex_count, LOD_Simplify_Attributes);
+    defer array_free(simplify_attributes);
+    for i: 0..cast(s64) mesh.vertex_count-1 {
+        vertex := imported.vertices[mesh.base_vertex + cast(u32) i];
+        simplify_attributes[i] = .{
+            uv = .[vertex.uv.x, vertex.uv.y],
+            normal = .[vertex.normal.x, vertex.normal.y, vertex.normal.z],
+            tangent = .[vertex.tangent.x, vertex.tangent.y, vertex.tangent.z, vertex.tangent.w],
+        };
+    }
     lod_mesh_start := cast(u32) imported.meshes.count;
     lod_mesh_count: u32;
 
-    for ratio, lod_i: target_ratios {
+    for ratio, lod_i: STATIC_MESH_LOD_TARGET_RATIOS {
         ratio_triangle_count := cast(u64) max(12.0, floor(cast(float) source_triangle_count * ratio));
-        target_triangle_count := min(ratio_triangle_count, cast(u64) target_triangle_caps[lod_i]);
+        target_triangle_count := min(ratio_triangle_count, cast(u64) STATIC_MESH_LOD_TARGET_TRIANGLE_CAPS[lod_i]);
         target_index_count := target_triangle_count * 3;
         if target_index_count >= cast(u64) source_indices.count continue;
 
@@ -1220,35 +1262,26 @@ build_static_mesh_lods :: (imported: *Imported_Scene, mesh_index: s32) {
         defer array_free(simplified);
         result_error: float;
         simplified_count: u64;
-        if lod_i >= 1 {
-            sloppy_error := target_errors[lod_i];
-            for attempt: 0..5 {
-                simplified_count = meshopt.simplifySloppy(
-                    simplified.data,
-                    source_indices.data,
-                    cast(u64) source_indices.count,
-                    vertex_positions,
-                    cast(u64) mesh.vertex_count,
-                    vertex_positions_stride,
-                    null,
-                    target_index_count,
-                    sloppy_error,
-                    *result_error);
-                if simplified_count <= target_index_count break;
-                sloppy_error = min(sloppy_error * 1.8 + 0.01, 1.0);
-            }
-        } else {
-            simplified_count = meshopt.simplify(
+        target_error := STATIC_MESH_LOD_TARGET_ERRORS[lod_i];
+        for attempt: 0..5 {
+            simplified_count = meshopt.simplifyWithAttributes(
                 simplified.data,
                 source_indices.data,
                 cast(u64) source_indices.count,
                 vertex_positions,
                 cast(u64) mesh.vertex_count,
                 vertex_positions_stride,
+                cast(*float) simplify_attributes.data,
+                cast(u64) size_of(LOD_Simplify_Attributes),
+                cast(*float) STATIC_MESH_LOD_ATTRIBUTE_WEIGHTS.data,
+                cast(u64) STATIC_MESH_LOD_ATTRIBUTE_WEIGHTS.count,
+                null,
                 target_index_count,
-                target_errors[lod_i],
-                0,
+                target_error,
+                STATIC_MESH_LOD_SIMPLIFY_OPTIONS,
                 *result_error);
+            if simplified_count <= target_index_count break;
+            target_error = min(target_error * 1.8 + 0.01, 1.0);
         }
         if simplified_count < 36 continue;
         simplified_count = (simplified_count / 3) * 3;

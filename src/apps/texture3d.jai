@@ -165,7 +165,8 @@ tick :: () {
 
     _ = editor_camera_update(*texture3d_camera, cast(float) dt, mx, my, mouse_ok,
         allow_move = !io.WantTextInput && !texture3d_orbit_drag_active,
-        allow_look = right_down && !io.WantCaptureMouse && !texture3d_orbit_drag_active);
+        allow_look = right_down && !io.WantCaptureMouse && !texture3d_orbit_drag_active,
+        allow_zoom = !io.WantCaptureMouse && !texture3d_orbit_drag_active);
 
     camera_forward, camera_right, camera_up: Vector3;
     editor_camera_basis(*texture3d_camera, *camera_forward, *camera_right, *camera_up);

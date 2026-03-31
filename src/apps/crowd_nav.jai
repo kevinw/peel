@@ -166,11 +166,12 @@ tick :: () {
 
     _ = editor_camera_update(*crowd_nav_camera, cast(float) dt, mx, my, mouse_ok,
         allow_move = !io.WantTextInput && !crowd_nav_orbit_drag_active,
-        allow_look = right_down && !io.WantCaptureMouse && !crowd_nav_orbit_drag_active);
+        allow_look = right_down && !io.WantCaptureMouse && !crowd_nav_orbit_drag_active,
+        allow_zoom = !io.WantCaptureMouse && !crowd_nav_orbit_drag_active);
 
     view := editor_camera_make_view(*crowd_nav_camera);
     aspect := ifx dims_ok && win_h > 0 then cast(float) win_w / cast(float) win_h else 1.0;
-    proj := make_projection_matrix(PI / 3.2, aspect, 0.05, 80.0);
+    proj := editor_camera_make_projection(*crowd_nav_camera, aspect, 0.05, 80.0);
     view_proj := proj * view;
     light_dir := normalize(Vector3.{0.45, -1.0, 0.35});
 

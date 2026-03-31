@@ -166,13 +166,14 @@ tick :: () {
 
     _ = editor_camera_update(*hex_tactics_camera, cast(float) dt, mx, my, mouse_ok,
         allow_move = !io.WantTextInput && !hex_tactics_orbit_drag_active,
-        allow_look = right_down && !io.WantCaptureMouse && !hex_tactics_orbit_drag_active);
+        allow_look = right_down && !io.WantCaptureMouse && !hex_tactics_orbit_drag_active,
+        allow_zoom = !io.WantCaptureMouse && !hex_tactics_orbit_drag_active);
 
     cam_forward, cam_right, cam_up: Vector3;
     editor_camera_basis(*hex_tactics_camera, *cam_forward, *cam_right, *cam_up);
     view := editor_camera_make_view(*hex_tactics_camera);
     aspect := ifx dims_ok && win_h > 0 then cast(float) win_w / cast(float) win_h else 1.0;
-    proj := make_projection_matrix(PI / 3.2, aspect, 0.05, 120.0);
+    proj := editor_camera_make_projection(*hex_tactics_camera, aspect, 0.05, 120.0);
     view_proj := proj * view;
 
     hex_tactics_time_of_day = clamp(hex_tactics_time_of_day, 0.0, 1.0);

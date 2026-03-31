@@ -26,24 +26,40 @@ Meshlet_Grid_Debug_Mode :: enum u32 {
     MESHLETS;
 }
 
+MESHLET_LIZARD_DEBUG_FLAG_FORCE_LOD0             : u32 : 1 << 0;
+MESHLET_LIZARD_DEBUG_FLAG_FORCE_FIRST_INSTANCE   : u32 : 1 << 1;
+
 Meshlet_Grid_Params :: struct {
     camera_vp: Matrix4;
+    frustum_planes: [6]Vector4;
     eye_position: Vector3;
     debug_mode: u32;
     light_dir: Vector3;
+    base_color_factor: Vector4;
     batch_mesh_index: u32;
+    base_color_texture_index: u32;
+    opacity_texture_index: u32;
+    normal_texture_index: u32;
+    roughness_texture_index: u32;
+    ao_texture_index: u32;
+    alpha_mode: u32;
+    alpha_cutoff: float;
+    sampler_index: u32;
     batch_first_instance: u32;
     batch_instance_count: u32;
     batch_max_meshlet_count: u32;
-    lod_distance_scale: float;
-    lod_distance_power: float;
-    _pad0: Vector2;
+    batch_meshlet_chunk_count: u32;
+    batch_object_group_start: u32;
+    debug_flags: u32;
+    lod_pass: u32;
 }
 
 MESHLET_LIZARD_MODEL_PATH :: "models/nerdy+lizard+3d+model.glb";
-MESHLET_LIZARD_INSTANCE_COUNT :: 40;
-MESHLET_LIZARD_GRID_COLS :: 10;
+MESHLET_LIZARD_INSTANCE_COUNT :: 120;
+MESHLET_LIZARD_GRID_COLS :: 12;
 MESHLET_LIZARD_GRID_ROWS :: 10;
+MESHLET_TASK_EMIT_MESHLET_COUNT : u32 : 64;
+MESHLET_LIZARD_MAX_MESH_GROUPS_PER_DRAW : u32 : 1024;
 
 meshlet_lizard_pipeline: Gpu_Pipeline;
 meshlet_lizard_depth_texture: Gpu_Texture;
@@ -62,6 +78,9 @@ meshlet_lizard_meshlet_vertices: Gpu_View(u32);
 meshlet_lizard_meshlet_triangles: Gpu_View(u32);
 meshlet_lizard_meshlet_bounds: Gpu_View(Vector4);
 meshlet_lizard_instances: Gpu_View(Meshlet_Grid_Instance);
+meshlet_lizard_selected_lods: Gpu_View(u32);
+meshlet_lizard_target_lods: Gpu_View(u32);
+meshlet_lizard_lod_transition_alphas: Gpu_View(float);
 meshlet_lizard_batches: [..]Meshlet_Grid_Draw_Batch;
 meshlet_lizard_model_index: s32 = -1;
 meshlet_lizard_debug_mode: Meshlet_Grid_Debug_Mode = .SHADED;
@@ -80,12 +99,24 @@ meshlet_lizard_auto_orbit: bool;
 meshlet_lizard_orbit_time: float;
 meshlet_lizard_scene_center: Vector3;
 meshlet_lizard_scene_radius: float = 24.0;
-meshlet_lizard_lod_distance_scale: float = 8.0;
-meshlet_lizard_lod_distance_power: float = 1.0;
+meshlet_lizard_lod_screen_radius: float = 420.0;
+meshlet_lizard_lod_distance_power: float = 1.18;
 meshlet_lizard_mesh_source: string;
+meshlet_lizard_mesh_grid_limit: u32;
+meshlet_lizard_debug_flags: u32;
+meshlet_lizard_param_slot_count: s64 = 1;
 
 on_dll_init :: () {
     assert(OS == .MACOS, "meshlet_lizard_grid is currently Metal mesh-shader only.");
+
+    env_force_lod0, env_force_lod0_set := try_parse_env_int("MESHLET_LIZARD_FORCE_LOD0");
+    if env_force_lod0_set && env_force_lod0 > 0 {
+        meshlet_lizard_debug_flags |= MESHLET_LIZARD_DEBUG_FLAG_FORCE_LOD0;
+    }
+    env_force_first_instance, env_force_first_instance_set := try_parse_env_int("MESHLET_LIZARD_FORCE_FIRST_INSTANCE");
+    if env_force_first_instance_set && env_force_first_instance > 0 {
+        meshlet_lizard_debug_flags |= MESHLET_LIZARD_DEBUG_FLAG_FORCE_FIRST_INSTANCE;
+    }
 
     init_meshlet_lizard_pipeline();
 
@@ -112,7 +143,10 @@ tick :: () {
     ensure_meshlet_lizard_depth_target(cast(u32) win_w, cast(u32) win_h);
 
     allow_look := (Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_RIGHT] & .DOWN) != 0;
-    _ = editor_camera_update(*meshlet_lizard_camera, editor_dt, mx, my, mouse_ok, allow_move = true, allow_look = allow_look);
+    _ = editor_camera_update(*meshlet_lizard_camera, editor_dt, mx, my, mouse_ok,
+        allow_move = true,
+        allow_look = allow_look,
+        allow_zoom = true);
 
     if meshlet_lizard_auto_orbit {
         meshlet_lizard_orbit_time += editor_dt;
@@ -127,14 +161,18 @@ tick :: () {
 
     aspect := cast(float) win_w / max(cast(float) win_h, 1.0);
     view := editor_camera_make_view(*meshlet_lizard_camera);
-    proj := make_projection_matrix(PI / 3.2, aspect, 0.05, 300.0);
-    meshlet_lizard_params.cpu[0].camera_vp = proj * view;
-    meshlet_lizard_params.cpu[0].eye_position = meshlet_lizard_camera.position;
-    meshlet_lizard_params.cpu[0].debug_mode = cast(u32) meshlet_lizard_debug_mode;
+    proj := editor_camera_make_projection(*meshlet_lizard_camera, aspect, 0.05, 300.0);
+    camera_vp := proj * view;
     light_dir := normalize(Vector3.{-0.45, -1.0, -0.25});
-    meshlet_lizard_params.cpu[0].light_dir = light_dir;
-    meshlet_lizard_params.cpu[0].lod_distance_scale = meshlet_lizard_lod_distance_scale;
-    meshlet_lizard_params.cpu[0].lod_distance_power = meshlet_lizard_lod_distance_power;
+    base_params := Meshlet_Grid_Params.{
+        camera_vp = camera_vp,
+        frustum_planes = extract_frustum_planes(camera_vp),
+        eye_position = meshlet_lizard_camera.position,
+        debug_mode = cast(u32) meshlet_lizard_debug_mode,
+        light_dir = light_dir,
+        debug_flags = meshlet_lizard_debug_flags,
+    };
+    update_selected_lods(cast(float) win_h);
 
     main_queue := gpu_get_queue(.MAIN, 0);
     result=, cmd_buff := gpu_start_command_recording(main_queue);
@@ -170,16 +208,64 @@ tick :: () {
         meshlet_lizard_meshlets.gpu,
         meshlet_lizard_meshlet_vertices.gpu,
         meshlet_lizard_meshlet_triangles.gpu,
+        meshlet_lizard_meshlet_bounds.gpu,
         meshlet_lizard_instances.gpu,
+        meshlet_lizard_selected_lods.gpu,
+        meshlet_lizard_target_lods.gpu,
+        meshlet_lizard_lod_transition_alphas.gpu,
     ];
+    param_slot: u32;
     for meshlet_lizard_batches {
-        meshlet_lizard_params.cpu[0].batch_mesh_index = it.mesh_index;
-        meshlet_lizard_params.cpu[0].batch_first_instance = it.first_instance;
-        meshlet_lizard_params.cpu[0].batch_instance_count = it.instance_count;
-        meshlet_lizard_params.cpu[0].batch_max_meshlet_count = it.max_meshlet_count;
+        total_task_slots := it.max_meshlet_count;
+        draw_first_instance := it.first_instance;
+        draw_instance_total := it.instance_count;
+        if (meshlet_lizard_debug_flags & MESHLET_LIZARD_DEBUG_FLAG_FORCE_FIRST_INSTANCE) != 0 {
+            draw_instance_total = min(draw_instance_total, cast(u32) 1);
+        }
+        meshlet_chunk_count := max(cast(u32) 1, (total_task_slots + MESHLET_TASK_EMIT_MESHLET_COUNT - 1) / MESHLET_TASK_EMIT_MESHLET_COUNT);
+        max_object_groups_per_draw := draw_instance_total * meshlet_chunk_count;
+        if meshlet_lizard_mesh_grid_limit != 0 {
+            max_object_groups_per_draw = max(cast(u32) 1, meshlet_lizard_mesh_grid_limit / MESHLET_TASK_EMIT_MESHLET_COUNT);
+        }
 
-        draw_result := gpu_draw_meshlets(cmd_buff, meshlet_lizard_params.gpu, meshlet_draw_bindings, .[it.max_meshlet_count, it.instance_count, 1]);
-        assert(draw_result == .SUCCESS, "gpu_draw_meshlets failed: %", draw_result);
+        total_object_groups := draw_instance_total * meshlet_chunk_count;
+        object_group_start: u32;
+        while object_group_start < total_object_groups {
+            draw_object_group_count := min(max_object_groups_per_draw, total_object_groups - object_group_start);
+
+            draw_instance_start := object_group_start / meshlet_chunk_count;
+            draw_group_end := object_group_start + draw_object_group_count;
+            draw_instance_end := min(draw_instance_total, (draw_group_end + meshlet_chunk_count - 1) / meshlet_chunk_count);
+            draw_instance_count := draw_instance_end - draw_instance_start;
+            if draw_instance_count > 0 {
+                assert(param_slot < cast(u32) meshlet_lizard_param_slot_count,
+                    "meshlet_lizard param ring exhausted: slot=% capacity=%", param_slot, meshlet_lizard_param_slot_count);
+                batch_material := meshlet_lizard_materials.cpu[meshlet_lizard_meshes.cpu[it.mesh_index].material_index];
+                primary_params := meshlet_lizard_params_slot(param_slot);
+                primary_params.cpu.* = base_params;
+                primary_params.cpu.base_color_factor = batch_material.base_color_factor;
+                primary_params.cpu.batch_mesh_index = it.mesh_index;
+                primary_params.cpu.base_color_texture_index = batch_material.base_color_texture_index;
+                primary_params.cpu.opacity_texture_index = batch_material.opacity_texture_index;
+                primary_params.cpu.normal_texture_index = batch_material.normal_texture_index;
+                primary_params.cpu.roughness_texture_index = batch_material.roughness_texture_index;
+                primary_params.cpu.ao_texture_index = batch_material.ao_texture_index;
+                primary_params.cpu.alpha_mode = batch_material.alpha_mode;
+                primary_params.cpu.alpha_cutoff = batch_material.alpha_cutoff;
+                primary_params.cpu.sampler_index = batch_material.sampler_index;
+                primary_params.cpu.batch_first_instance = draw_first_instance + draw_instance_start;
+                primary_params.cpu.batch_instance_count = draw_instance_count;
+                primary_params.cpu.batch_max_meshlet_count = it.max_meshlet_count;
+                primary_params.cpu.batch_meshlet_chunk_count = meshlet_chunk_count;
+                primary_params.cpu.batch_object_group_start = object_group_start - draw_instance_start * meshlet_chunk_count;
+                primary_params.cpu.lod_pass = 0;
+
+                draw_result := gpu_draw_meshlets(cmd_buff, primary_params.gpu, meshlet_draw_bindings, .[draw_object_group_count, 1, 1]);
+                assert(draw_result == .SUCCESS, "gpu_draw_meshlets failed: %", draw_result);
+                param_slot += 1;
+            }
+            object_group_start += draw_object_group_count;
+        }
     }
 
     submit_and_present_with_ui(cmd_buff);
@@ -196,15 +282,26 @@ show_ui :: () {
     Text("Model: %", MESHLET_LIZARD_MODEL_PATH);
     Text("Batches: %  Instances: %", meshlet_lizard_batches.count, MESHLET_LIZARD_INSTANCE_COUNT);
     Text("Max Meshlets / Mesh: %", meshlet_lizard_geo.max_meshlet_count);
+    Text("Mesh Grid Limit: %", meshlet_lizard_mesh_grid_limit);
     Checkbox("Auto Orbit", *meshlet_lizard_auto_orbit);
     if RadioButton("Shaded", meshlet_lizard_debug_mode == .SHADED) meshlet_lizard_debug_mode = .SHADED;
     SameLine();
     if RadioButton("LODs", meshlet_lizard_debug_mode == .LODS) meshlet_lizard_debug_mode = .LODS;
     SameLine();
     if RadioButton("Meshlets", meshlet_lizard_debug_mode == .MESHLETS) meshlet_lizard_debug_mode = .MESHLETS;
-    SliderFloat("LOD Distance", *meshlet_lizard_lod_distance_scale, 1.0, 20.0);
+    SliderFloat("LOD Screen Radius", *meshlet_lizard_lod_screen_radius, 8.0, 1024.0);
     SliderFloat("LOD Power", *meshlet_lizard_lod_distance_power, 0.5, 2.0);
-    Text("Mesh+Fragment via Jai-Shader-Transpiler");
+    force_lod0 := (meshlet_lizard_debug_flags & MESHLET_LIZARD_DEBUG_FLAG_FORCE_LOD0) != 0;
+    if Checkbox("Force LOD0", *force_lod0) {
+        if force_lod0 meshlet_lizard_debug_flags |= MESHLET_LIZARD_DEBUG_FLAG_FORCE_LOD0;
+        else          meshlet_lizard_debug_flags &= ~MESHLET_LIZARD_DEBUG_FLAG_FORCE_LOD0;
+    }
+    force_first_instance := (meshlet_lizard_debug_flags & MESHLET_LIZARD_DEBUG_FLAG_FORCE_FIRST_INSTANCE) != 0;
+    if Checkbox("Force First Instance", *force_first_instance) {
+        if force_first_instance meshlet_lizard_debug_flags |= MESHLET_LIZARD_DEBUG_FLAG_FORCE_FIRST_INSTANCE;
+        else                    meshlet_lizard_debug_flags &= ~MESHLET_LIZARD_DEBUG_FLAG_FORCE_FIRST_INSTANCE;
+    }
+    Text("Task+Mesh+Fragment via Jai-Shader-Transpiler");
     Text("RMB look, WASD move, Shift boost");
 
     Separator();
@@ -223,26 +320,29 @@ show_ui :: () {
 
 #scope_file
 init_meshlet_lizard_pipeline :: () {
-    shader :: #run get_transpiled_mesh_pipeline(.METAL, mesh_main, fragment_main);
-    meshlet_lizard_mesh_source = copy_string(shader.mesh_source);
+    shader :: #run get_transpiled_task_mesh_pipeline(.METAL, task_main, mesh_main, fragment_main);
+    meshlet_lizard_mesh_source = copy_string(tprint("%\n%", shader.task_source, shader.mesh_source));
     mesh_desc := Gpu_Mesh_Pipeline_Desc.{
-        task_shader = .{},
+        task_shader = cast([]u8) meshlet_lizard_mesh_source,
         mesh_shader = cast([]u8) meshlet_lizard_mesh_source,
         pixel_shader = cast([]u8) shader.pixel_source,
         raster_desc = .{
-            cull = .NONE,
+            cull = .CW,
             depth_format = .D32_SFLOAT,
             color_targets = .[
                 .{format = .B8G8R8A8_UNORM},
             ],
         },
-        task_threads = .[0, 0, 0],
+        task_threads = .[1, 1, 1],
         mesh_threads = .[1, 1, 1],
         payload_memory_length = cast(u32) shader.payload_memory_length,
-        max_total_threadgroups_per_mesh_grid = 0,
+        max_total_threadgroups_per_mesh_grid = MESHLET_LIZARD_MAX_MESH_GROUPS_PER_DRAW,
     };
     meshlet_lizard_pipeline = gpu_create_mesh_pipeline(mesh_desc);
     assert(meshlet_lizard_pipeline != 0, "Failed to create meshlet lizard mesh pipeline.");
+    meshlet_lizard_mesh_grid_limit = gpu_get_mesh_pipeline_max_total_threadgroups_per_grid(meshlet_lizard_pipeline);
+    if meshlet_lizard_mesh_grid_limit == 0 meshlet_lizard_mesh_grid_limit = MESHLET_LIZARD_MAX_MESH_GROUPS_PER_DRAW;
+    log("meshlet_lizard mesh grid limit=%", meshlet_lizard_mesh_grid_limit);
 }
 
 rebuild_meshlet_lizard_scene :: () {
@@ -263,15 +363,31 @@ rebuild_meshlet_lizard_scene :: () {
     used_rows := (MESHLET_LIZARD_INSTANCE_COUNT + cast(u32) MESHLET_LIZARD_GRID_COLS - 1) / cast(u32) MESHLET_LIZARD_GRID_COLS;
     grid_width := cast(float) max(cast(s32) used_cols - 1, 0) * spacing;
     grid_depth := cast(float) max(cast(s32) used_rows - 1, 0) * spacing;
-    meshlet_lizard_scene_center = .{0.0, 0.0, 0.0};
-    meshlet_lizard_scene_radius = max(max(grid_width, grid_depth) * 0.55, spacing * 1.75);
+    scene_min := Vector3.{1.0e30, 1.0e30, 1.0e30};
+    scene_max := Vector3.{-1.0e30, -1.0e30, -1.0e30};
 
     total_instance_count := cast(s64) model_mesh_ref_count(model);
     total_instance_count *= MESHLET_LIZARD_INSTANCE_COUNT;
 
+    limit := ifx meshlet_lizard_mesh_grid_limit != 0 then meshlet_lizard_mesh_grid_limit else MESHLET_LIZARD_MAX_MESH_GROUPS_PER_DRAW;
+    meshlet_lizard_param_slot_count = 0;
+    for node_index: model.node_start .. model.node_start + model.node_count - 1 {
+        node := meshlet_lizard_geo.nodes[node_index];
+        if node.mesh_ref_count == 0 continue;
+        for mesh_ref_offset: 0..node.mesh_ref_count-1 {
+            mesh_index := meshlet_lizard_geo.node_mesh_refs[node.first_mesh_ref + mesh_ref_offset];
+            meshlet_chunk_count := cast(s64) ((mesh_max_meshlet_count(mesh_index) + MESHLET_TASK_EMIT_MESHLET_COUNT - 1) / MESHLET_TASK_EMIT_MESHLET_COUNT);
+            total_object_groups := max(meshlet_chunk_count, cast(s64) 1) * cast(s64) MESHLET_LIZARD_INSTANCE_COUNT;
+            max_object_groups_per_draw := max(cast(s64) 1, cast(s64) limit / cast(s64) MESHLET_TASK_EMIT_MESHLET_COUNT);
+            draw_count := (total_object_groups + max_object_groups_per_draw - 1) / max_object_groups_per_draw;
+            meshlet_lizard_param_slot_count += max(draw_count, cast(s64) 1) * 2;
+        }
+    }
+    meshlet_lizard_param_slot_count = max(meshlet_lizard_param_slot_count, cast(s64) 1);
+
     total_bytes :=
         1024 +
-        size_of(Meshlet_Grid_Params) +
+        meshlet_lizard_param_slot_count * SGPU_FRAMES_IN_FLIGHT * size_of(Meshlet_Grid_Params) +
         meshlet_lizard_geo.vertices.cpu.count * size_of(Scene_Vertex) +
         meshlet_lizard_geo.materials.cpu.count * size_of(Scene_Material) +
         meshlet_lizard_geo.meshes.count * size_of(Scene_Mesh) +
@@ -280,12 +396,15 @@ rebuild_meshlet_lizard_scene :: () {
         meshlet_lizard_geo.meshlet_vertices.cpu.count * size_of(u32) +
         meshlet_lizard_geo.meshlet_triangles.cpu.count * size_of(u32) +
         meshlet_lizard_geo.meshlet_bounds.cpu.count * size_of(Vector4) +
-        total_instance_count * size_of(Meshlet_Grid_Instance);
+        total_instance_count * size_of(Meshlet_Grid_Instance) +
+        total_instance_count * size_of(u32) +
+        total_instance_count * size_of(u32) +
+        total_instance_count * size_of(float);
 
     meshlet_lizard_arena = gpu_make_arena(total_bytes, label = "meshlet lizard arena");
     assert(meshlet_lizard_arena.cpu != null, "Failed to allocate meshlet lizard arena.");
 
-    meshlet_lizard_params = gpu_alloc_view(*meshlet_lizard_arena, Meshlet_Grid_Params, 1);
+    meshlet_lizard_params = gpu_alloc_view(*meshlet_lizard_arena, Meshlet_Grid_Params, meshlet_lizard_param_slot_count * SGPU_FRAMES_IN_FLIGHT);
     meshlet_lizard_vertices = gpu_alloc_view(*meshlet_lizard_arena, Scene_Vertex, meshlet_lizard_geo.vertices.cpu.count);
     meshlet_lizard_materials = gpu_alloc_view(*meshlet_lizard_arena, Scene_Material, meshlet_lizard_geo.materials.cpu.count);
     meshlet_lizard_meshes = gpu_alloc_view(*meshlet_lizard_arena, Scene_Mesh, meshlet_lizard_geo.meshes.count);
@@ -295,6 +414,9 @@ rebuild_meshlet_lizard_scene :: () {
     meshlet_lizard_meshlet_triangles = gpu_alloc_view(*meshlet_lizard_arena, u32, meshlet_lizard_geo.meshlet_triangles.cpu.count);
     meshlet_lizard_meshlet_bounds = gpu_alloc_view(*meshlet_lizard_arena, Vector4, meshlet_lizard_geo.meshlet_bounds.cpu.count);
     meshlet_lizard_instances = gpu_alloc_view(*meshlet_lizard_arena, Meshlet_Grid_Instance, total_instance_count);
+    meshlet_lizard_selected_lods = gpu_alloc_view(*meshlet_lizard_arena, u32, total_instance_count);
+    meshlet_lizard_target_lods = gpu_alloc_view(*meshlet_lizard_arena, u32, total_instance_count);
+    meshlet_lizard_lod_transition_alphas = gpu_alloc_view(*meshlet_lizard_arena, float, total_instance_count);
 
     memcpy(meshlet_lizard_vertices.cpu.data, meshlet_lizard_geo.vertices.cpu.data, meshlet_lizard_geo.vertices.cpu.count * size_of(Scene_Vertex));
     memcpy(meshlet_lizard_materials.cpu.data, meshlet_lizard_geo.materials.cpu.data, meshlet_lizard_geo.materials.cpu.count * size_of(Scene_Material));
@@ -304,12 +426,11 @@ rebuild_meshlet_lizard_scene :: () {
     memcpy(meshlet_lizard_meshlet_vertices.cpu.data, meshlet_lizard_geo.meshlet_vertices.cpu.data, meshlet_lizard_geo.meshlet_vertices.cpu.count * size_of(u32));
     memcpy(meshlet_lizard_meshlet_triangles.cpu.data, meshlet_lizard_geo.meshlet_triangles.cpu.data, meshlet_lizard_geo.meshlet_triangles.cpu.count * size_of(u32));
     memcpy(meshlet_lizard_meshlet_bounds.cpu.data, meshlet_lizard_geo.meshlet_bounds.cpu.data, meshlet_lizard_geo.meshlet_bounds.cpu.count * size_of(Vector4));
-
-    meshlet_lizard_params.cpu[0] = .{
-        light_dir = .{-0.45, -1.0, -0.25},
-        lod_distance_scale = meshlet_lizard_lod_distance_scale,
-        lod_distance_power = meshlet_lizard_lod_distance_power,
-    };
+    for i: 0..total_instance_count-1 {
+        meshlet_lizard_selected_lods.cpu[i] = 0;
+        meshlet_lizard_target_lods.cpu[i] = 0;
+        meshlet_lizard_lod_transition_alphas.cpu[i] = 0.0;
+    }
 
     instance_cursor: u32;
     for node_index: model.node_start .. model.node_start + model.node_count - 1 {
@@ -317,6 +438,9 @@ rebuild_meshlet_lizard_scene :: () {
         if node.mesh_ref_count == 0 continue;
         for mesh_ref_offset: 0..node.mesh_ref_count-1 {
             mesh_index := meshlet_lizard_geo.node_mesh_refs[node.first_mesh_ref + mesh_ref_offset];
+            meshlet_mesh := meshlet_lizard_geo.meshlet_meshes.cpu[mesh_index];
+            mesh_local_center := meshlet_mesh.bounds_center_radius.xyz;
+            mesh_local_radius := max(meshlet_mesh.bounds_center_radius.w, 0.001);
             batch := array_add(*meshlet_lizard_batches);
             batch.mesh_index = mesh_index;
             batch.first_instance = instance_cursor;
@@ -329,17 +453,51 @@ rebuild_meshlet_lizard_scene :: () {
                 tx := col * spacing - grid_width * 0.5;
                 tz := row * spacing - grid_depth * 0.5;
                 root := make_translation_matrix4(.{tx, -model_center.y, tz});
-                meshlet_lizard_instances.cpu[instance_cursor] = .{
-                    world = root * node.world,
-                };
+                world := root * node.world;
+                meshlet_lizard_instances.cpu[instance_cursor] = .{ world = world };
+                world_center4 := world * Vector4.{mesh_local_center.x, mesh_local_center.y, mesh_local_center.z, 1.0};
+                world_center := Vector3.{world_center4.x, world_center4.y, world_center4.z};
+                mesh_radius3 := Vector3.{mesh_local_radius, mesh_local_radius, mesh_local_radius};
+                scene_min = min(scene_min, world_center - mesh_radius3);
+                scene_max = max(scene_max, world_center + mesh_radius3);
                 instance_cursor += 1;
             }
         }
     }
 
-    camera_height := max(model_extent.y, 1.0) * 4.0;
-    meshlet_lizard_camera.position = meshlet_lizard_scene_center + .{0.0, camera_height, meshlet_lizard_scene_radius * 1.8};
+    meshlet_lizard_scene_center = (scene_min + scene_max) * 0.5;
+    scene_extent := scene_max - scene_min;
+    meshlet_lizard_scene_radius = max(max(scene_extent.x, scene_extent.z) * 0.6, spacing * 0.75);
+    camera_height := max(scene_extent.y, 1.0) * 0.65;
+    meshlet_lizard_camera.position = meshlet_lizard_scene_center + .{0.0, camera_height, meshlet_lizard_scene_radius * 0.55};
     editor_camera_set_look_at(*meshlet_lizard_camera, meshlet_lizard_scene_center);
+
+    if (meshlet_lizard_debug_flags & MESHLET_LIZARD_DEBUG_FLAG_FORCE_FIRST_INSTANCE) != 0 && meshlet_lizard_batches.count > 0 {
+        first_batch := meshlet_lizard_batches[0];
+        first_meshlet_mesh := meshlet_lizard_geo.meshlet_meshes.cpu[first_batch.mesh_index];
+        first_instance := meshlet_lizard_instances.cpu[first_batch.first_instance];
+        focus_center4 := first_instance.world * Vector4.{
+            first_meshlet_mesh.bounds_center_radius.x,
+            first_meshlet_mesh.bounds_center_radius.y,
+            first_meshlet_mesh.bounds_center_radius.z,
+            1.0,
+        };
+        focus_center := Vector3.{focus_center4.x, focus_center4.y, focus_center4.z};
+        focus_radius := max(first_meshlet_mesh.bounds_center_radius.w, 0.001);
+        meshlet_lizard_scene_center = focus_center;
+        meshlet_lizard_scene_radius = focus_radius * 2.2;
+        meshlet_lizard_camera.position = focus_center + .{focus_radius * 0.4, focus_radius * 0.2, focus_radius * 1.9};
+        editor_camera_set_look_at(*meshlet_lizard_camera, focus_center);
+    }
+
+    if meshlet_lizard_batches.count > 0 {
+        mesh := meshlet_lizard_geo.meshes[meshlet_lizard_batches[0].mesh_index];
+        log("meshlet_lizard batch0 base_mesh=% meshlets=% lod_meshes=%", meshlet_lizard_batches[0].mesh_index, meshlet_lizard_geo.meshlet_meshes.cpu[meshlet_lizard_batches[0].mesh_index].meshlet_count, mesh.lod_mesh_count);
+        for lod_offset: 0..mesh.lod_mesh_count-1 {
+            lod_mesh_index := mesh.lod_mesh_start + lod_offset;
+            log("meshlet_lizard batch0 lod% mesh=% meshlets=% tris=%", lod_offset + 1, lod_mesh_index, meshlet_lizard_geo.meshlet_meshes.cpu[lod_mesh_index].meshlet_count, meshlet_lizard_geo.meshes[lod_mesh_index].index_count / 3);
+        }
+    }
 }
 
 mesh_max_meshlet_count :: (mesh_index: u32) -> u32 {
@@ -358,6 +516,94 @@ model_mesh_ref_count :: (model: Scene_Model) -> s64 {
         total += meshlet_lizard_geo.nodes[node_index].mesh_ref_count;
     }
     return total;
+}
+
+mesh_world_max_scale :: (world: Matrix4) -> float {
+    axis_x4 := world * Vector4.{1.0, 0.0, 0.0, 0.0};
+    axis_y4 := world * Vector4.{0.0, 1.0, 0.0, 0.0};
+    axis_z4 := world * Vector4.{0.0, 0.0, 1.0, 0.0};
+    axis_x := Vector3.{axis_x4.x, axis_x4.y, axis_x4.z};
+    axis_y := Vector3.{axis_y4.x, axis_y4.y, axis_y4.z};
+    axis_z := Vector3.{axis_z4.x, axis_z4.y, axis_z4.z};
+    return max(length(axis_x), max(length(axis_y), length(axis_z)));
+}
+
+lod_metric_for_instance :: (base_mesh_index: u32, world: Matrix4, viewport_height: float) -> float {
+    meshlet_mesh := meshlet_lizard_geo.meshlet_meshes.cpu[base_mesh_index];
+    local_center := meshlet_mesh.bounds_center_radius.xyz;
+    local_radius := max(meshlet_mesh.bounds_center_radius.w, 0.001);
+    world_center4 := world * Vector4.{local_center.x, local_center.y, local_center.z, 1.0};
+    world_center := Vector3.{world_center4.x, world_center4.y, world_center4.z};
+    world_radius := max(local_radius * mesh_world_max_scale(world), 0.001);
+    distance_to_eye := max(distance(meshlet_lizard_camera.position, world_center), 0.001);
+    tan_half_fov := max(tan(meshlet_lizard_camera.fov_y * 0.5), 0.0001);
+    projected_radius_px := world_radius * viewport_height / max(2.0 * distance_to_eye * tan_half_fov, 0.0001);
+    return pow(meshlet_lizard_lod_screen_radius / max(projected_radius_px, 0.0001), meshlet_lizard_lod_distance_power);
+}
+
+lod_slot_for_metric :: (metric: float, max_lod: u32) -> u32 {
+    lod_slot: u32;
+    while lod_slot < max_lod {
+        threshold := cast(float) (lod_slot + 1);
+        if metric < threshold break;
+        lod_slot += 1;
+    }
+    return lod_slot;
+}
+
+update_selected_lods :: (viewport_height: float) {
+    if (meshlet_lizard_debug_flags & MESHLET_LIZARD_DEBUG_FLAG_FORCE_LOD0) != 0 {
+        for i: 0..meshlet_lizard_selected_lods.cpu.count-1 {
+            meshlet_lizard_selected_lods.cpu[i] = 0;
+            meshlet_lizard_target_lods.cpu[i] = 0;
+            meshlet_lizard_lod_transition_alphas.cpu[i] = 0.0;
+        }
+        return;
+    }
+
+    for meshlet_lizard_batches {
+        max_lod := meshlet_lizard_meshes.cpu[it.mesh_index].lod_mesh_count;
+        for instance_offset: 0..it.instance_count-1 {
+            instance_index := it.first_instance + instance_offset;
+            metric := lod_metric_for_instance(it.mesh_index, meshlet_lizard_instances.cpu[instance_index].world, viewport_height);
+            selected_lod := lod_slot_for_metric(metric, max_lod);
+            meshlet_lizard_selected_lods.cpu[instance_index] = selected_lod;
+            meshlet_lizard_target_lods.cpu[instance_index] = selected_lod;
+            meshlet_lizard_lod_transition_alphas.cpu[instance_index] = 0.0;
+        }
+    }
+}
+
+meshlet_lizard_params_slot :: (slot: u32, frame_number: s64 = -1) -> Gpu_Buffer(Meshlet_Grid_Params) #expand {
+    idx := sgpu_frame_ring_index(frame_number);
+    base := idx * meshlet_lizard_param_slot_count + cast(s64) slot;
+    return .{
+        cpu = meshlet_lizard_params.cpu.data + base,
+        gpu = meshlet_lizard_params.gpu + (base * size_of(Meshlet_Grid_Params)).(Gpu_Ptr),
+    };
+}
+
+normalize_plane4 :: (plane: Vector4) -> Vector4 {
+    n := Vector3.{plane.x, plane.y, plane.z};
+    len := length(n);
+    if len <= 0.000001 return plane;
+    inv_len := 1.0 / len;
+    return plane * inv_len;
+}
+
+extract_frustum_planes :: (m: Matrix4) -> [6]Vector4 {
+    row0 := m.v[0];
+    row1 := m.v[1];
+    row2 := m.v[2];
+    row3 := m.v[3];
+    return .[
+        normalize_plane4(row3 + row0),
+        normalize_plane4(row3 - row0),
+        normalize_plane4(row3 + row1),
+        normalize_plane4(row3 - row1),
+        normalize_plane4(row3 + row2),
+        normalize_plane4(row3 - row2),
+    ];
 }
 
 ensure_meshlet_lizard_depth_target :: (width: u32, height: u32) {
@@ -388,4 +634,5 @@ ImGui :: #import "ImGui";
 Input :: #import "Input";
 #import "String";
 #import "Math";
+using,only(try_parse_env_int) _ :: #import "Env_Vars";
 #load "shaders/meshlet_lizard_grid_shader.jai";

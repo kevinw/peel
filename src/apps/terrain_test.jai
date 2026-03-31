@@ -89,8 +89,7 @@ terrain_mouse_world_ray :: (mouse_x: float, mouse_y: float, viewport: Vector2, c
     forward, right, cam_up: Vector3;
     editor_camera_basis(camera, *forward, *right, *cam_up);
 
-    fov_y := PI / 3.2;
-    tan_half_fov := tan(fov_y * 0.5);
+    tan_half_fov := tan(camera.fov_y * 0.5);
     aspect := viewport.x / viewport.y;
 
     dir := forward + right * (nx * aspect * tan_half_fov) + cam_up * (ny * tan_half_fov);
@@ -206,7 +205,8 @@ tick :: () {
     io := ImGui.GetIO();
     camera_update := editor_camera_update(*terrain_camera, dt, mx, my, mouse_ok,
         allow_move = !io.WantCaptureKeyboard,
-        allow_look = right_mouse_down && has_dims && !io.WantCaptureMouse);
+        allow_look = right_mouse_down && has_dims && !io.WantCaptureMouse,
+        allow_zoom = !io.WantCaptureMouse);
     keyboard_move := camera_update.moved;
     used_mouse_look := camera_update.looked;
 
@@ -252,7 +252,7 @@ tick :: () {
 
     aspect := viewport.x / max(viewport.y, 1.0);
     view := editor_camera_make_view(*terrain_camera);
-    proj := make_projection_matrix(PI / 3.2, aspect, 0.05, 120.0);
+    proj := editor_camera_make_projection(*terrain_camera, aspect, 0.05, 120.0);
     Terrain_Render.set_view_projection(*terrain_render_ctx, proj * view);
 
     main_queue := gpu_get_queue(.MAIN, 0);

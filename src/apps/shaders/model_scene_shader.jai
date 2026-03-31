@@ -163,6 +163,15 @@ Ground_Fragment_In :: struct {
     shadow_meta: Vector4;
 }
 
+Ground_Shadow_Vertex_Out :: struct {
+    gl_Position: Vector4; @position
+    depth01: float;
+}
+
+Ground_Shadow_Fragment_In :: struct {
+    depth01: float;
+}
+
 Grass_Vertex_In :: struct {
     vertex_id: u32; @SV_VertexID
     instance_id: u32; @SV_InstanceID
@@ -615,6 +624,26 @@ ground_fragment_main :: (using in: Ground_Fragment_In, params: *Ground_Draw_Para
     color := base_rgb * indirect + base_rgb * diffuse + sun_col * specular;
     color = model_scene_apply_atmosphere(color, world_pos, params.camera_pos, sun_dir);
     return .{color.x, color.y, color.z, tex.w};
+} @fragment_shader
+
+ground_shadow_vertex_main :: (using in: Ground_Vertex_In, params: *Ground_Draw_Params) -> Ground_Shadow_Vertex_Out {
+    using out: Ground_Shadow_Vertex_Out;
+    vertex_index := params.indices[vertex_id];
+    vertex := params.vertices[vertex_index];
+    instance := params.instances[instance_id];
+
+    world_pos4 := instance.world * Vector4.{vertex.position.x, vertex.position.y, vertex.position.z, 1.0};
+    light_view_proj := load_shadow_view_proj(instance);
+    light_clip := light_view_proj * world_pos4;
+    gl_Position = light_clip;
+    depth01 = clamp(light_clip.z, 0.0, 1.0);
+    return out;
+} @vertex_shader
+
+ground_shadow_fragment_main :: (using in: Ground_Shadow_Fragment_In, params: *Ground_Draw_Params) -> struct { out_color: Vector4; } {
+    _ = params;
+    d := clamp(depth01, 0.0, 1.0);
+    return .{out_color = .{d, d, d, 1.0}};
 } @fragment_shader
 
 model_scene_grass_shadow_vertex_main :: (using in: Grass_Vertex_In, params: *Grass_Shadow_Params) -> Grass_Shadow_Vertex_Out {

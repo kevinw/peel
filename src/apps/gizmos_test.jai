@@ -6,6 +6,7 @@ gizmos_test_camera: Editor_Camera = .{
     position = .{-2.2, 1.8, 2.6},
     yaw = 0.72,
     pitch = -0.22,
+    fov_y = PI / 3.0,
     move_speed = 3.8,
     boost_multiplier = 2.2,
     mouse_sensitivity = 0.0062,
@@ -138,15 +139,15 @@ tick :: () {
 
     _ = editor_camera_update(*gizmos_test_camera, editor_dt, mx, my, mouse_ok,
         allow_move = !io.WantTextInput,
-        allow_look = right_down && !io.WantCaptureMouse);
+        allow_look = right_down && !io.WantCaptureMouse,
+        allow_zoom = !io.WantCaptureMouse);
 
     cam_pos := gizmos_test_camera.position;
     cam_forward, cam_right, cam_up: Vector3;
     editor_camera_basis(*gizmos_test_camera, *cam_forward, *cam_right, *cam_up);
 
-    fov_y := PI / 3.0;
     view := editor_camera_make_view(*gizmos_test_camera);
-    proj := make_projection_matrix(fov_y, aspect, 0.05, 100.0);
+    proj := editor_camera_make_projection(*gizmos_test_camera, aspect, 0.05, 100.0);
     Gizmo_Render.gizmo_render_set_view_projection(*gizmo_render_ctx, proj * view);
 
     frame := Manip_Frame_Input.{
@@ -155,7 +156,7 @@ tick :: () {
         camera_forward = cam_forward,
         camera_right = cam_right,
         camera_up = cam_up,
-        fov_y = fov_y,
+        fov_y = gizmos_test_camera.fov_y,
         mouse_pos = .{cast(float) mx, cast(float) my},
         mouse_valid = mouse_ok,
         mouse_down = left_down,

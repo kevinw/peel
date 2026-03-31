@@ -25,12 +25,21 @@ mesh_main :: () {
     color_bias := payload.color_bias;
     x_offset := (group_index - 1.0) * 0.6;
     mesh_set_output_counts(3, 1);
-    mesh_set_vertex_position(0, .{ x_offset + 0.0, -0.5, 0.0, 1.0 });
-    mesh_set_vertex_position(1, .{ x_offset + 0.5,  0.5, 0.0, 1.0 });
-    mesh_set_vertex_position(2, .{ x_offset - 0.5,  0.5, 0.0, 1.0 });
-    mesh_set_vertex_color(0, .{0.5 + color_bias, 0.2, 0.2});
-    mesh_set_vertex_color(1, .{0.2, 0.6 + color_bias, 0.2});
-    mesh_set_vertex_color(2, .{0.2, 0.4, 0.7 + color_bias * 0.6666667});
+    v0: Triangle_Fragment_In = .{
+        position = .{ x_offset + 0.0, -0.5, 0.0, 1.0 },
+        color = .{0.5 + color_bias, 0.2, 0.2},
+    };
+    v1: Triangle_Fragment_In = .{
+        position = .{ x_offset + 0.5,  0.5, 0.0, 1.0 },
+        color = .{0.2, 0.6 + color_bias, 0.2},
+    };
+    v2: Triangle_Fragment_In = .{
+        position = .{ x_offset - 0.5,  0.5, 0.0, 1.0 },
+        color = .{0.2, 0.4, 0.7 + color_bias * 0.6666667},
+    };
+    mesh_set_vertex(0, v0);
+    mesh_set_vertex(1, v1);
+    mesh_set_vertex(2, v2);
     mesh_set_triangle(0, 0, 1, 2);
 } @mesh_shader
 

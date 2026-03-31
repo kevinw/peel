@@ -124,7 +124,8 @@ tick :: () {
 
     _ = editor_camera_update(*raytracer_camera, dt, mx, my, mouse_ok,
         allow_move = !io.WantTextInput,
-        allow_look = mouse_ok && dims_ok && win_w > 0 && win_h > 0 && right_down && !io.WantCaptureMouse);
+        allow_look = mouse_ok && dims_ok && win_w > 0 && win_h > 0 && right_down && !io.WantCaptureMouse,
+        allow_zoom = !io.WantCaptureMouse);
 
     cam_forward, cam_right, cam_up: Vector3;
     editor_camera_basis(*raytracer_camera, *cam_forward, *cam_right, *cam_up);
