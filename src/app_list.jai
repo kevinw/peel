@@ -18,6 +18,7 @@ APP_FILES :: string.[
     "gizmos_test.jai",
     "terrain_test.jai",
     "texture3d.jai",
+    "mesh_shader_triangle.jai",
 ];
 
 active_app_filename :: () -> string {

@@ -12,6 +12,10 @@
     "command": "jai ~/src/peel/build.jai - src/apps/brickmap.jai -run -dll"
   },
   {
+    "label": "brickmap_graph",
+    "command": "jai ~/src/peel/build.jai - src/apps/brickmap_graph.jai -run -dll"
+  },
+  {
     "label": "caustics_pool",
     "command": "jai ~/src/peel/build.jai - src/apps/caustics_pool.jai -run -dll"
   },
@@ -42,6 +46,14 @@
   {
     "label": "inspiration_test",
     "command": "jai ~/src/peel/build.jai - src/apps/inspiration_test.jai -run -dll"
+  },
+  {
+    "label": "mesh_shader_triangle",
+    "command": "jai ~/src/peel/build.jai - src/apps/mesh_shader_triangle.jai -run -dll"
+  },
+  {
+    "label": "meshlet_lizard_grid",
+    "command": "jai ~/src/peel/build.jai - src/apps/meshlet_lizard_grid.jai -run -dll"
   },
   {
     "label": "model_scene",
