@@ -10,7 +10,7 @@ Editor_Camera :: struct {
     move_speed: float = 5.0;
     boost_multiplier: float = 2.0;
     mouse_sensitivity: float = 0.0032;
-    mouse_wheel_fov_sensitivity: float = 0.08;
+    mouse_wheel_fov_sensitivity: float = -0.08;
     pitch_min: float = -1.5;
     pitch_max: float = 1.5;
     fov_y_min: float = PI / 12.0;
