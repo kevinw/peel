@@ -1,26 +1,36 @@
 graphics_pipeline: Gpu_Pipeline;
 combined_task_mesh_source: string;
+payload_size_bytes: s64;
+payload_memory_length: s64;
 
 Triangle_Fragment_In :: struct {
     position: Vector4; @SV_Position
     color: Vector3; @TEXCOORD0
 }
 
+Payload :: struct {
+    triangle_index: u32;
+    color_bias: float;
+}
+
 task_main :: () {
-    task_payload_store_u32(task_group_id_x());
+    task_payload_ptr(Payload).triangle_index = task_group_id_x();
+    task_payload_ptr(Payload).color_bias = cast(float) task_group_id_x() * 0.15;
     task_set_mesh_groups(1, 1, 1);
 } @task_shader
 
 mesh_main :: () {
-    group_index := cast(float) mesh_payload_load_u32();
+    payload := mesh_payload_ptr(Payload);
+    group_index := cast(float) payload.triangle_index;
+    color_bias := payload.color_bias;
     x_offset := (group_index - 1.0) * 0.6;
     mesh_set_output_counts(3, 1);
     mesh_set_vertex_position(0, .{ x_offset + 0.0, -0.5, 0.0, 1.0 });
     mesh_set_vertex_position(1, .{ x_offset + 0.5,  0.5, 0.0, 1.0 });
     mesh_set_vertex_position(2, .{ x_offset - 0.5,  0.5, 0.0, 1.0 });
-    mesh_set_vertex_color(0, .{0.5 + group_index * 0.15, 0.2, 0.2});
-    mesh_set_vertex_color(1, .{0.2, 0.6 + group_index * 0.15, 0.2});
-    mesh_set_vertex_color(2, .{0.2, 0.4, 0.7 + group_index * 0.1});
+    mesh_set_vertex_color(0, .{0.5 + color_bias, 0.2, 0.2});
+    mesh_set_vertex_color(1, .{0.2, 0.6 + color_bias, 0.2});
+    mesh_set_vertex_color(2, .{0.2, 0.4, 0.7 + color_bias * 0.6666667});
     mesh_set_triangle(0, 0, 1, 2);
 } @mesh_shader
 
@@ -31,6 +41,8 @@ fragment_main :: (using input: Triangle_Fragment_In) -> Vector4 @SV_Target0 {
 on_dll_init :: () {
     shader :: #run get_transpiled_task_mesh_pipeline(.METAL, task_main, mesh_main, fragment_main);
     combined_task_mesh_source = copy_string(tprint("%\n%", shader.task_source, shader.mesh_source));
+    payload_size_bytes = shader.payload_size_bytes;
+    payload_memory_length = shader.payload_memory_length;
 
     blend_state: Gpu_Blend_Desc;
     raster_desc := Gpu_Raster_Desc.{
@@ -48,9 +60,7 @@ on_dll_init :: () {
         raster_desc = raster_desc,
         task_threads = .[1, 1, 1],
         mesh_threads = .[1, 1, 1],
-        // Keep Metal object/mesh payload allocation conservative.
-        // The current transpiled payload is a single u32 field, but the stage ABI is struct-based.
-        payload_memory_length = 16,
+        payload_memory_length = cast(u32) payload_memory_length,
     };
     graphics_pipeline = gpu_create_mesh_pipeline(mesh_desc);
     assert(graphics_pipeline != 0, "Failed creating mesh shader pipeline.");
@@ -86,7 +96,9 @@ tick :: () {
             Text("Transpiled task+mesh+fragment path");
             Text("Task stage: enabled");
             Text("Task groups: 3");
-            Text("Payload: u32 task_group_id_x -> mesh");
+            Text("Payload: typed struct");
+            Text("Payload bytes: %", payload_size_bytes);
+            Text("Payload alloc: %", payload_memory_length);
             Text("Mesh threads: 1");
             Text("SPIR-V -> SPIRV-Cross -> Metal");
         }
