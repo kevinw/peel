@@ -40,6 +40,19 @@ Scene_Mesh :: struct {
     lod_mesh_count: u32;
 }
 
+Scene_Meshlet :: struct {
+    vertex_offset: u32;
+    triangle_offset: u32;
+    vertex_count: u32;
+    triangle_count: u32;
+}
+
+Scene_Meshlet_Mesh :: struct {
+    meshlet_start: u32;
+    meshlet_count: u32;
+    bounds_center_radius: Vector4;
+}
+
 Scene_Node :: struct {
     parent_index: s32;
     first_child_index: s32;
@@ -187,6 +200,12 @@ Scene_Geo :: struct {
     morph_vertex_deltas: Gpu_View(Scene_Morph_Vertex_Delta);
     indices: Gpu_View(u32);
     materials: Gpu_View(Scene_Material);
+    meshlets: Gpu_View(Scene_Meshlet);
+    meshlet_vertices: Gpu_View(u32);
+    meshlet_triangles: Gpu_View(u32);
+    meshlet_bounds: Gpu_View(Vector4);
+    meshlet_meshes: Gpu_View(Scene_Meshlet_Mesh);
+    max_meshlet_count: u32;
 
     textures: [..]Gpu_Texture;
     texture_views: [..]Gpu_Texture_View;
@@ -220,6 +239,16 @@ scene_geo_init :: (geo: *Scene_Geo, model_paths: []string) {
 }
 
 scene_geo_init_from_imported :: (using geo: *Scene_Geo, imported: *Imported_Scene) {
+    cpu_meshlet_meshes, cpu_meshlets, cpu_meshlet_vertices, cpu_meshlet_triangles, cpu_meshlet_bounds, built_max_meshlet_count :=
+        build_scene_meshlets(imported);
+    defer {
+        array_free(cpu_meshlet_meshes);
+        array_free(cpu_meshlets);
+        array_free(cpu_meshlet_vertices);
+        array_free(cpu_meshlet_triangles);
+        array_free(cpu_meshlet_bounds);
+    }
+
     for it: imported.textures {
         assert(it.width > 0 && it.height > 0 && it.pixels.count >= cast(s64) it.width * cast(s64) it.height * 4,
             "Imported texture invalid: key=% width=% height=% pixels=%.",
@@ -235,6 +264,11 @@ scene_geo_init_from_imported :: (using geo: *Scene_Geo, imported: *Imported_Scen
         imported.morph_vertex_deltas.count * size_of(Scene_Morph_Vertex_Delta) +
         imported.indices.count * size_of(u32) +
         imported.materials.count * size_of(Scene_Material) +
+        cpu_meshlets.count * size_of(Scene_Meshlet) +
+        cpu_meshlet_vertices.count * size_of(u32) +
+        cpu_meshlet_triangles.count * size_of(u32) +
+        cpu_meshlet_bounds.count * size_of(Vector4) +
+        cpu_meshlet_meshes.count * size_of(Scene_Meshlet_Mesh) +
         1024;
 
     arena = gpu_make_arena(total_bytes, label = "scene geo arena");
@@ -244,6 +278,12 @@ scene_geo_init_from_imported :: (using geo: *Scene_Geo, imported: *Imported_Scen
     morph_vertex_deltas = gpu_alloc_view(*arena, Scene_Morph_Vertex_Delta, imported.morph_vertex_deltas.count);
     indices = gpu_alloc_view(*arena, u32, imported.indices.count);
     materials = gpu_alloc_view(*arena, Scene_Material, imported.materials.count);
+    meshlets = gpu_alloc_view(*arena, Scene_Meshlet, cpu_meshlets.count);
+    meshlet_vertices = gpu_alloc_view(*arena, u32, cpu_meshlet_vertices.count);
+    meshlet_triangles = gpu_alloc_view(*arena, u32, cpu_meshlet_triangles.count);
+    meshlet_bounds = gpu_alloc_view(*arena, Vector4, cpu_meshlet_bounds.count);
+    meshlet_meshes = gpu_alloc_view(*arena, Scene_Meshlet_Mesh, cpu_meshlet_meshes.count);
+    max_meshlet_count = built_max_meshlet_count;
 
     if imported.vertices.count > 0 {
         memcpy(vertices.cpu.data, imported.vertices.data, imported.vertices.count * size_of(Scene_Vertex));
@@ -281,6 +321,21 @@ scene_geo_init_from_imported :: (using geo: *Scene_Geo, imported: *Imported_Scen
             material.sampler_index = cast(u32) sampler - 1;
             materials.cpu[it_index] = material;
         }
+    }
+    if cpu_meshlets.count > 0 {
+        memcpy(meshlets.cpu.data, cpu_meshlets.data, cpu_meshlets.count * size_of(Scene_Meshlet));
+    }
+    if cpu_meshlet_vertices.count > 0 {
+        memcpy(meshlet_vertices.cpu.data, cpu_meshlet_vertices.data, cpu_meshlet_vertices.count * size_of(u32));
+    }
+    if cpu_meshlet_triangles.count > 0 {
+        memcpy(meshlet_triangles.cpu.data, cpu_meshlet_triangles.data, cpu_meshlet_triangles.count * size_of(u32));
+    }
+    if cpu_meshlet_bounds.count > 0 {
+        memcpy(meshlet_bounds.cpu.data, cpu_meshlet_bounds.data, cpu_meshlet_bounds.count * size_of(Vector4));
+    }
+    if cpu_meshlet_meshes.count > 0 {
+        memcpy(meshlet_meshes.cpu.data, cpu_meshlet_meshes.data, cpu_meshlet_meshes.count * size_of(Scene_Meshlet_Mesh));
     }
 
     array_copy(*meshes, imported.meshes);
@@ -518,7 +573,7 @@ compute_model_bounds_from_geo :: (geo: *Scene_Geo, model_index: s32) -> Scene_Bo
 
 Hash_Table :: #import "Hash_Table";
 using,only(Table, table_find, table_reset, table_set) _ :: Hash_Table;
-IMPORTED_SCENE_CACHE_VERSION : u32 : 15;
+IMPORTED_SCENE_CACHE_VERSION : u32 : 17;
 IMPORTED_SCENE_CACHE_MAGIC : u32 : 0x53474d44; // SGMD
 
 imported_scene_cache_path :: (model_paths: []string) -> string {
@@ -1140,8 +1195,10 @@ build_static_mesh_lods :: (imported: *Imported_Scene, mesh_index: s32) {
     if mesh.morph_target_count != 0 return;
     if mesh.index_count < 192 return;
 
-    target_ratios := float.[0.45, 0.18];
-    target_errors := float.[0.015, 0.035];
+    target_ratios := float.[0.18, 0.02, 0.002];
+    target_triangle_caps := u32.[50000, 5000, 500];
+    target_errors := float.[0.03, 0.20, 0.45];
+    source_triangle_count := cast(u64) mesh.index_count / 3;
 
     source_indices := NewArray(mesh.index_count, u32);
     defer array_free(source_indices);
@@ -1154,23 +1211,45 @@ build_static_mesh_lods :: (imported: *Imported_Scene, mesh_index: s32) {
     lod_mesh_count: u32;
 
     for ratio, lod_i: target_ratios {
-        target_index_count := cast(u64) max(36.0, floor(cast(float) mesh.index_count * ratio / 3.0) * 3.0);
+        ratio_triangle_count := cast(u64) max(12.0, floor(cast(float) source_triangle_count * ratio));
+        target_triangle_count := min(ratio_triangle_count, cast(u64) target_triangle_caps[lod_i]);
+        target_index_count := target_triangle_count * 3;
         if target_index_count >= cast(u64) source_indices.count continue;
 
         simplified := NewArray(source_indices.count, u32);
         defer array_free(simplified);
         result_error: float;
-        simplified_count := meshopt.simplify(
-            simplified.data,
-            source_indices.data,
-            cast(u64) source_indices.count,
-            vertex_positions,
-            cast(u64) mesh.vertex_count,
-            vertex_positions_stride,
-            target_index_count,
-            target_errors[lod_i],
-            0,
-            *result_error);
+        simplified_count: u64;
+        if lod_i >= 1 {
+            sloppy_error := target_errors[lod_i];
+            for attempt: 0..5 {
+                simplified_count = meshopt.simplifySloppy(
+                    simplified.data,
+                    source_indices.data,
+                    cast(u64) source_indices.count,
+                    vertex_positions,
+                    cast(u64) mesh.vertex_count,
+                    vertex_positions_stride,
+                    null,
+                    target_index_count,
+                    sloppy_error,
+                    *result_error);
+                if simplified_count <= target_index_count break;
+                sloppy_error = min(sloppy_error * 1.8 + 0.01, 1.0);
+            }
+        } else {
+            simplified_count = meshopt.simplify(
+                simplified.data,
+                source_indices.data,
+                cast(u64) source_indices.count,
+                vertex_positions,
+                cast(u64) mesh.vertex_count,
+                vertex_positions_stride,
+                target_index_count,
+                target_errors[lod_i],
+                0,
+                *result_error);
+        }
         if simplified_count < 36 continue;
         simplified_count = (simplified_count / 3) * 3;
         if simplified_count < 36 continue;
@@ -1209,6 +1288,163 @@ build_static_mesh_lods :: (imported: *Imported_Scene, mesh_index: s32) {
         imported.meshes[mesh_index].lod_mesh_start = lod_mesh_start;
         imported.meshes[mesh_index].lod_mesh_count = lod_mesh_count;
     }
+}
+
+SCENE_GEO_MESHLET_MAX_VERTICES :: 64;
+SCENE_GEO_MESHLET_MAX_TRIANGLES :: 124;
+
+build_scene_meshlets :: (
+    imported: *Imported_Scene,
+) -> [..]Scene_Meshlet_Mesh, [..]Scene_Meshlet, [..]u32, [..]u32, [..]Vector4, u32 {
+    meshlet_meshes: [..]Scene_Meshlet_Mesh;
+    meshlets: [..]Scene_Meshlet;
+    meshlet_vertices: [..]u32;
+    raw_meshlet_triangles: [..]u8;
+    packed_meshlet_triangles: [..]u32;
+    meshlet_bounds: [..]Vector4;
+    max_meshlet_count: u32;
+    defer array_free(raw_meshlet_triangles);
+
+    array_resize(*meshlet_meshes, imported.meshes.count);
+
+    for *mesh_src, mesh_index: imported.meshes {
+        meshlet_meshes[mesh_index].bounds_center_radius = compute_imported_mesh_bounds_sphere(imported, mesh_src);
+        if mesh_src.index_count < 3 || mesh_src.vertex_count == 0 {
+            continue;
+        }
+        local_indices := NewArray(mesh_src.index_count, u32);
+        optimized_indices := NewArray(mesh_src.index_count, u32);
+        defer {
+            array_free(local_indices);
+            array_free(optimized_indices);
+        }
+
+        for local_index: 0..cast(s64) mesh_src.index_count-1 {
+            local_indices[local_index] = imported.indices[mesh_src.first_index + local_index] - mesh_src.base_vertex;
+        }
+
+        meshopt.optimizeVertexCache(
+            optimized_indices.data,
+            local_indices.data,
+            cast(u64) mesh_src.index_count,
+            cast(u64) mesh_src.vertex_count);
+
+        max_meshlets := meshopt.buildMeshletsBound(
+            cast(u64) mesh_src.index_count,
+            SCENE_GEO_MESHLET_MAX_VERTICES,
+            SCENE_GEO_MESHLET_MAX_TRIANGLES);
+        temp_meshlets := NewArray(cast(s64) max_meshlets, meshopt.Meshlet);
+        temp_meshlet_vertices := NewArray(cast(s64) max_meshlets * SCENE_GEO_MESHLET_MAX_VERTICES, u32);
+        temp_meshlet_triangles := NewArray(cast(s64) max_meshlets * SCENE_GEO_MESHLET_MAX_TRIANGLES * 3, u8);
+        defer {
+            array_free(temp_meshlets);
+            array_free(temp_meshlet_vertices);
+            array_free(temp_meshlet_triangles);
+        }
+
+        built_meshlet_count := meshopt.buildMeshletsScan(
+            temp_meshlets.data,
+            temp_meshlet_vertices.data,
+            temp_meshlet_triangles.data,
+            optimized_indices.data,
+            cast(u64) mesh_src.index_count,
+            cast(u64) mesh_src.vertex_count,
+            SCENE_GEO_MESHLET_MAX_VERTICES,
+            SCENE_GEO_MESHLET_MAX_TRIANGLES);
+
+        meshlet_start := cast(u32) meshlets.count;
+        vertex_positions := cast(*float) (imported.vertices.data + mesh_src.base_vertex);
+
+        for temp_i: 0..cast(s64) built_meshlet_count-1 {
+            temp_meshlet := temp_meshlets[temp_i];
+            if temp_meshlet.triangle_count == 0 || temp_meshlet.vertex_count == 0 continue;
+
+            meshopt.optimizeMeshlet(
+                temp_meshlet_vertices.data + temp_meshlet.vertex_offset,
+                temp_meshlet_triangles.data + temp_meshlet.triangle_offset,
+                cast(u64) temp_meshlet.triangle_count,
+                cast(u64) temp_meshlet.vertex_count);
+
+            vertex_offset := cast(u32) meshlet_vertices.count;
+            triangle_offset := cast(u32) raw_meshlet_triangles.count;
+
+            for local_vertex: 0..cast(s64) temp_meshlet.vertex_count-1 {
+                local_vertex_index := temp_meshlet_vertices[temp_meshlet.vertex_offset + local_vertex];
+                array_add(*meshlet_vertices, local_vertex_index + mesh_src.base_vertex);
+            }
+
+            triangle_byte_count := cast(s64) temp_meshlet.triangle_count * 3;
+            for triangle_byte: 0..triangle_byte_count-1 {
+                array_add(*raw_meshlet_triangles, temp_meshlet_triangles[temp_meshlet.triangle_offset + triangle_byte]);
+            }
+
+            bounds := meshopt.computeMeshletBounds(
+                temp_meshlet_vertices.data + temp_meshlet.vertex_offset,
+                temp_meshlet_triangles.data + temp_meshlet.triangle_offset,
+                cast(u64) temp_meshlet.triangle_count,
+                vertex_positions,
+                cast(u64) mesh_src.vertex_count,
+                cast(u64) size_of(Scene_Vertex));
+
+            array_add(*meshlets, .{
+                vertex_offset = vertex_offset,
+                triangle_offset = triangle_offset,
+                vertex_count = temp_meshlet.vertex_count,
+                triangle_count = temp_meshlet.triangle_count,
+            });
+            array_add(*meshlet_bounds, .{
+                bounds.center[0],
+                bounds.center[1],
+                bounds.center[2],
+                bounds.radius,
+            });
+        }
+
+        meshlet_count := cast(u32) meshlets.count - meshlet_start;
+        meshlet_meshes[mesh_index].meshlet_start = meshlet_start;
+        meshlet_meshes[mesh_index].meshlet_count = meshlet_count;
+        max_meshlet_count = max(max_meshlet_count, meshlet_count);
+    }
+
+    for *meshlet: meshlets {
+        raw_triangle_offset := meshlet.triangle_offset;
+        meshlet.triangle_offset = cast(u32) packed_meshlet_triangles.count;
+        for tri_i: 0..cast(s64) meshlet.triangle_count-1 {
+            raw_tri_offset := cast(s64) raw_triangle_offset + tri_i * 3;
+            p0 := cast(u32) raw_meshlet_triangles[raw_tri_offset + 0];
+            p1 := cast(u32) raw_meshlet_triangles[raw_tri_offset + 1];
+            p2 := cast(u32) raw_meshlet_triangles[raw_tri_offset + 2];
+            array_add(*packed_meshlet_triangles, p0 | (p1 << 8) | (p2 << 16));
+        }
+    }
+
+    return meshlet_meshes, meshlets, meshlet_vertices, packed_meshlet_triangles, meshlet_bounds, max_meshlet_count;
+}
+
+compute_imported_mesh_bounds_sphere :: (imported: *Imported_Scene, mesh: *Scene_Mesh) -> Vector4 {
+    min_p := Vector3.{1000000.0, 1000000.0, 1000000.0};
+    max_p := Vector3.{-1000000.0, -1000000.0, -1000000.0};
+
+    for index_offset: 0..mesh.index_count-1 {
+        vertex_index := imported.indices[mesh.first_index + index_offset];
+        p := imported.vertices[vertex_index].position.xyz;
+        min_p.x = min(min_p.x, p.x);
+        min_p.y = min(min_p.y, p.y);
+        min_p.z = min(min_p.z, p.z);
+        max_p.x = max(max_p.x, p.x);
+        max_p.y = max(max_p.y, p.y);
+        max_p.z = max(max_p.z, p.z);
+    }
+
+    center := (min_p + max_p) * 0.5;
+    radius: float;
+    for index_offset: 0..mesh.index_count-1 {
+        vertex_index := imported.indices[mesh.first_index + index_offset];
+        p := imported.vertices[vertex_index].position.xyz;
+        radius = max(radius, length(p - center));
+    }
+
+    return .{center.x, center.y, center.z, radius};
 }
 
 append_ai_node_recursive :: (

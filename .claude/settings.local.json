@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(jai:*)",
+      "Bash(wc:*)",
+      "Bash(python3:*)"
+    ]
+  }
+}

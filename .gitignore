@@ -84,3 +84,7 @@ dist/inspiration_test
 dist/inspiration_test.dylib
 dist/shader_to_human
 dist/shader_to_human.dylib
+dist/mesh_shader_triangle
+dist/mesh_shader_triangle.dylib
+dist/meshlet_lizard_grid
+dist/meshlet_lizard_grid.dylib
