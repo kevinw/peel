@@ -16,18 +16,26 @@ Draw_Data :: struct {
     num_instances:     u32;
 }
 
-graphics_pipeline: Gpu_Pipeline;
-compute_pipeline: Gpu_Pipeline;
-gpu_arena: Gpu_Arena;
-draw_data: Draw_Data;
+using app: struct {
+    graphics_pipeline: Gpu_Pipeline;
+    compute_pipeline: Gpu_Pipeline;
+    gpu_arena: Gpu_Arena;
+    draw_data: Draw_Data;
 
-boid_state_storage: Gpu_View(Boid_State);
-boid_state: AB_Buffer([BOIDS_COUNT] Boid_State);
-boid_tints: Gpu_View(Vector4);
-boids_draw_params: Gpu_Buffer(Boids_Draw_Params_CPU);
-boids_control_ring: Gpu_Frame_Ring(Boids_Control);
+    boid_state_storage: Gpu_View(Boid_State);
+    boid_state: AB_Buffer([BOIDS_COUNT] Boid_State);
+    boid_tints: Gpu_View(Vector4);
+    boids_draw_params: Gpu_Buffer(Boids_Draw_Params_CPU);
+    boids_control_ring: Gpu_Frame_Ring(Boids_Control);
 
-boids_control: Boids_Control;
+    using control: Boids_Control = .{
+        view_extent = VIEW_EXTENT,
+        min_speed = MIN_SPEED,
+        max_speed = MAX_SPEED,
+        perception_radius = 0.13,
+        separation_radius = 0.049,
+    };
+};
 
 build_ui :: () {
     using,except(Viewport) _ :: #import "ImGui";
@@ -35,7 +43,7 @@ build_ui :: () {
     window_flags: WindowFlags = .NoDecoration | .AlwaysAutoResize | .NoSavedSettings | .NoFocusOnAppearing | .NoNav;
     if Begin("Boids", *open, window_flags) {
         Text("Boids");
-        using boids_control;
+        using control;
         SliderFloat("View Extent", *view_extent, 0.25, 1.1);
         SliderFloat("Min Speed", *min_speed, 0.001, 0.2);
         SliderFloat("Max Speed", *max_speed, 0.5, 2.0);
@@ -101,7 +109,7 @@ on_dll_init :: () {
     };
 
     boids_control_ring = sgpu_make_frame_ring(*gpu_arena, Boids_Control);
-    for 0..SGPU_FRAMES_IN_FLIGHT-1 boids_control_ring.view.cpu[it] = .{};
+    for 0..SGPU_FRAMES_IN_FLIGHT-1 boids_control_ring.view.cpu[it] = app.control;
 
     draw_data = .{
         vertex_params_gpu = boids_draw_params.gpu,
@@ -119,25 +127,25 @@ tick :: () {
 
     mx, my, mouse_ok := get_mouse_pointer_position(true);
     _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
-    
-    
+
+
     if mouse_ok && dims_ok && win_w > 0 && win_h > 0 {
         nx := cast(float) mx / cast(float) win_w;
         ny := cast(float) my / cast(float) win_h;
-        boids_control.cursor = .{ (nx * 2.0 - 1.0), (ny * 2.0 - 1.0) } * boids_control.view_extent;
+        control.cursor = .{ (nx * 2.0 - 1.0), (ny * 2.0 - 1.0) } * control.view_extent;
     } else {
-        boids_control.cursor = .{ 9999.0, 9999.0 };
+        control.cursor = .{ 9999.0, 9999.0 };
     }
-    
-    boids_control.dt = dt;
-    
-    control := sgpu_frame_ring_slot(*boids_control_ring);
-    control.cpu.* = boids_control;
+
+    control.delta_time = dt;
+
+    control_slot := sgpu_frame_ring_slot(*boids_control_ring);
+    control_slot.cpu.* = app.control;
 
     _, cmd_buff := gpu_start_command_recording(gpu_get_queue(.MAIN, 0));
     gpu_set_pipeline(cmd_buff, compute_pipeline);
-    control.cpu.use_b_as_src = ifx boid_state.src_is_a then cast(u32) 0 else cast(u32) 1;
-    gpu_dispatch_buffers(cmd_buff, .[boid_state_storage.gpu, control.gpu], .[(BOIDS_COUNT + 63) / 64, 1, 1]);
+    control_slot.cpu.use_b_as_src = ifx boid_state.src_is_a then cast(u32) 0 else cast(u32) 1;
+    gpu_dispatch_buffers(cmd_buff, .[boid_state_storage.gpu, control_slot.gpu], .[(BOIDS_COUNT + 63) / 64, 1, 1]);
 
     ab_buffer_advance(*boid_state);
     boids_draw_params.cpu.instances = ifx boid_state.src_is_a then boid_state.a_gpu else boid_state.b_gpu;
@@ -154,7 +162,7 @@ tick :: () {
     });
     gpu_set_depth_stencil_state(cmd_buff, { depth_test = .ALWAYS, depth_mode = .NONE, });
     gpu_set_pipeline(cmd_buff, graphics_pipeline);
-    
+
     using draw_data;
     gpu_draw_instanced_direct(cmd_buff, vertex_params_gpu, num_vertices, num_instances);
     submit_and_present_with_ui(cmd_buff);

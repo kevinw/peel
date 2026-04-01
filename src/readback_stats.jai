@@ -146,12 +146,18 @@ parse_snapshot_frames :: (state: *Readback_Stats, value: string) {
 }
 
 doing_peel_diagnostic :: () -> bool {
-    return smoke_mode ||
-        max_frames > 0 ||
-        window_snapshot_mode ||
-        readback_stats.export_jpg_mode;
-}
+    if smoke_mode || max_frames > 0 {
+        return true;
+    }
 
+    #if !SINGLE_BINARY {
+        if window_snapshot || readback_stats.export_jpg_mode {
+            return true;
+        }
+    }
+
+    return false;
+}
 
 frame_debug_init :: (readback_stats: *Readback_Stats) {
     readback_stats_init(readback_stats, APP_NAME, snapshot_default_w = DEFAULT_SNAPSHOT_WIDTH, snapshot_default_h = DEFAULT_SNAPSHOT_HEIGHT);

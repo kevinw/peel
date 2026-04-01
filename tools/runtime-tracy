@@ -1,2 +1,2 @@
-export APP=shader_to_human
+export APP=meshlet_lizard_grid
 jai build.jai - src/apps/$APP.jai -tracy && ./modules/tracy/macos/tracy-profiler -a 127.0.0.1 & pushd dist && sleep 7 && ./$APP; popd

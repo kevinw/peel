@@ -1,5 +1,4 @@
-#import "Jai-Shader-Transpiler";
-#load "../scene_pick.jai";
+SCENE_ROOT_PATH :: "./scenes/model_scene.scene";
 
 Draw_Batch :: struct {
     mesh_index: u32;
@@ -50,7 +49,6 @@ Ground_Draw_Params_CPU     :: CPU_Struct(Ground_Draw_Params);
 Model_Scene_Sky_Params_CPU :: CPU_Struct(Model_Scene_Sky_Params);
 Grass_Shadow_Params_CPU    :: CPU_Struct(Grass_Shadow_Params);
 
-#load "../outdoor_rig.jai";
 
 graphics_pipeline: Gpu_Pipeline;
 pick_pipeline: Gpu_Pipeline;
@@ -241,16 +239,16 @@ on_dll_init :: () {
         .{format = .B8G8R8A8_UNORM},
     ];
 
-    graphics_pipeline     = gpu_create_graphics_pipeline(graphics_source, main_raster);
-    pick_pipeline         = gpu_create_graphics_pipeline(pick_source, pick_raster);
-    ground_pipeline       = gpu_create_graphics_pipeline(ground_source, main_raster);
-    ground_shadow_pipeline= gpu_create_graphics_pipeline(ground_shadow_source, shadow_raster);
-    shadow_pipeline       = gpu_create_graphics_pipeline(shadow_source, shadow_raster);
-    grass_pipeline        = gpu_create_graphics_pipeline(grass_source, grass_main_raster);
-    grass_shadow_pipeline = gpu_create_graphics_pipeline(grass_shadow_source, shadow_raster);
-    debug_shadow_pipeline = gpu_create_graphics_pipeline(debug_shadow_source, main_raster);
-    debug_pick_pipeline   = gpu_create_graphics_pipeline(debug_pick_source, main_raster);
-    sky_pipeline          = gpu_create_graphics_pipeline(sky_source, grass_main_raster);
+    graphics_pipeline      = gpu_create_graphics_pipeline(graphics_source, main_raster);
+    pick_pipeline          = gpu_create_graphics_pipeline(pick_source, pick_raster);
+    ground_pipeline        = gpu_create_graphics_pipeline(ground_source, main_raster);
+    ground_shadow_pipeline = gpu_create_graphics_pipeline(ground_shadow_source, shadow_raster);
+    shadow_pipeline        = gpu_create_graphics_pipeline(shadow_source, shadow_raster);
+    grass_pipeline         = gpu_create_graphics_pipeline(grass_source, grass_main_raster);
+    grass_shadow_pipeline  = gpu_create_graphics_pipeline(grass_shadow_source, shadow_raster);
+    debug_shadow_pipeline  = gpu_create_graphics_pipeline(debug_shadow_source, main_raster);
+    debug_pick_pipeline    = gpu_create_graphics_pipeline(debug_pick_source, main_raster);
+    sky_pipeline           = gpu_create_graphics_pipeline(sky_source, grass_main_raster);
     shadow_map_init(*shadow_map);
     sky_draw_params = gpu_alloc_buffer(Model_Scene_Sky_Params_CPU, label = "model scene sky params");
     debug_pick_params = gpu_alloc_buffer(Scene_Draw_Params_CPU, label = "model scene debug pick params");
@@ -846,18 +844,18 @@ tick :: () {
     }
 
     if horde_runtime.player_health <= 0.0 {
-        draw := ImGui.GetForegroundDrawList();
-        viewport := ImGui.GetMainViewport();
-        ImGui.PushFont(fonts.main, fonts.LARGE_SIZE * 2.0);
+        using ImGui;
+        draw := GetForegroundDrawList();
+        viewport := GetMainViewport();
+        PushPopFont(fonts.main, fonts.LARGE_SIZE * 2.0);
         msg := "YOU DIED";
-        size := ImGui.CalcTextSize(msg);
+        size := CalcTextSize(msg);
         pos := Vector2.{
             viewport.WorkPos.x + (viewport.WorkSize.x - size.x) * 0.5,
             viewport.WorkPos.y + max(56.0, (viewport.WorkSize.y - size.y) * 0.32),
         };
-        ImGui.ImDrawList.AddText(draw, pos + .{3.0, 3.0}, ImGui.GetColorU32(Vector4.{0.0, 0.0, 0.0, 0.82}), msg);
-        ImGui.ImDrawList.AddText(draw, pos, ImGui.GetColorU32(Vector4.{1.0, 0.15, 0.1, 0.98}), msg);
-        ImGui.PopFont();
+        ImDrawList.AddText(draw, pos + .{3.0, 3.0}, GetColorU32({0.0, 0.0, 0.0, 0.82}), msg);
+        ImDrawList.AddText(draw, pos, GetColorU32({1.0, 0.15, 0.1, 0.98}), msg);
     }
 
     submit_and_present_with_ui(cmd_buff);
@@ -1050,12 +1048,13 @@ rebuild_scene_runtime :: () {
     }
 
     if ground_enabled {
-        active_ground.size_x = max(active_ground.size_x, 120.0);
-        active_ground.size_z = max(active_ground.size_z, 120.0);
-        active_ground.render_grid_x = max(active_ground.render_grid_x, 160);
-        active_ground.render_grid_z = max(active_ground.render_grid_z, 160);
-        active_ground.physics_grid_x = max(active_ground.physics_grid_x, 128);
-        active_ground.physics_grid_z = max(active_ground.physics_grid_z, 128);
+        using active_ground;
+        size_x = max(size_x, 120.0);
+        size_z = max(size_z, 120.0);
+        render_grid_x = max(render_grid_x, 160);
+        render_grid_z = max(render_grid_z, 160);
+        physics_grid_x = max(physics_grid_x, 128);
+        physics_grid_z = max(physics_grid_z, 128);
         init_ground_plane(active_ground);
     }
     while shadow_skip_batch.count < scene_batches.count array_add(*shadow_skip_batch, false);
@@ -1095,7 +1094,7 @@ rebuild_scene_runtime :: () {
             morph_weights = 0,
             skin_matrices = 0,
             view_proj = Matrix4_Identity,
-            light_dir = normalize(Vector3.{0.35, -1.0, 0.25}),
+            light_dir = normalize({0.35, -1.0, 0.25}),
             sun_params = .{outdoor_rig.sun_strength, outdoor_rig.time_of_day, 0.0, 0.0},
             camera_pos = scene_camera.position,
             material_index = mesh.material_index,
@@ -1606,22 +1605,6 @@ decompose_matrix_trs :: (m: Matrix4) -> (pos: Vector3, rot: Vector3, scl: Vector
         cast,force(Vector3) ai_scale;
 }
 
-quat_from_euler_deg :: (deg: Vector3) -> Quaternion {
-    radians := deg * (PI / 180.0);
-    hx := radians.x * 0.5;
-    hy := radians.y * 0.5;
-    hz := radians.z * 0.5;
-    cx := cos(hx); sx := sin(hx);
-    cy := cos(hy); sy := sin(hy);
-    cz := cos(hz); sz := sin(hz);
-    qx := Quaternion.{x = sx, y = 0.0, z = 0.0, w = cx};
-    qy := Quaternion.{x = 0.0, y = sy, z = 0.0, w = cy};
-    qz := Quaternion.{x = 0.0, y = 0.0, z = sz, w = cz};
-    q := qz * qy * qx;
-    normalize_or_identity(*q);
-    return q;
-}
-
 append_unique_model_path :: (paths: *[..]string, model_path: string) {
     for paths.* if it == model_path return;
     array_add(paths, model_path);
@@ -1884,13 +1867,11 @@ metal_stage_entry_name :: (metal: []u8, stage_keyword: string) -> string {
     return string.{count = token_end - token_start, data = source.data + token_start};
 }
 
-SCENE_ROOT_PATH :: "./scenes/model_scene.scene";
 
 ground_plane_desc: Scene_File.Scene_Procedural_Ground_Desc;
 
 init_ground_plane :: (ground: Scene_File.Scene_Procedural_Ground_Desc) {
     ground_plane_desc = ground;
-
     ground_texture, ground_texture_view = load_texture_rgba8(ground.base_color_path);
     ground_normal_texture, ground_normal_texture_view = load_texture_rgba8(ground.normal_path);
     ground_roughness_texture, ground_roughness_texture_view = load_texture_rgba8(ground.roughness_path);
@@ -1927,13 +1908,13 @@ init_ground_plane :: (ground: Scene_File.Scene_Procedural_Ground_Desc) {
         .{cell_size_x, 1.0, cell_size_z});
     ground_physics_body_valid = true;
 
-    ground_vertices = gpu_alloc_view(Scene_Vertex, ground_vertices_cpu.count, label = "model scene ground vertices");
-    ground_indices = gpu_alloc_view(u32, ground_indices_cpu.count, label = "model scene ground indices");
-    ground_instance = gpu_alloc_buffer(Scene_Instance, label = "model scene ground instance");
-    ground_shadow_params = gpu_alloc_buffer(Ground_Draw_Params_CPU, label = "model scene ground shadow params");
-    ground_draw_params = gpu_alloc_buffer(Ground_Draw_Params_CPU, label = "model scene ground params");
-    grass_shadow_params = gpu_alloc_buffer(Grass_Shadow_Params_CPU, label = "model scene grass shadow params");
-    grass_draw_params = gpu_alloc_buffer(Grass_Draw_Params, label = "model scene grass params");
+    ground_vertices = gpu_alloc_view(Scene_Vertex, ground_vertices_cpu.count, label = "ground vertices");
+    ground_indices = gpu_alloc_view(u32, ground_indices_cpu.count, label = "ground indices");
+    ground_instance = gpu_alloc_buffer(Scene_Instance, label = "ground instance");
+    ground_shadow_params = gpu_alloc_buffer(Ground_Draw_Params_CPU, label = "ground shadow params");
+    ground_draw_params   = gpu_alloc_buffer(Ground_Draw_Params_CPU, label = "ground params");
+    grass_shadow_params  = gpu_alloc_buffer(Grass_Shadow_Params_CPU, label = "grass shadow params");
+    grass_draw_params    = gpu_alloc_buffer(Grass_Draw_Params, label = "grass params");
 
     memcpy(ground_vertices.cpu.data, ground_vertices_cpu.data, ground_vertices_cpu.count * size_of(Scene_Vertex));
     memcpy(ground_indices.cpu.data, ground_indices_cpu.data, ground_indices_cpu.count * size_of(u32));
@@ -2115,20 +2096,21 @@ toggle_control_mode :: () {
 #load "../shadowmap.jai";
 #load "../scene_geo.jai";
 #load "../scene_anim.jai";
+#load "../horde_runtime.jai";
+#load "../scene_pick.jai";
+#load "../outdoor_rig.jai";
+#load "shaders/model_scene_shader.jai";
+
 Scene_File :: #import,file "../scene_file.jai";
 Gizmo :: #import "Gizmo";
 Gizmo_Render :: #import "Gizmo_Render";
 Physics :: #import "Physics";
-JPH :: #import "JoltC";
-using JPH;
+using JPH :: #import "JoltC";
 ai :: #import "assimp";
 String :: #import "String";
-#import "Jai-Shader-Transpiler";
+Persist :: #import,file "../ui/persist_controls.jai";
 ImGui :: #import "ImGui";
 Input :: #import "Input";
+#import "Jai-Shader-Transpiler";
 #import "Random";
 #import "Math";
-#load "shaders/model_scene_shader.jai";
-
-Persist :: #import,file "../ui/persist_controls.jai";
-#load "../horde_runtime.jai";

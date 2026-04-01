@@ -1,5 +1,3 @@
-WRITE_SHADER_OUTPUT :: true;
-
 Draw_Data :: struct {
     params_gpu: Gpu_Ptr;
     num_vertices: u32;
@@ -83,8 +81,8 @@ crowd_nav_ui :: () {
 
 on_dll_init :: () {
     graphics_source := cast([]u8) get_transpiled(.METAL, crowd_nav_vertex_main, crowd_nav_fragment_main);
-    floor_source := cast([]u8) get_transpiled(.METAL, crowd_nav_floor_vertex_main, crowd_nav_floor_fragment_main);
-    compute_source := cast([]u8) get_transpiled(.METAL, crowd_nav_step_compute);
+    floor_source    := cast([]u8) get_transpiled(.METAL, crowd_nav_floor_vertex_main, crowd_nav_floor_fragment_main);
+    compute_source  := cast([]u8) get_transpiled(.METAL, crowd_nav_step_compute);
 
     raster_desc: Gpu_Raster_Desc = .{
         cull = .CW,
@@ -96,14 +94,10 @@ on_dll_init :: () {
     floor_raster.cull = .NONE;
 
     compute_pipeline = gpu_create_compute_pipeline(compute_source);
-    assert(compute_pipeline != 0, "Crowd nav compute pipeline creation failed.");
 
     graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, crowd_nav_vertex_main, crowd_nav_fragment_main);
-    assert(graphics_ok, "Crowd nav graphics pipeline creation failed.");
-    floor_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *floor_pipeline, floor_source, floor_raster, .METAL, crowd_nav_floor_vertex_main, crowd_nav_floor_fragment_main);
-    assert(floor_ok, "Crowd nav floor pipeline creation failed.");
-    compute_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_pipeline, compute_source, .METAL, crowd_nav_step_compute);
-    assert(compute_ok, "Crowd nav compute pipeline registration failed.");
+    floor_ok    := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *floor_pipeline, floor_source, floor_raster, .METAL, crowd_nav_floor_vertex_main, crowd_nav_floor_fragment_main);
+    compute_ok  := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_pipeline, compute_source, .METAL, crowd_nav_step_compute);
 
     gpu_arena = gpu_make_arena(1024 * 1024, label = "crowd nav arena");
     crowd_vertices = gpu_alloc_view(*gpu_arena, Crowd_Nav_Vertex, 18);

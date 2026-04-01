@@ -22,6 +22,10 @@ const staticTasks = [
     command: "cd ~/src/peel && jai modules/Jai-Shader-Transpiler/build.jai - -run_tests && jai build.jai",
   },
   {
+    label: "runtime tracy",
+    command: "cd ~/src/peel && ./tools/runtime-tracy &",
+  },
+  {
     label: "regenerate peel tasks",
     command: "cd ~/src/peel/tools && node generate_zed_tasks.mjs",
   },

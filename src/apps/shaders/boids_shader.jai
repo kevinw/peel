@@ -20,7 +20,7 @@ Boid_State :: struct {
 Boids_Control :: struct {
     cursor: Vector2;
     use_b_as_src: u32;
-    dt: float;
+    delta_time: float;
     
     view_extent: float = VIEW_EXTENT;
     min_speed: float = MIN_SPEED;
@@ -67,7 +67,7 @@ boids_step_compute :: (using in: Boids_Compute_In, data: *Boids_Compute_Params) 
     i := thread_id.x;
     if i >= BOIDS_COUNT return;
     
-    dt := data.control.dt;
+    dt := data.control.delta_time;
     view_extent := data.control.view_extent;
     min_speed := data.control.min_speed;
     max_speed := data.control.max_speed;

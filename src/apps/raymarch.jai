@@ -1,18 +1,15 @@
-WRITE_SHADER_OUTPUT :: true;
-
-#load "../SGPU_App_Common.jai";
-
-#import "Jai-Shader-Transpiler";
-SHR :: #import,file "../shader_hot_reload.jai";
-#load "shaders/raymarch_shader.jai";
-
-graphics_pipeline: Gpu_Pipeline;
-gpu_arena: Gpu_Arena;
-raymarch_params: Gpu_Buffer(Raymarch_Params);
+using app: struct {
+    graphics_pipeline: Gpu_Pipeline;
+    gpu_arena: Gpu_Arena;
+    params: Gpu_Frame_Param_Allocator(Raymarch_Params);
+    using draw: Raymarch_Params = .{
+        resolution = .{1280.0, 720.0},
+        mouse_uv = .{0.5, 0.5},
+    };
+};
 
 on_dll_init :: () {
     graphics_source := cast([]u8) get_transpiled(.METAL, raymarch_vertex_main, raymarch_fragment_main);
-    assert(graphics_source.count > 0, "Transpilation failed for raymarch graphics shaders.");
     raster_desc: Gpu_Raster_Desc = {
         cull = .CW,
         color_targets = .[
@@ -24,13 +21,7 @@ on_dll_init :: () {
     assert(graphics_ok, "Raymarch graphics pipeline creation failed.");
 
     gpu_arena = gpu_make_arena(64 * 1024, label = "raymarch arena");
-    raymarch_params = gpu_alloc_buffer(*gpu_arena, Raymarch_Params);
-    raymarch_params.cpu.* = .{
-        time = 0.0,
-        resolution = .{1280.0, 720.0},
-        mouse_uv = .{0.5, 0.5},
-        _pad = 0.0,
-    };
+    params = sgpu_make_frame_param_allocator(*gpu_arena, Raymarch_Params);
 
     gpu_commit_residency();
 } @on_dll_init
@@ -43,18 +34,14 @@ tick :: () {
     _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
     mx, my, mouse_ok := get_mouse_pointer_position(true);
     if dims_ok && win_w > 0 && win_h > 0 {
-        raymarch_params.cpu.resolution = .{cast(float) win_w, cast(float) win_h};
+        resolution = {cast(float) win_w, cast(float) win_h};
     }
     if mouse_ok && dims_ok && win_w > 0 && win_h > 0 {
-        u := cast(float) mx / cast(float) win_w;
-        v := cast(float) my / cast(float) win_h;
-        if u < 0.0 u = 0.0;
-        if u > 1.0 u = 1.0;
-        if v < 0.0 v = 0.0;
-        if v > 1.0 v = 1.0;
-        raymarch_params.cpu.mouse_uv = .{u, v};
+        u := clamp(cast(float) mx / cast(float) win_w, 0, 1);
+        v := clamp(cast(float) my / cast(float) win_h, 0, 1);
+        mouse_uv = .{u, v};
     }
-    raymarch_params.cpu.time = cast(float) frame_count * (1.0 / 60.0);
+    current_time = cast(float) frame_count * (1.0 / 60.0);
 
     main_queue := gpu_get_queue(.MAIN, 0);
     result=, cmd_buff := gpu_start_command_recording(main_queue);
@@ -72,12 +59,15 @@ tick :: () {
     });
     gpu_set_depth_stencil_state(cmd_buff, {depth_test = .ALWAYS, depth_mode = .NONE,});
     gpu_set_pipeline(cmd_buff, graphics_pipeline);
-
-    draw_result := gpu_draw_instanced(cmd_buff, 0, raymarch_params.gpu, 3, 1);
-    assert(draw_result == .SUCCESS, tprint("Raymarch draw failed: %", draw_result));
-
+    draw_params := sgpu_frame_param_alloc(*app.params, draw);
+    gpu_draw_instanced(cmd_buff, 0, draw_params.gpu, 3, 1);
     submit_and_present_with_ui(cmd_buff);
 } @on_tick
 
 #scope_file
 #import "Math";
+
+#import "Jai-Shader-Transpiler";
+SHR :: #import,file "../shader_hot_reload.jai";
+#load "shaders/raymarch_shader.jai";
+#load "../SGPU_App_Common.jai";

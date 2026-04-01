@@ -54,6 +54,56 @@ sgpu_arena_alloc_frame_ring :: (arena: *Gpu_Arena, $T: Type, min_alignment: s64 
     return cpu_ring, gpu_ring;
 }
 
+Gpu_Frame_Param_Allocator :: struct($T: Type, $N: s64 = SGPU_FRAMES_IN_FLIGHT) {
+    view: Gpu_View(T);
+    slots_per_frame: s64;
+    frame_epochs: [N] u64;
+    cursors: [N] s64;
+}
+
+sgpu_make_frame_param_allocator :: (arena: *Gpu_Arena, $T: Type, slots_per_frame: s64 = 1, min_alignment: s64 = 16) -> Gpu_Frame_Param_Allocator(T) {
+    assert(slots_per_frame > 0, "sgpu_make_frame_param_allocator requires slots_per_frame > 0.");
+    allocator := Gpu_Frame_Param_Allocator(T).{
+        view = gpu_alloc_view(arena, T, SGPU_FRAMES_IN_FLIGHT * slots_per_frame, min_alignment),
+        slots_per_frame = slots_per_frame,
+    };
+    for i: 0..SGPU_FRAMES_IN_FLIGHT-1 {
+        allocator.frame_epochs[i] = U64_MAX;
+    }
+    return allocator;
+}
+
+sgpu_frame_param_alloc :: (allocator: *Gpu_Frame_Param_Allocator($T), data: T, frame_number: s64 = -1) -> Gpu_Buffer(T) {
+    buf := sgpu_frame_param_alloc(allocator=allocator, frame_number=frame_number);
+    buf.cpu.* = data;
+    return buf;
+}
+
+sgpu_frame_param_alloc :: (allocator: *Gpu_Frame_Param_Allocator($T), frame_number: s64 = -1) -> Gpu_Buffer(T) {
+    if frame_number < 0 frame_number = cast(s64) gpu_submission_frame_index();
+    idx := sgpu_frame_ring_index(frame_number);
+    frame_epoch := cast(u64) frame_number;
+    if allocator.frame_epochs[idx] != frame_epoch {
+        allocator.frame_epochs[idx] = frame_epoch;
+        allocator.cursors[idx] = 0;
+    }
+
+    slot := allocator.cursors[idx];
+    assert(slot < allocator.slots_per_frame,
+        "frame param allocator exhausted: slot=% capacity=% frame=%", slot, allocator.slots_per_frame, frame_number);
+    allocator.cursors[idx] += 1;
+
+    base := idx * allocator.slots_per_frame + slot;
+    return .{
+        cpu = allocator.view.cpu.data + base,
+        gpu = allocator.view.gpu + (base * size_of(T)).(Gpu_Ptr),
+    };
+}
+
+sgpu_frame_param_slot_count :: (allocator: *Gpu_Frame_Param_Allocator($T)) -> s64 #expand {
+    return allocator.slots_per_frame;
+}
+
 sgpu_frame_ring_slot :: (ring: *Gpu_Frame_Ring($T), frame_number: s64 = -1) -> Gpu_Buffer(T) #expand {
     idx := sgpu_frame_ring_index(frame_number);
     return .{
@@ -181,6 +231,23 @@ load_texture_rgba8 :: (path: string) -> Gpu_Texture, Gpu_Texture_View {
     view := gpu_texture_view(texture);
     return texture, view;
 }
+
+quat_from_euler_deg :: (deg: Vector3) -> Quaternion {
+    radians := deg * (PI / 180.0);
+    hx := radians.x * 0.5;
+    hy := radians.y * 0.5;
+    hz := radians.z * 0.5;
+    cx := cos(hx); sx := sin(hx);
+    cy := cos(hy); sy := sin(hy);
+    cz := cos(hz); sz := sin(hz);
+    qx := Quaternion.{x = sx, y = 0.0, z = 0.0, w = cx};
+    qy := Quaternion.{x = 0.0, y = sy, z = 0.0, w = cy};
+    qz := Quaternion.{x = 0.0, y = 0.0, z = sz, w = cz};
+    q := qz * qy * qx;
+    normalize_or_identity(*q);
+    return q;
+}
+
 
 #scope_file
 #import "stb_image";

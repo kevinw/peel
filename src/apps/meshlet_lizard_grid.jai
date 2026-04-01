@@ -59,56 +59,59 @@ MESHLET_LIZARD_GRID_ROWS :: 15;
 MESHLET_TASK_EMIT_MESHLET_COUNT : u32 : 64;
 MESHLET_LIZARD_MAX_MESH_GROUPS_PER_DRAW : u32 : 1024;
 
-pipeline: Gpu_Pipeline;
-depth_texture: Gpu_Texture;
-depth_view: Gpu_Texture_View;
-depth_w: u32;
-depth_h: u32;
-geo: Scene_Geo;
-arena: Gpu_Arena;
-params: Gpu_View(Meshlet_Grid_Params);
-vertices: Gpu_View(Scene_Vertex);
-materials: Gpu_View(Scene_Material);
-meshes: Gpu_View(Scene_Mesh);
-meshlet_meshes: Gpu_View(Scene_Meshlet_Mesh);
-meshlets: Gpu_View(Scene_Meshlet);
-meshlet_vertices: Gpu_View(u32);
-meshlet_triangles: Gpu_View(u32);
-meshlet_bounds: Gpu_View(Vector4);
-instances: Gpu_View(Meshlet_Grid_Instance);
-selected_lods: Gpu_View(u32);
-target_lods: Gpu_View(u32);
-lod_transition_alphas: Gpu_View(float);
-batches: [..]Meshlet_Grid_Draw_Batch;
-model_index: s32 = -1;
-debug_mode: Meshlet_Grid_Debug_Mode = .SHADED;
-camera: Editor_Camera = .{
-    position = .{0.0, 8.0, 24.0},
-    yaw = 0.0,
-    pitch = -0.32,
-    move_speed = 18.0,
-    boost_multiplier = 2.5,
-    mouse_sensitivity = 0.0048,
-    move_planar = false,
-    pitch_min = -1.45,
-    pitch_max = 1.45,
-};
-auto_orbit: bool;
-orbit_time: float;
-scene_center: Vector3;
-scene_radius: float = 24.0;
-lod_screen_radius: float = 420.0;
-lod_distance_power: float = 1.18;
-mesh_source: string;
-mesh_grid_limit: u32;
-debug_flags: u32;
-param_slot_count: s64 = 1;
+using app: struct {
+    pipeline: Gpu_Pipeline;
+    depth_texture: Gpu_Texture;
+    depth_view: Gpu_Texture_View;
+    depth_w: u32;
+    depth_h: u32;
+    geo: Scene_Geo;
+    arena: Gpu_Arena;
+    params: Gpu_Frame_Param_Allocator(Meshlet_Grid_Params);
+    vertices: Gpu_View(Scene_Vertex);
+    materials: Gpu_View(Scene_Material);
+    meshes: Gpu_View(Scene_Mesh);
+    meshlet_meshes: Gpu_View(Scene_Meshlet_Mesh);
+    meshlets: Gpu_View(Scene_Meshlet);
+    meshlet_vertices: Gpu_View(u32);
+    meshlet_triangles: Gpu_View(u32);
+    meshlet_bounds: Gpu_View(Vector4);
+    instances: Gpu_View(Meshlet_Grid_Instance);
+    selected_lods: Gpu_View(u32);
+    target_lods: Gpu_View(u32);
+    lod_transition_alphas: Gpu_View(float);
+    batches: [..]Meshlet_Grid_Draw_Batch;
+    model_index: s32 = -1;
+    camera: Editor_Camera = {
+        position = .{0.0, 8.0, 24.0},
+        yaw = 0.0,
+        pitch = -0.32,
+        move_speed = 18.0,
+        boost_multiplier = 2.5,
+        mouse_sensitivity = 0.0048,
+        move_planar = false,
+        pitch_min = -1.45,
+        pitch_max = 1.45,
+    };
+    auto_orbit: bool;
+    orbit_time: float;
+    scene_center: Vector3;
+    scene_radius: float = 24.0;
+    lod_screen_radius: float = 420.0;
+    lod_distance_power: float = 1.18;
+    mesh_source: string;
+    mesh_grid_limit: u32;
+    param_slot_count: s64 = 1;
+    using draw: Meshlet_Grid_Params = {
+        debug_mode = cast(u32) Meshlet_Grid_Debug_Mode.SHADED,
+        debug_flags = 0,
+    };
+}
 
 on_dll_init :: () {
     assert(OS == .MACOS, "meshlet_lizard_grid is currently Metal mesh-shader only.");
 
     init_meshlet_lizard_pipeline();
-
     model_paths := string.[MESHLET_LIZARD_MODEL_PATH];
     scene_geo_init(*geo, model_paths);
     model_index = 0;
@@ -119,6 +122,7 @@ on_dll_init :: () {
     rebuild_meshlet_lizard_scene();
     gpu_commit_residency();
 } @on_dll_init
+
 
 tick :: () {
     result, swapchain_image := app_swapchain_acquire();
@@ -151,16 +155,11 @@ tick :: () {
     aspect := cast(float) win_w / max(cast(float) win_h, 1.0);
     view := editor_camera_make_view(*camera);
     proj := editor_camera_make_projection(*camera, aspect, 0.05, 300.0);
-    camera_vp := proj * view;
-    light_dir := normalize(Vector3.{-0.45, -1.0, -0.25});
-    base_params := Meshlet_Grid_Params.{
-        camera_vp = camera_vp,
-        frustum_planes = extract_frustum_planes(camera_vp),
-        eye_position = camera.position,
-        debug_mode = cast(u32) debug_mode,
-        light_dir = light_dir,
-        debug_flags = debug_flags,
-    };
+    draw.camera_vp = proj * view;
+    draw.frustum_planes = extract_frustum_planes(draw.camera_vp);
+    draw.eye_position = camera.position;
+    draw.light_dir = normalize(Vector3.{-0.45, -1.0, -0.25});
+    base_params := draw;
     update_selected_lods(cast(float) win_h);
 
     main_queue := gpu_get_queue(.MAIN, 0);
@@ -203,7 +202,6 @@ tick :: () {
         target_lods.gpu,
         lod_transition_alphas.gpu,
     ];
-    param_slot: u32;
     for batches {
         total_task_slots := it.max_meshlet_count;
         draw_first_instance := it.first_instance;
@@ -224,11 +222,8 @@ tick :: () {
             draw_instance_end := min(draw_instance_total, (draw_group_end + meshlet_chunk_count - 1) / meshlet_chunk_count);
             draw_instance_count := draw_instance_end - draw_instance_start;
             if draw_instance_count > 0 {
-                assert(param_slot < cast(u32) param_slot_count,
-                    "meshlet_lizard param ring exhausted: slot=% capacity=%", param_slot, param_slot_count);
                 batch_material := materials.cpu[meshes.cpu[it.mesh_index].material_index];
-                primary_params := meshlet_lizard_params_slot(param_slot);
-                primary_params.cpu.* = base_params;
+                primary_params := sgpu_frame_param_alloc(*params, base_params);
                 primary_params.cpu.base_color_factor = batch_material.base_color_factor;
                 primary_params.cpu.batch_mesh_index = it.mesh_index;
                 primary_params.cpu.base_color_texture_index = batch_material.base_color_texture_index;
@@ -248,7 +243,6 @@ tick :: () {
 
                 draw_result := gpu_draw_meshlets(cmd_buff, primary_params.gpu, meshlet_draw_bindings, .[draw_object_group_count, 1, 1]);
                 assert(draw_result == .SUCCESS, "gpu_draw_meshlets failed: %", draw_result);
-                param_slot += 1;
             }
             object_group_start += draw_object_group_count;
         }
@@ -256,7 +250,6 @@ tick :: () {
 
     submit_and_present_with_ui(cmd_buff);
 } @on_tick
-
 
 show_ui :: () {
     if !app_ui_enabled return;
@@ -270,11 +263,12 @@ show_ui :: () {
     Text("Max Meshlets / Mesh: %", geo.max_meshlet_count);
     Text("Mesh Grid Limit: %", mesh_grid_limit);
     Checkbox("Auto Orbit", *auto_orbit);
-    if RadioButton("Shaded", debug_mode == .SHADED) debug_mode = .SHADED;
+    debug_mode_value := draw.debug_mode;
+    if RadioButton("Shaded", debug_mode_value == cast(u32) Meshlet_Grid_Debug_Mode.SHADED) draw.debug_mode = cast(u32) Meshlet_Grid_Debug_Mode.SHADED;
     SameLine();
-    if RadioButton("LODs", debug_mode == .LODS) debug_mode = .LODS;
+    if RadioButton("LODs", debug_mode_value == cast(u32) Meshlet_Grid_Debug_Mode.LODS) draw.debug_mode = cast(u32) Meshlet_Grid_Debug_Mode.LODS;
     SameLine();
-    if RadioButton("Meshlets", debug_mode == .MESHLETS) debug_mode = .MESHLETS;
+    if RadioButton("Meshlets", debug_mode_value == cast(u32) Meshlet_Grid_Debug_Mode.MESHLETS) draw.debug_mode = cast(u32) Meshlet_Grid_Debug_Mode.MESHLETS;
     SliderFloat("LOD Screen Radius", *lod_screen_radius, 8.0, 1024.0);
     SliderFloat("LOD Power", *lod_distance_power, 0.5, 2.0);
     Text("RMB look, WASD move, Shift boost");
@@ -293,8 +287,10 @@ show_ui :: () {
     }
 } @on_ui
 
+
 #scope_file
 init_meshlet_lizard_pipeline :: () {
+
     shader :: #run get_transpiled_task_mesh_pipeline(.METAL, task_main, mesh_main, fragment_main);
     mesh_source = copy_string(tprint("%\n%", shader.task_source, shader.mesh_source));
     mesh_desc := Gpu_Mesh_Pipeline_Desc.{
@@ -379,7 +375,7 @@ rebuild_meshlet_lizard_scene :: () {
     arena = gpu_make_arena(total_bytes, label = "meshlet lizard arena");
     assert(arena.cpu != null, "Failed to allocate meshlet lizard arena.");
 
-    params = gpu_alloc_view(*arena, Meshlet_Grid_Params, param_slot_count * SGPU_FRAMES_IN_FLIGHT);
+    params = sgpu_make_frame_param_allocator(*arena, Meshlet_Grid_Params, param_slot_count);
     vertices = gpu_alloc_view(*arena, Scene_Vertex, geo.vertices.cpu.count);
     materials = gpu_alloc_view(*arena, Scene_Material, geo.materials.cpu.count);
     meshes = gpu_alloc_view(*arena, Scene_Mesh, geo.meshes.count);
@@ -522,18 +518,8 @@ update_selected_lods :: (viewport_height: float) {
     }
 }
 
-meshlet_lizard_params_slot :: (slot: u32, frame_number: s64 = -1) -> Gpu_Buffer(Meshlet_Grid_Params) #expand {
-    idx := sgpu_frame_ring_index(frame_number);
-    base := idx * param_slot_count + cast(s64) slot;
-    return .{
-        cpu = params.cpu.data + base,
-        gpu = params.gpu + (base * size_of(Meshlet_Grid_Params)).(Gpu_Ptr),
-    };
-}
-
 normalize_plane4 :: (plane: Vector4) -> Vector4 {
-    n := Vector3.{plane.x, plane.y, plane.z};
-    len := length(n);
+    len := length(plane.xyz);
     if len <= 0.000001 return plane;
     inv_len := 1.0 / len;
     return plane * inv_len;

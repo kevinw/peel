@@ -3,7 +3,6 @@ NOISE_H :: 128;
 NOISE_BYTE_COUNT :: NOISE_W * NOISE_H * 4;
 
 Draw_Data :: struct {
-    pixel_gpu: Gpu_Ptr;
     num_vertices: u32;
     num_instances: u32;
 }
@@ -11,7 +10,7 @@ Draw_Data :: struct {
 graphics_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
-pixel_params: Gpu_Buffer(Textured_Triangle_Pixel_Params);
+pixel_params: Gpu_Frame_Param_Allocator(Textured_Triangle_Pixel_Params);
 
 noise_texture: Gpu_Texture;
 noise_texture_view: Gpu_Texture_View;
@@ -63,15 +62,8 @@ on_dll_init :: () {
     noise_fill_rgba8(noise_pixels.cpu);
     gpu_copy_to_texture(noise_texture, noise_pixels.cpu.data);
 
-    pixel_params = gpu_alloc_buffer(Textured_Triangle_Pixel_Params);
-    pixel_params.cpu.* = .{
-        texture_index = gpu_texture_view_index(noise_texture_view),
-        sampler_index = cast(u32) noise_sampler - 1,
-        debug_mode = debug_mode,
-        _pad = 0,
-    };
+    pixel_params = sgpu_make_frame_param_allocator(*gpu_arena, Textured_Triangle_Pixel_Params);
     draw_data = .{
-        pixel_gpu = pixel_params.gpu,
         num_vertices = 3,
         num_instances = 1,
     };
@@ -101,7 +93,12 @@ tick :: () {
     gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
     gpu_set_pipeline(cmd_buff, graphics_pipeline);
 
-    draw_result := gpu_draw_instanced_direct(cmd_buff, draw_data.pixel_gpu, draw_data.num_vertices, draw_data.num_instances);
+    params := sgpu_frame_param_alloc(*pixel_params, {
+        texture_index = gpu_texture_view_index(noise_texture_view),
+        sampler_index = cast(u32) noise_sampler - 1,
+    });
+
+    draw_result := gpu_draw_instanced_direct(cmd_buff, params.gpu, draw_data.num_vertices, draw_data.num_instances);
     assert(draw_result == .SUCCESS, tprint("Textured triangle draw failed: %", draw_result));
 
     if app_ui_enabled {

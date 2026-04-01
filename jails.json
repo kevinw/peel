@@ -1,9 +1,4 @@
 {
   "build_root": "build.jai",
-  "local_modules": ["modules"],
-  "roots": [
-    "src/apps/boids.jai",
-    "src/apps/raymarch.jai",
-    "src/apps/particles.jai"
-  ]
+  "local_modules": ["modules"]
 }

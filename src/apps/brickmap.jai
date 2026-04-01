@@ -111,17 +111,36 @@ render_point_sampler: Gpu_Sampler;
 upscaler: MetalFX_Upscaler;
 prev_view_proj: Matrix4 = Matrix4_Identity;
 
-camera: Editor_Camera = .{
-    position = .{4.0, 2.0, 7.0},
-    yaw = -0.55,
-    pitch = -0.12,
-    fov_y = PI / 3.0,
-    move_speed = 7.0,
-    boost_multiplier = 2.0,
-    mouse_sensitivity = 0.0058,
-    move_planar = false,
-    pitch_min = -1.45,
-    pitch_max = 1.45,
+app: struct {
+    camera: Editor_Camera = .{
+        position = .{4.0, 2.0, 7.0},
+        yaw = -0.55,
+        pitch = -0.12,
+        fov_y = PI / 3.0,
+        move_speed = 7.0,
+        boost_multiplier = 2.0,
+        mouse_sensitivity = 0.0058,
+        move_planar = false,
+        pitch_min = -1.45,
+        pitch_max = 1.45,
+    };
+
+    ui_open := true;
+    use_cache_raymarch := true;
+    use_hw_interp := true;
+    show_atlas_overlay := false;
+    show_atlas_fullscreen := false;
+    show_pointer_grid_debug := false;
+    bake_gradient_debug := false;
+    cache_debug_show_selected_lod := false;
+    cache_debug_show_distance := false;
+    debug_force_flat_color := false;
+    cache_force_lod0 := false;
+    auto_fly_forward := false;
+    auto_fly_speed: float = 8.0;
+    atlas_debug_slice: float = 0.5;
+    render_scale: float = 0.35;
+    blit_nearest := false;
 };
 
 bvh: Brickmap_BVH;
@@ -153,7 +172,6 @@ physics_sync_suppress_edit: s32 = -1;
 physics_step_dirty_accum_valid := false;
 physics_step_dirty_bounds: AABB;
 
-ui_open := true;
 auto_edit_after: s32 = -1;
 auto_edit_done := false;
 auto_drag_near_camera := false;
@@ -165,30 +183,15 @@ auto_drag_edit_index: s32 = -1;
 auto_drag_from_pos: Vector3;
 auto_drag_to_pos: Vector3;
 log_updates := false;
-use_cache_raymarch := true;
-use_hw_interp := true;
 draw_brick_debug := false;
 debug_brick_limit: s32 = 420;
-show_atlas_overlay := false;
-show_atlas_fullscreen := false;
-show_pointer_grid_debug := false;
-bake_gradient_debug := false;
 skip_classify_debug := false;
-cache_debug_show_selected_lod := false;
-cache_debug_show_distance := false;
-debug_force_flat_color := false;
-cache_force_lod0 := false;
 freeze_clipmap := false;
 experimental_recenter_reuse := true;
-auto_fly_forward := false;
-auto_fly_speed: float = 8.0;
 log_validation_every_frame := false;
 debug_wait_idle_every_frame := false;
 debug_strict_compute_sync := false;
 debug_render_direct_swapchain := false;
-atlas_debug_slice: float = 0.5;
-render_scale: float = 0.35;
-blit_nearest := false;
 debug_autolog_once := false;
 guard_corruption_count: s32;
 guard_corruption_reported := false;
@@ -251,6 +254,7 @@ validation_first_mismatch_owner_by: s32;
 validation_first_mismatch_owner_bz: s32;
 
 on_dll_init :: () {
+    using app;
     init(*brickmap_compute_graph);
     graphics_source := cast([]u8) get_transpiled(.METAL, brickmap_vertex_main, brickmap_fragment_main);
     temporal_graphics_source := cast([]u8) get_transpiled(.METAL, brickmap_vertex_main, brickmap_temporal_fragment_main);
@@ -492,6 +496,7 @@ on_unload :: () {
 } @on_unload
 
 ui :: () {
+    using app;
     if !app_ui_enabled return;
     using ImGui;
     SetNextWindowPos(.{24.0, 24.0}, .FirstUseEver);
@@ -672,6 +677,7 @@ ui :: () {
 }
 
 tick :: () {
+    using app;
     result, swapchain_image := app_swapchain_acquire();
     assert(result == .SUCCESS);
     if !swapchain_image return;
@@ -1352,6 +1358,7 @@ Physics :: #import "Physics";
 #import "Random";
 
 blit_sampler_handle :: () -> Gpu_Sampler {
+    using app;
     if blit_nearest return render_point_sampler;
     return render_sampler;
 }
@@ -1435,6 +1442,7 @@ init_params_guards :: () {
 }
 
 seed_initial_scene :: () {
+    using app;
     count: s32 = 0;
 
     add_sphere(*count, .{-2.1, 0.3, -3.8}, 1.1, albedo = .{0.68, 0.30, 0.28});
@@ -1557,6 +1565,7 @@ update_auto_drag_repro :: () {
 }
 
 find_nearest_edit_to_camera :: () -> s32 {
+    using app;
     edit_count := cast(s32) params.cpu.edit_count;
     best_index: s32 = -1;
     best_dist2 := 1.0e30;
@@ -1659,6 +1668,7 @@ perform_pending_full_rebuild :: () {
 }
 
 update_lod_origins :: (camera_moved: bool) -> bool {
+    using app;
     if !camera_moved return false;
 
     changed := false;
@@ -2337,6 +2347,7 @@ apply_player_pull_forces :: (dt: float) {
 }
 
 update_player_mode :: (dt: float, mouse_ok: bool, right_down: bool, mx: s32, my: s32) {
+    using app;
     if control_mode != .Player return;
 
     _ = editor_camera_update(*camera, dt, mx, my, mouse_ok,
@@ -2369,6 +2380,7 @@ update_player_mode :: (dt: float, mouse_ok: bool, right_down: bool, mx: s32, my:
 }
 
 init_brickmap_physics :: () {
+    using app;
     Physics.configure_test_environment(
         spawn_spheres = false,
         include_static_box = false,
@@ -2524,6 +2536,7 @@ validation_scan_state :: () {
 }
 
 log_validation_frame :: () {
+    using app;
     v := validation_frame;
     log("BRICKMAP_VAL frame=% cam=[%,%,%] pending=% dirty=% atlas=%/% ptr=% val(nonempty=% valid=% oob=% dup=% above=% neg=% holes=% refs=% dirty_flags=% owner_mismatch=% owner_missing=% valid_unpublished=% max_seen=%) shift(keep=% inval=% requeue=% drop=% overflow=%)",
         frame_count,
@@ -2944,6 +2957,7 @@ edit_focus_center_radius :: (edit_index: s32) -> (center: Vector3, radius: float
 }
 
 start_focus_on_edit :: (edit_index: s32) {
+    using app;
     center, radius := edit_focus_center_radius(edit_index);
     fov_y := PI / 3.0;
     framed_distance := max(radius / max(tan(fov_y * 0.5), 0.0001) * 1.30, radius * 2.0);
@@ -2967,6 +2981,7 @@ start_focus_on_edit :: (edit_index: s32) {
 }
 
 focus_update_camera :: (dt: float) {
+    using app;
     if !focus_active return;
     step := dt / max(focus_duration, 0.01);
     focus_t = clamp(focus_t + step, 0.0, 1.0);
@@ -2980,6 +2995,7 @@ focus_update_camera :: (dt: float) {
 }
 
 orbit_update_camera :: (mouse_pos: Vector2) {
+    using app;
     if !orbit_have_prev_mouse {
         orbit_prev_mouse = mouse_pos;
         orbit_have_prev_mouse = true;

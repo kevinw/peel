@@ -5,7 +5,7 @@
 Raymarch_Params :: struct {
     resolution: Vector2;
     mouse_uv: Vector2;
-    time: float;
+    current_time: float;
     _pad: float;
 }
 
@@ -271,7 +271,7 @@ raymarch_vertex_main :: (using in: Raymarch_Vertex_In) -> Raymarch_Vertex_Out {
 } @vertex_shader
 
 raymarch_fragment_main :: (using in: Raymarch_Fragment_In, params: *Raymarch_Params) -> struct { out_color: Vector4; } {
-    time := params[0].time;
+    time := params[0].current_time;
 
     uv_ndc := Vector2.{uv.x * 2.0 - 1.0, uv.y * 2.0 - 1.0};
     denom := params[0].resolution.y;

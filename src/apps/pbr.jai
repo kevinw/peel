@@ -5,12 +5,14 @@ PBR_ROUGHNESS_PATH    :: #run sprint(TEX_TEMPL, "Roughness");
 PBR_AO_PATH           :: #run sprint(TEX_TEMPL, "AmbientOcclusion");
 PBR_DISPLACEMENT_PATH :: #run sprint(TEX_TEMPL, "Displacement");
 
-PBR_TEXTURE_COUNT    :: 5;
-PBR_TEX_ALBEDO       :: 0;
-PBR_TEX_NORMAL       :: 1;
-PBR_TEX_ROUGHNESS    :: 2;
-PBR_TEX_AO           :: 3;
-PBR_TEX_DISPLACEMENT :: 4;
+using PBR_TEX: enum s64 {
+    PBR_TEX_ALBEDO       :: 0;
+    PBR_TEX_NORMAL       :: 1;
+    PBR_TEX_ROUGHNESS    :: 2;
+    PBR_TEX_AO           :: 3;
+    PBR_TEX_DISPLACEMENT :: 4;
+    PBR_TEXTURE_COUNT    :: 5;
+}
 
 Draw_Data :: struct {
     params_gpu: Gpu_Ptr;
@@ -74,9 +76,6 @@ on_dll_init :: () {
         displacement_index = cast(u32) pbr_views[PBR_TEX_DISPLACEMENT] - 1,
 
         sampler_index = cast(u32) pbr_sampler - 1,
-        debug_mode = debug_mode,
-        _pad0 = 0,
-        _pad1 = 0,
 
         light_pos_x = 1.8,
         light_pos_y = 2.4,
