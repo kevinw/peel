@@ -26,8 +26,8 @@ rd_init_state :: (state: *[RD_CELL_COUNT] Vector2) {
             idx := cast(s64) y * cast(s64) RD_WIDTH + cast(s64) x;
             dx := cast(s64) x - center_x;
             dy := cast(s64) y - center_y;
-            inside_center := rd_abs(cast(float) dx) <= cast(float) seed_half_w &&
-                             rd_abs(cast(float) dy) <= cast(float) seed_half_h;
+            inside_center := abs(cast(float) dx) <= cast(float) seed_half_w &&
+                             abs(cast(float) dy) <= cast(float) seed_half_h;
             noise_code := (x * 131 + y * 197 + x * y * 17) % 1024;
             noise := cast(float) noise_code / 1024.0;
             a: float = 1.0;

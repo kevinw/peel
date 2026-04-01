@@ -1,6 +1,6 @@
 #import "Jai-Shader-Transpiler";
+#import "Jai-Shader-Transpiler/modules/ShaderFuncs";
 #import "Math";
-#import,file "../../../modules/Jai-Shader-Transpiler/modules/ShaderFuncs/module.jai";
 
 FLUID_WIDTH  :: 320;
 FLUID_HEIGHT :: 320;
@@ -144,12 +144,11 @@ fluid_vertex_corner :: (vid: u32) -> Vector2 {
 }
 
 fluid_vertex_main :: (using in: Fluid_Vertex_In, state: *[FLUID_CELL_COUNT] Vector4) -> Fluid_Vertex_Out {
-    using out: Fluid_Vertex_Out;
-    _ = state;
     pos := fluid_vertex_corner(vertex_id);
-    gl_Position = .{pos.x, pos.y, 0.0, 1.0};
-    uv = .{pos.x * 0.5 + 0.5, pos.y * 0.5 + 0.5};
-    return out;
+    return {
+        gl_Position = .{pos.x, pos.y, 0.0, 1.0},
+        uv = .{pos.x * 0.5 + 0.5, pos.y * 0.5 + 0.5},
+    };
 } @vertex_shader
 
 fluid_fragment_main :: (using in: Fluid_Fragment_In, state: *[FLUID_CELL_COUNT] Vector4) -> struct { out_color: Vector4; } {
