@@ -5,8 +5,6 @@
 MESHLET_MAX_VERTICES :: 64;
 MESHLET_MAX_TRIANGLES :: 124;
 TASK_EMIT_MESHLET_COUNT : u32 : 64;
-MESHLET_GRID_DEBUG_FLAG_FORCE_LOD0             : u32 : 1 << 0;
-MESHLET_GRID_DEBUG_FLAG_FORCE_FIRST_INSTANCE   : u32 : 1 << 1;
 SCENE_ALPHA_MODE_OPAQUE :: 0;
 SCENE_ALPHA_MODE_MASK   :: 1;
 
@@ -194,7 +192,7 @@ task_main :: (
                 selected_instance_index = params.batch_first_instance + instance_local;
                 instance := instances[selected_instance_index];
                 selected_lod_mesh_index := params.batch_mesh_index;
-                if (params.debug_flags & MESHLET_GRID_DEBUG_FLAG_FORCE_LOD0) == 0 && meshes[params.batch_mesh_index].lod_mesh_count > 0 {
+                if meshes[params.batch_mesh_index].lod_mesh_count > 0 {
                     lod_count := meshes[params.batch_mesh_index].lod_mesh_count;
                     lod_slot := min(selected_lods[selected_instance_index], lod_count);
                     if lod_slot > 0 {

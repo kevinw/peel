@@ -1,7 +1,7 @@
 #load "framebuffer_tools.jai";
 
 smoke_mode := false;
-debug_mode: u32 = 0;
+rb_debug_mode: u32 = 0;
 window_snapshot_mode := false;
 window_validate_mode := false;
 window_probe_auto_quit := false;
@@ -160,7 +160,7 @@ frame_debug_init :: (readback_stats: *Readback_Stats) {
     if try_parse_env_int("PEEL_WINDOW_SNAPSHOT") > 0 window_snapshot_mode = true;
     if try_parse_env_int("PEEL_WINDOW_VALIDATE") > 0 window_validate_mode = true;
     debug_mode_env,      _ := try_parse_env_int("PEEL_DEBUG_MODE");
-    if debug_mode_env > 0      debug_mode = cast(u32) debug_mode_env;
+    if debug_mode_env > 0      rb_debug_mode = cast(u32) debug_mode_env;
 
     if smoke_mode {
         readback_stats.test_readback = true;
