@@ -1,5 +1,6 @@
 # TODO
 
+- pressing fullscreen on raytracer.jai causes a crash.
 - see if we can use #initializer_of for cpu memory in alloc view
 - make build.jai - -dll build the host only once.
 - fix Bindings_Generator for MTL4, consider making functions #no_context

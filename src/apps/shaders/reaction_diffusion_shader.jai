@@ -1,4 +1,5 @@
 #import "Jai-Shader-Transpiler";
+#import "Jai-Shader-Transpiler/modules/ShaderFuncs";
 #import "Math";
 
 RD_WIDTH  :: 512;
@@ -17,10 +18,6 @@ RD_CURSOR_A_SUPPRESS :: 0.22;
 
 RD_Compute_In :: struct {
     thread_id: UVector3; @thread_position_in_grid
-}
-
-UVector3 :: struct {
-    x, y, z: u32;
 }
 
 RD_Compute_Control :: struct {
@@ -72,21 +69,6 @@ rd_wrap_down :: (y: u32) -> u32 {
     n := y + 1;
     if n >= RD_HEIGHT return 0;
     return n;
-}
-
-rd_clamp01 :: (v: float) -> float {
-    if v < 0 return 0;
-    if v > 1 return 1;
-    return v;
-}
-
-rd_abs :: (v: float) -> float {
-    if v < 0 return -v;
-    return v;
-}
-
-rd_lerp :: (a: float, b: float, t: float) -> float {
-    return a + (b - a) * t;
 }
 
 rd_step_compute :: (using in: RD_Compute_In, state: *Vector2, control: *RD_Compute_Control) {
@@ -149,8 +131,8 @@ rd_step_compute :: (using in: RD_Compute_In, state: *Vector2, control: *RD_Compu
     }
 
     state[dst_offset + i] = .{
-        rd_clamp01(next_a),
-        rd_clamp01(next_b),
+        clamp(next_a, 0, 1),
+        clamp(next_b, 0, 1),
     };
 } @compute_shader
 
@@ -198,30 +180,30 @@ rd_fragment_main :: (using in: RD_Fragment_In, state: *[RD_CELL_COUNT] Vector2) 
     s := (cast(*Vector2) state)[idx];
     a := s.x;
     b := s.y;
-    tone := rd_clamp01(b * 2.8);
-    edge := rd_clamp01(rd_abs(b - a) * 1.2);
+    tone := clamp(b * 2.8, 0, 1);
+    edge := clamp(abs(b - a) * 1.2, 0, 1);
     red: float;
     green: float;
     blue: float;
     if tone < 0.33 {
         u := tone / 0.33;
-        red = rd_lerp(0.03, 0.00, u);
-        green = rd_lerp(0.06, 0.31, u);
-        blue = rd_lerp(0.12, 0.46, u);
+        red = lerp(0.03, 0.00, u);
+        green = lerp(0.06, 0.31, u);
+        blue = lerp(0.12, 0.46, u);
     } else if tone < 0.66 {
         u := (tone - 0.33) / 0.33;
-        red = rd_lerp(0.00, 0.52, u);
-        green = rd_lerp(0.31, 0.66, u);
-        blue = rd_lerp(0.46, 0.74, u);
+        red = lerp(0.00, 0.52, u);
+        green = lerp(0.31, 0.66, u);
+        blue = lerp(0.46, 0.74, u);
     } else {
         u := (tone - 0.66) / 0.34;
-        red = rd_lerp(0.52, 0.84, u);
-        green = rd_lerp(0.66, 0.36, u);
-        blue = rd_lerp(0.74, 0.22, u);
+        red = lerp(0.52, 0.84, u);
+        green = lerp(0.66, 0.36, u);
+        blue = lerp(0.74, 0.22, u);
     }
-    red = rd_clamp01(red + edge * 0.03);
-    green = rd_clamp01(green + edge * 0.02);
-    blue = rd_clamp01(blue + edge * 0.01);
+    red = clamp(red + edge * 0.03, 0, 1);
+    green = clamp(green + edge * 0.02, 0, 1);
+    blue = clamp(blue + edge * 0.01, 0, 1);
 
     return { red, green, blue, 1.0, };
 } @fragment_shader

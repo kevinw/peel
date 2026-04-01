@@ -198,4 +198,4 @@ tick :: () {
 #load "../SGPU_App_Common.jai";
 #import "Jai-Shader-Transpiler";
 SHR :: #import,file "../shader_hot_reload.jai";
-#load "../reaction_diffusion_shader.jai";
+#load "shaders/reaction_diffusion_shader.jai";
