@@ -1,4 +1,3 @@
-WRITE_SHADER_OUTPUT :: true;
 Boids_Draw_Params_CPU :: CPU_Struct(Boids_Draw_Params);
 
 palette :: Vector4.[

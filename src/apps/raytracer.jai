@@ -1,5 +1,3 @@
-WRITE_SHADER_OUTPUT :: true;
-
 graphics_pipeline: Gpu_Pipeline;
 gpu_arena: Gpu_Arena;
 raytracer_params: Gpu_Buffer(Raytracer_Params);

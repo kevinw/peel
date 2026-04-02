@@ -57,7 +57,7 @@ lod_from_mesh_index :: (meshes: *Scene_Mesh, base_mesh_index: u32, selected_mesh
 
 sphere_visible :: (params: *Meshlet_Grid_Params, center: Vector3, radius: float) -> bool {
     for plane: params.frustum_planes {
-        distance := dot(Vector3.{plane.x, plane.y, plane.z}, center) + plane.w;
+        distance := dot(plane.xyz, center) + plane.w;
         if distance < -radius return false;
     }
     return true;

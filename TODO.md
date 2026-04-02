@@ -1,5 +1,6 @@
 # TODO
 
+- a memory leak test which does export PEEL_MAX_FRAMES=10; ./flux && ./boids && ./inspiration_test && ...
 - pressing fullscreen on raytracer.jai causes a crash.
 - see if we can use #initializer_of for cpu memory in alloc view
 - make build.jai - -dll build the host only once.
@@ -76,3 +77,4 @@ Sebastian Aaltonen
 - https://www.cs.cmu.edu/~rdriley/487/papers/Thompson_1984_ReflectionsonTrustingTrust.pdf
 - https://github.com/myemural/VulkanCppExamples/tree/master
 - cascade receiver culling https://x.com/SebAaltonen/status/2036768312667902463?s=20
+- https://github.com/RandyGaul/nudge/blob/main/src/split_store.h

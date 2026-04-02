@@ -151,7 +151,7 @@ doing_peel_diagnostic :: () -> bool {
     }
 
     #if !SINGLE_BINARY {
-        if window_snapshot || readback_stats.export_jpg_mode {
+        if window_snapshot_mode || readback_stats.export_jpg_mode {
             return true;
         }
     }

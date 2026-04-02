@@ -1,4 +1,3 @@
-WRITE_SHADER_OUTPUT :: true;
 
 #load "../SGPU_App_Common.jai";
 #load "../editor_camera.jai";

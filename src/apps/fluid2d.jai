@@ -1,4 +1,3 @@
-WRITE_SHADER_OUTPUT :: true;
 
 Draw_Data :: struct {
     vertex_params_gpu: Gpu_Ptr;

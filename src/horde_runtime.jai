@@ -32,7 +32,6 @@ Enemy_Spawn_Params :: struct {
     spawn_radius_max: float = 28.0;
     despawn_radius: float = 88.0;
     move_speed: float = 2.2;
-    climb_speed_ratio: float = 2.95;
     min_head_size: float = 0.78;
     max_head_size: float = 1.28;
     touch_damage_per_second: float = 11.0;
@@ -395,7 +394,6 @@ do_ui :: (using runtime: *Horde_Runtime) {
     Persist.SliderInt("Enemy Target", *spawn_params.target_alive, 0, max_count, "%d");
     Persist.SliderFloat("Enemy Spawn Rate", *spawn_params.spawn_rate, 0.0, 600.0, "%.0f/s");
     Persist.SliderFloat("Enemy Speed", *spawn_params.move_speed, 0.5, 6.0, "%.2f");
-    Persist.SliderFloat("Climb Speed Ratio", *spawn_params.climb_speed_ratio, 0.0, 1.5, "%.2f");
     Persist.SliderFloat("Min Head Size", *spawn_params.min_head_size, 0.4, 1.5, "%.2f");
     Persist.SliderFloat("Max Head Size", *spawn_params.max_head_size, 0.5, 2.0, "%.2f");
     Persist.SliderFloat("Enemy Touch DPS", *spawn_params.touch_damage_per_second, 0.0, 40.0, "%.1f");
@@ -853,7 +851,6 @@ spawn_enemy :: (using runtime: *Horde_Runtime, spawn_index: s32) -> bool {
 update_enemies :: (using runtime: *Horde_Runtime, dt: float) {
     if enemies.count == 0 return;
     spawn_params.target_alive = clamp(runtime.spawn_params.target_alive, 0, runtime.max_count);
-    spawn_params.climb_speed_ratio = max(0.0, runtime.spawn_params.climb_speed_ratio);
     if spawn_params.min_head_size > runtime.spawn_params.max_head_size {
         temp := spawn_params.min_head_size;
         spawn_params.min_head_size = runtime.spawn_params.max_head_size;
@@ -888,13 +885,8 @@ update_enemies :: (using runtime: *Horde_Runtime, dt: float) {
             planar_velocity := Vector3.{actual_velocity.x, 0.0, actual_velocity.z};
             planar_speed := length(planar_velocity);
             vertical_correction := (desired_ground_y - body_pos.y) * 10.0;
-            climb_speed := spawn_params.move_speed * spawn_params.climb_speed_ratio;
             is_blocked := planar_speed < spawn_params.move_speed * 0.55 && planar_dist > scaled_collider_radius * 1.5;
-            if is_blocked {
-                target_vel.y = max(vertical_correction, climb_speed);
-            } else {
-                target_vel.y = vertical_correction;
-            }
+            target_vel.y = vertical_correction;
             target_vel_jph := cast,force(Vec3) target_vel;
             BodyInterface_SetLinearVelocity(Physics.physics.body_interface, it.body_id, *target_vel_jph);
 

@@ -1,4 +1,3 @@
-WRITE_SHADER_OUTPUT :: true;
 
 Hex_Tile_Flags :: enum_flags u32 {
     GRASS;
