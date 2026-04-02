@@ -126,3 +126,6 @@ if failed {
     return false; // etc
 }
 ```
+
+In Jai shaders, prefer:
+`my_vec4.xyz` over `Vector3.{my_vec4.x, my_vec4.y, my_vec4.z}`

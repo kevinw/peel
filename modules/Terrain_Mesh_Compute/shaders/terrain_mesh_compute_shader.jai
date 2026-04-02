@@ -98,28 +98,6 @@ tm_interp_grad :: (ga: Vector3, gb: Vector3, da: float, db: float) -> Vector3 {
     return tm_safe_normalize(ga + (gb - ga) * t);
 }
 
-tm_emit_vertex :: (positions: *TM_Float4, normals: *TM_Float4, base: u32, out_count: u32, p: Vector3, n: Vector3) -> u32 {
-    if out_count >= TM_Max_Verts_Per_Cell return out_count;
-    i := base + out_count;
-    positions[i].x = p.x;
-    positions[i].y = p.y;
-    positions[i].z = p.z;
-    positions[i].w = 0.0;
-    normals[i].x = n.x;
-    normals[i].y = n.y;
-    normals[i].z = n.z;
-    normals[i].w = 0.0;
-    return out_count + 1;
-}
-
-tm_emit_triangle :: (positions: *TM_Float4, normals: *TM_Float4, base: u32, out_count: u32,
-                     p0: Vector3, n0: Vector3, p1: Vector3, n1: Vector3, p2: Vector3, n2: Vector3) -> u32 {
-    out_count = tm_emit_vertex(positions, normals, base, out_count, p0, n0);
-    out_count = tm_emit_vertex(positions, normals, base, out_count, p1, n1);
-    out_count = tm_emit_vertex(positions, normals, base, out_count, p2, n2);
-    return out_count;
-}
-
 tm_mesh_tetra :: (positions: *TM_Float4, normals: *TM_Float4, base: u32, out_count: u32,
                   p0: Vector3, p1: Vector3, p2: Vector3, p3: Vector3,
                   d0: float, d1: float, d2: float, d3: float,
@@ -135,6 +113,10 @@ tm_mesh_tetra :: (positions: *TM_Float4, normals: *TM_Float4, base: u32, out_cou
     if d3 < TM_Iso_Level { inside[inside_count] = 3; inside_count += 1; } else { outside[outside_count] = 3; outside_count += 1; }
 
     if inside_count == 0 || inside_count == 4 return out_count;
+
+    emit_positions: [6]Vector3;
+    emit_normals: [6]Vector3;
+    emit_count: u32 = 0;
 
     if inside_count == 1 {
         i0 := inside[0];
@@ -161,11 +143,11 @@ tm_mesh_tetra :: (positions: *TM_Float4, normals: *TM_Float4, base: u32, out_cou
         n0 := tm_interp_grad(gi0, go0, di0, do0);
         n1 := tm_interp_grad(gi0, go1, di0, do1);
         n2 := tm_interp_grad(gi0, go2, di0, do2);
-        out_count = tm_emit_triangle(positions, normals, base, out_count, q0, n0, q1, n1, q2, n2);
-        return out_count;
-    }
-
-    if inside_count == 3 {
+        emit_positions[0] = q0; emit_normals[0] = n0;
+        emit_positions[1] = q1; emit_normals[1] = n1;
+        emit_positions[2] = q2; emit_normals[2] = n2;
+        emit_count = 3;
+    } else if inside_count == 3 {
         o0 := outside[0];
         i0 := inside[0];
         i1 := inside[1];
@@ -190,40 +172,58 @@ tm_mesh_tetra :: (positions: *TM_Float4, normals: *TM_Float4, base: u32, out_cou
         n0 := tm_interp_grad(go0, gi0, do0, di0);
         n1 := tm_interp_grad(go0, gi1, do0, di1);
         n2 := tm_interp_grad(go0, gi2, do0, di2);
-        out_count = tm_emit_triangle(positions, normals, base, out_count, q0, n0, q2, n2, q1, n1);
-        return out_count;
+        emit_positions[0] = q0; emit_normals[0] = n0;
+        emit_positions[1] = q2; emit_normals[1] = n2;
+        emit_positions[2] = q1; emit_normals[2] = n1;
+        emit_count = 3;
+    } else {
+        i0 := inside[0];
+        i1 := inside[1];
+        o0 := outside[0];
+        o1 := outside[1];
+
+        pi0 := tm_getp(i0, p0, p1, p2, p3);
+        pi1 := tm_getp(i1, p0, p1, p2, p3);
+        po0 := tm_getp(o0, p0, p1, p2, p3);
+        po1 := tm_getp(o1, p0, p1, p2, p3);
+        di0 := tm_getd(i0, d0, d1, d2, d3);
+        di1 := tm_getd(i1, d0, d1, d2, d3);
+        do0 := tm_getd(o0, d0, d1, d2, d3);
+        do1 := tm_getd(o1, d0, d1, d2, d3);
+        gi0 := tm_getg(i0, g0, g1, g2, g3);
+        gi1 := tm_getg(i1, g0, g1, g2, g3);
+        go0 := tm_getg(o0, g0, g1, g2, g3);
+        go1 := tm_getg(o1, g0, g1, g2, g3);
+
+        q0 := tm_interp_iso(pi0, po0, di0, do0);
+        q1 := tm_interp_iso(pi1, po0, di1, do0);
+        q2 := tm_interp_iso(pi1, po1, di1, do1);
+        q3 := tm_interp_iso(pi0, po1, di0, do1);
+        n0 := tm_interp_grad(gi0, go0, di0, do0);
+        n1 := tm_interp_grad(gi1, go0, di1, do0);
+        n2 := tm_interp_grad(gi1, go1, di1, do1);
+        n3 := tm_interp_grad(gi0, go1, di0, do1);
+        emit_positions[0] = q0; emit_normals[0] = n0;
+        emit_positions[1] = q1; emit_normals[1] = n1;
+        emit_positions[2] = q2; emit_normals[2] = n2;
+        emit_positions[3] = q0; emit_normals[3] = n0;
+        emit_positions[4] = q2; emit_normals[4] = n2;
+        emit_positions[5] = q3; emit_normals[5] = n3;
+        emit_count = 6;
     }
 
-    i0 := inside[0];
-    i1 := inside[1];
-    o0 := outside[0];
-    o1 := outside[1];
+    for emit_index: 0..emit_count-1 {
+        if out_count >= TM_Max_Verts_Per_Cell break;
+        i := base + out_count;
+        q := emit_positions[emit_index];
+        n := emit_normals[emit_index];
+        positions[i].x = q.x; positions[i].y = q.y; positions[i].z = q.z; positions[i].w = 0.0;
+        normals[i].x = n.x; normals[i].y = n.y; normals[i].z = n.z; normals[i].w = 0.0;
+        out_count += 1;
+    }
 
-    pi0 := tm_getp(i0, p0, p1, p2, p3);
-    pi1 := tm_getp(i1, p0, p1, p2, p3);
-    po0 := tm_getp(o0, p0, p1, p2, p3);
-    po1 := tm_getp(o1, p0, p1, p2, p3);
-    di0 := tm_getd(i0, d0, d1, d2, d3);
-    di1 := tm_getd(i1, d0, d1, d2, d3);
-    do0 := tm_getd(o0, d0, d1, d2, d3);
-    do1 := tm_getd(o1, d0, d1, d2, d3);
-    gi0 := tm_getg(i0, g0, g1, g2, g3);
-    gi1 := tm_getg(i1, g0, g1, g2, g3);
-    go0 := tm_getg(o0, g0, g1, g2, g3);
-    go1 := tm_getg(o1, g0, g1, g2, g3);
-
-    q0 := tm_interp_iso(pi0, po0, di0, do0);
-    q1 := tm_interp_iso(pi1, po0, di1, do0);
-    q2 := tm_interp_iso(pi1, po1, di1, do1);
-    q3 := tm_interp_iso(pi0, po1, di0, do1);
-    n0 := tm_interp_grad(gi0, go0, di0, do0);
-    n1 := tm_interp_grad(gi1, go0, di1, do0);
-    n2 := tm_interp_grad(gi1, go1, di1, do1);
-    n3 := tm_interp_grad(gi0, go1, di0, do1);
-
-    out_count = tm_emit_triangle(positions, normals, base, out_count, q0, n0, q1, n1, q2, n2);
-    out_count = tm_emit_triangle(positions, normals, base, out_count, q0, n0, q2, n2, q3, n3);
     return out_count;
+
 }
 
 terrain_mesh_build_chunk_compute :: (using in: TM_Compute_In, density: *float, positions: *TM_Float4, normals: *TM_Float4) {

@@ -88,3 +88,5 @@ dist/mesh_shader_triangle
 dist/mesh_shader_triangle.dylib
 dist/meshlet_lizard_grid
 dist/meshlet_lizard_grid.dylib
+dist/cel_shading
+dist/cel_shading.dylib

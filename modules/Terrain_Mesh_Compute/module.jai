@@ -79,6 +79,8 @@ rebuild_dirty_meshes :: (ctx: *Terrain_Mesh_Compute_Context, terrain: *Terrain_V
         assert(result == .SUCCESS);
         result = gpu_set_pipeline(cmd, ctx.pipeline);
         assert(result == .SUCCESS, tprint("Terrain mesh compute set pipeline failed: %", result));
+        // sgpu dispatches threadgroups here, and the Metal backend currently uses a
+        // 64-wide compute threadgroup for generic compute pipelines.
         dispatch_x := cast(u32) ((Cell_Count + 63) / 64);
         gpu_dispatch_buffers(cmd, .[ctx.density_gpu, ctx.positions_gpu, ctx.normals_gpu], .[dispatch_x, 1, 1]);
         gpu_submit(cmd);

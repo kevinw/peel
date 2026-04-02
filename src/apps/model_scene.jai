@@ -715,18 +715,18 @@ tick :: () {
         }, .COLOR_ATTACHMENT_WRITE, .SHADER_READ);
         gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .LESS, depth_mode = .READ | .WRITE});
         gpu_set_pipeline(cmd_buff, ground_shadow_pipeline);
-        draw_result := gpu_draw_instanced_direct(cmd_buff, ground_shadow_params.gpu, ground_index_count, 1);
+        gpu_draw_instanced_direct(cmd_buff, ground_shadow_params.gpu, ground_index_count, 1);
         gpu_set_pipeline(cmd_buff, shadow_pipeline);
         if render_grass && grass_shadow_params.cpu != null && grass_shadow_instance_count > 0 {
             gpu_set_pipeline(cmd_buff, grass_shadow_pipeline);
-            draw_result = gpu_draw_instanced_direct(cmd_buff, grass_shadow_params.gpu, 6, grass_shadow_instance_count);
+            gpu_draw_instanced_direct(cmd_buff, grass_shadow_params.gpu, 6, grass_shadow_instance_count);
             gpu_set_pipeline(cmd_buff, shadow_pipeline);
         }
         for batch: scene_batches {
             if it_index < shadow_skip_batch.count && shadow_skip_batch[it_index] continue;
             mesh := scene_geo.meshes[batch.mesh_index];
             params_gpu := scene_draw_params.gpu + (it_index * size_of(Scene_Draw_Params_CPU)).(Gpu_Ptr);
-            draw_result = gpu_draw_instanced_direct(cmd_buff, params_gpu, mesh.index_count, batch.instance_count);
+            gpu_draw_instanced_direct(cmd_buff, params_gpu, mesh.index_count, batch.instance_count);
         }
         draw_shadow(*horde_runtime, cmd_buff, shadow_pipeline);
     }
@@ -763,23 +763,9 @@ tick :: () {
 
     if debug_pick_params.cpu != null {
         debug_pick_params.cpu.* = .{
-            vertices = 0,
-            indices = 0,
-            materials = 0,
-            instances = 0,
-            morph_vertex_deltas = 0,
-            morph_weights = 0,
-            skin_matrices = 0,
             view_proj = Matrix4_Identity,
-            light_dir = .{0.0, 0.0, 0.0},
-            sun_params = .{0.0, 0.0, 0.0, 0.0},
-            camera_pos = .{0.0, 0.0, 0.0},
             material_index = cast(u32) ground_sampler - 1,
             object_id = ifx scene_pick.view != 0 then gpu_texture_view_index(scene_pick.view) else 0,
-            mesh_base_vertex = 0,
-            skin_matrix_count = 0,
-            morph_target_count = 0,
-            morph_vertex_count = 0,
         };
     }
 
@@ -1090,9 +1076,6 @@ rebuild_scene_runtime :: () {
             indices = scene_geo.indices.gpu + (mesh.first_index * size_of(u32)).(Gpu_Ptr),
             materials = scene_geo.materials.gpu,
             instances = scene_instances.gpu + (batch.first_instance * size_of(Scene_Instance)).(Gpu_Ptr),
-            morph_vertex_deltas = 0,
-            morph_weights = 0,
-            skin_matrices = 0,
             view_proj = Matrix4_Identity,
             light_dir = normalize({0.35, -1.0, 0.25}),
             sun_params = .{outdoor_rig.sun_strength, outdoor_rig.time_of_day, 0.0, 0.0},
@@ -1100,7 +1083,6 @@ rebuild_scene_runtime :: () {
             material_index = mesh.material_index,
             object_id = batch_pick_object_ids[it_index],
             mesh_base_vertex = mesh.base_vertex,
-            skin_matrix_count = 0,
             morph_target_count = mesh.morph_target_count,
             morph_vertex_count = mesh.vertex_count,
         };

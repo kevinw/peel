@@ -8,6 +8,7 @@ APP_FILES :: string.[
     "boids.jai",
     "reaction_diffusion.jai",
     "raymarch.jai",
+    "cel_shading.jai",
     "raytracer.jai",
     "fluid2d.jai",
     "ripple_heightfield.jai",
