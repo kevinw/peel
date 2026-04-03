@@ -20,6 +20,7 @@ APP_FILES :: string.[
     "terrain_test.jai",
     "texture3d.jai",
     "meshlet_lizard_grid.jai",
+    "blender_scene.jai",
     "mesh_shader_triangle.jai",
     "decal_painter.jai",
 ];

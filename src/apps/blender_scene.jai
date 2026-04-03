@@ -1,0 +1,602 @@
+Meshlet_Grid_Instance :: struct {
+    world: Matrix4;
+}
+
+Draw_Batch :: struct {
+    mesh_index: u32;
+    first_instance: u32;
+    instance_count: u32;
+    max_meshlet_count: u32;
+}
+
+Scene_Instance :: struct {
+    world: Matrix4;
+    tint: Vector4;
+}
+
+Meshlet_Grid_Debug_Mode :: enum u32 {
+    SHADED;
+    LODS;
+    MESHLETS;
+}
+
+Meshlet_Grid_Params :: struct {
+    camera_vp: Matrix4;
+    frustum_planes: [6]Vector4;
+    eye_position: Vector3;
+    debug_mode: u32;
+    light_dir: Vector3;
+    base_color_factor: Vector4;
+    batch_mesh_index: u32;
+    base_color_texture_index: u32;
+    opacity_texture_index: u32;
+    normal_texture_index: u32;
+    roughness_texture_index: u32;
+    ao_texture_index: u32;
+    alpha_mode: u32;
+    alpha_cutoff: float;
+    sampler_index: u32;
+    batch_first_instance: u32;
+    batch_instance_count: u32;
+    batch_max_meshlet_count: u32;
+    batch_meshlet_chunk_count: u32;
+    batch_object_group_start: u32;
+    debug_flags: u32;
+    lod_pass: u32;
+}
+
+BLENDER_SCENE_DEFAULT_BLEND_PATH :: "tools/blender_exporter/default_cube.blend";
+BLENDER_SCENE_POLL_SECONDS :: 0.20;
+MESHLET_TASK_EMIT_MESHLET_COUNT : u32 : 64;
+BLENDER_SCENE_MAX_MESH_GROUPS_PER_DRAW : u32 : 1024;
+
+using app: struct {
+    pipeline: Gpu_Pipeline;
+    depth_texture: Gpu_Texture;
+    depth_view: Gpu_Texture_View;
+    depth_w: u32;
+    depth_h: u32;
+    geo: Scene_Geo;
+    arena: Gpu_Arena;
+    params: Gpu_Frame_Param_Allocator(Meshlet_Grid_Params);
+    vertices: Gpu_View(Scene_Vertex);
+    materials: Gpu_View(Scene_Material);
+    meshes: Gpu_View(Scene_Mesh);
+    meshlet_meshes: Gpu_View(Scene_Meshlet_Mesh);
+    meshlets: Gpu_View(Scene_Meshlet);
+    meshlet_vertices: Gpu_View(u32);
+    meshlet_triangles: Gpu_View(u32);
+    meshlet_bounds: Gpu_View(Vector4);
+    instances: Gpu_View(Meshlet_Grid_Instance);
+    selected_lods: Gpu_View(u32);
+    target_lods: Gpu_View(u32);
+    lod_transition_alphas: Gpu_View(float);
+    batches: [..]Draw_Batch;
+    model_index: s32 = -1;
+    camera: Editor_Camera = {
+        position = .{0.0, 4.5, 9.0},
+        yaw = 0.0,
+        pitch = -0.32,
+        move_speed = 14.0,
+        boost_multiplier = 2.5,
+        mouse_sensitivity = 0.0048,
+        move_planar = false,
+        pitch_min = -1.45,
+        pitch_max = 1.45,
+    };
+    auto_orbit: bool;
+    orbit_time: float;
+    scene_center: Vector3;
+    scene_radius: float = 6.0;
+    lod_screen_radius: float = 420.0;
+    lod_distance_power: float = 1.18;
+    mesh_source: string;
+    mesh_grid_limit: u32;
+    param_slot_count: s64 = 1;
+    source_path: string;
+    export_path: string;
+    watched_export_modtime: Apollo_Time;
+    watched_export_size: s64;
+    reload_count: u32;
+    reload_poll_accum: float;
+    using draw: Meshlet_Grid_Params = {
+        debug_mode = cast(u32) Meshlet_Grid_Debug_Mode.SHADED,
+        debug_flags = MESHLET_DEBUG_DISABLE_FRUSTUM_CULL,
+    };
+}
+
+on_dll_init :: () {
+    assert(OS == .MACOS, "blender_scene is currently Metal mesh-shader only.");
+    source_path = resolve_blend_source_path();
+    export_path = copy_string(tprint("%.peelscene", source_path));
+
+    init_blender_scene_pipeline();
+    load_blender_scene();
+    gpu_commit_residency();
+} @on_dll_init
+
+on_unload :: () {
+    if source_path.count != 0 free(source_path);
+    if export_path.count != 0 free(export_path);
+    if mesh_source.count != 0 free(mesh_source);
+    if depth_texture != 0 gpu_free(depth_texture);
+    if pipeline != 0 gpu_delete(*pipeline);
+    if arena.cpu != null gpu_free_arena(arena);
+    array_free(batches);
+    scene_geo_deinit(*geo);
+} @on_unload
+
+tick :: () {
+    poll_for_blender_scene_changes();
+
+    result, swapchain_image := app_swapchain_acquire();
+    assert(result == .SUCCESS);
+    if !swapchain_image return;
+
+    mx, my, mouse_ok := get_mouse_pointer_position(true);
+    _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
+    if !dims_ok || win_w <= 0 || win_h <= 0 return;
+
+    ensure_depth_target(cast(u32) win_w, cast(u32) win_h);
+
+    allow_look := (Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_RIGHT] & .DOWN) != 0;
+    _ = editor_camera_update(*camera, editor_dt, mx, my, mouse_ok,
+        allow_move = true,
+        allow_look = allow_look,
+        allow_zoom = true);
+
+    if auto_orbit {
+        orbit_time += editor_dt;
+        orbit_radius := max(scene_radius * 1.35, 2.5);
+        camera.position = scene_center + .{
+            sin(orbit_time * 0.23) * orbit_radius,
+            max(scene_radius * 0.42, 1.5),
+            cos(orbit_time * 0.23) * orbit_radius,
+        };
+        editor_camera_set_look_at(*camera, scene_center);
+    }
+
+    aspect := cast(float) win_w / max(cast(float) win_h, 1.0);
+    view := editor_camera_make_view(*camera);
+    proj := editor_camera_make_projection(*camera, aspect, 0.05, 600.0);
+    draw.camera_vp = proj * view;
+    draw.frustum_planes = extract_frustum_planes(draw.camera_vp);
+    draw.eye_position = camera.position;
+    draw.light_dir = normalize(Vector3.{-0.45, -1.0, -0.25});
+    base_params := draw;
+    update_selected_lods(cast(float) win_h);
+
+    main_queue := gpu_get_queue(.MAIN, 0);
+    result=, cmd_buff := gpu_start_command_recording(main_queue);
+    assert(result == .SUCCESS);
+
+    gpu_begin_scoped_render_pass(cmd_buff, .{
+        depth_target = .{
+            view = depth_view,
+            load_op = .CLEAR,
+            store_op = .STORE,
+            clear_value = .{
+                depth = 1.0,
+                stencil = 0,
+            },
+        },
+        color_targets = .[
+            .{
+                view = swapchain_image,
+                load_op = .CLEAR,
+                store_op = .STORE,
+                clear_color._float = .[0.53, 0.67, 0.86, 1.0],
+            }
+        ]
+    });
+    gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .LESS, depth_mode = .READ | .WRITE});
+    gpu_set_pipeline(cmd_buff, pipeline);
+
+    meshlet_draw_bindings := Gpu_Ptr.[
+        meshes.gpu,
+        meshlet_meshes.gpu,
+        vertices.gpu,
+        materials.gpu,
+        meshlets.gpu,
+        meshlet_vertices.gpu,
+        meshlet_triangles.gpu,
+        meshlet_bounds.gpu,
+        instances.gpu,
+        selected_lods.gpu,
+        target_lods.gpu,
+        lod_transition_alphas.gpu,
+    ];
+    for batches {
+        total_task_slots := it.max_meshlet_count;
+        draw_first_instance := it.first_instance;
+        draw_instance_total := it.instance_count;
+        meshlet_chunk_count := max(cast(u32) 1, (total_task_slots + MESHLET_TASK_EMIT_MESHLET_COUNT - 1) / MESHLET_TASK_EMIT_MESHLET_COUNT);
+        max_object_groups_per_draw := max(cast(u32) 1, mesh_grid_limit / MESHLET_TASK_EMIT_MESHLET_COUNT);
+
+        total_object_groups := draw_instance_total * meshlet_chunk_count;
+        object_group_start: u32;
+        while object_group_start < total_object_groups {
+            draw_object_group_count := min(max_object_groups_per_draw, total_object_groups - object_group_start);
+
+            draw_instance_start := object_group_start / meshlet_chunk_count;
+            draw_group_end := object_group_start + draw_object_group_count;
+            draw_instance_end := min(draw_instance_total, (draw_group_end + meshlet_chunk_count - 1) / meshlet_chunk_count);
+            draw_instance_count := draw_instance_end - draw_instance_start;
+            if draw_instance_count > 0 {
+                batch_material := materials.cpu[meshes.cpu[it.mesh_index].material_index];
+                primary_params := sgpu_frame_param_alloc(*params, base_params);
+                primary_params.cpu.base_color_factor = batch_material.base_color_factor;
+                primary_params.cpu.batch_mesh_index = it.mesh_index;
+                primary_params.cpu.base_color_texture_index = batch_material.base_color_texture_index;
+                primary_params.cpu.opacity_texture_index = batch_material.opacity_texture_index;
+                primary_params.cpu.normal_texture_index = batch_material.normal_texture_index;
+                primary_params.cpu.roughness_texture_index = batch_material.roughness_texture_index;
+                primary_params.cpu.ao_texture_index = batch_material.ao_texture_index;
+                primary_params.cpu.alpha_mode = batch_material.alpha_mode;
+                primary_params.cpu.alpha_cutoff = batch_material.alpha_cutoff;
+                primary_params.cpu.sampler_index = batch_material.sampler_index;
+                primary_params.cpu.batch_first_instance = draw_first_instance + draw_instance_start;
+                primary_params.cpu.batch_instance_count = draw_instance_count;
+                primary_params.cpu.batch_max_meshlet_count = it.max_meshlet_count;
+                primary_params.cpu.batch_meshlet_chunk_count = meshlet_chunk_count;
+                primary_params.cpu.batch_object_group_start = object_group_start - draw_instance_start * meshlet_chunk_count;
+                primary_params.cpu.lod_pass = 0;
+
+                draw_result := gpu_draw_meshlets(cmd_buff, primary_params.gpu, meshlet_draw_bindings, .[draw_object_group_count, 1, 1]);
+                assert(draw_result == .SUCCESS, "gpu_draw_meshlets failed: %", draw_result);
+            }
+            object_group_start += draw_object_group_count;
+        }
+    }
+
+    submit_and_present_with_ui(cmd_buff);
+} @on_tick
+
+show_ui :: () {
+    if !app_ui_enabled return;
+
+    using ImGui;
+    defer End();
+    if !Begin("Blender Scene") return;
+
+    Text("Source: %", source_path);
+    Text("Export: %", export_path);
+    Text("Reloads: %", reload_count);
+    Text("Batches: %  Instances: %", batches.count, instances.cpu.count);
+    Text("Max Meshlets / Mesh: %", geo.max_meshlet_count);
+    Text("RMB look, WASD move, Shift boost");
+    Checkbox("Auto Orbit", *auto_orbit);
+    disable_frustum_cull := (draw.debug_flags & MESHLET_DEBUG_DISABLE_FRUSTUM_CULL) != 0;
+    if Checkbox("Disable Frustum Cull", *disable_frustum_cull) {
+        if disable_frustum_cull draw.debug_flags |= MESHLET_DEBUG_DISABLE_FRUSTUM_CULL;
+        else                    draw.debug_flags &= ~MESHLET_DEBUG_DISABLE_FRUSTUM_CULL;
+    }
+    force_first_meshlet := (draw.debug_flags & MESHLET_DEBUG_FORCE_FIRST_MESHLET) != 0;
+    if Checkbox("Force First Meshlet", *force_first_meshlet) {
+        if force_first_meshlet draw.debug_flags |= MESHLET_DEBUG_FORCE_FIRST_MESHLET;
+        else                   draw.debug_flags &= ~MESHLET_DEBUG_FORCE_FIRST_MESHLET;
+    }
+    force_all_meshlets := (draw.debug_flags & MESHLET_DEBUG_FORCE_ALL_MESHLETS) != 0;
+    if Checkbox("Force All Meshlets", *force_all_meshlets) {
+        if force_all_meshlets draw.debug_flags |= MESHLET_DEBUG_FORCE_ALL_MESHLETS;
+        else                 draw.debug_flags &= ~MESHLET_DEBUG_FORCE_ALL_MESHLETS;
+    }
+    simple_selection := (draw.debug_flags & MESHLET_DEBUG_SIMPLE_SELECTION) != 0;
+    if Checkbox("Simple Selection", *simple_selection) {
+        if simple_selection draw.debug_flags |= MESHLET_DEBUG_SIMPLE_SELECTION;
+        else                draw.debug_flags &= ~MESHLET_DEBUG_SIMPLE_SELECTION;
+    }
+    synthetic_triangle := (draw.debug_flags & MESHLET_DEBUG_SYNTHETIC_TRIANGLE) != 0;
+    if Checkbox("Synthetic Triangle", *synthetic_triangle) {
+        if synthetic_triangle draw.debug_flags |= MESHLET_DEBUG_SYNTHETIC_TRIANGLE;
+        else                  draw.debug_flags &= ~MESHLET_DEBUG_SYNTHETIC_TRIANGLE;
+    }
+
+    debug_mode_value := draw.debug_mode;
+    if RadioButton("Shaded", debug_mode_value == cast(u32) Meshlet_Grid_Debug_Mode.SHADED) draw.debug_mode = cast(u32) Meshlet_Grid_Debug_Mode.SHADED;
+    SameLine();
+    if RadioButton("LODs", debug_mode_value == cast(u32) Meshlet_Grid_Debug_Mode.LODS) draw.debug_mode = cast(u32) Meshlet_Grid_Debug_Mode.LODS;
+    SameLine();
+    if RadioButton("Meshlets", debug_mode_value == cast(u32) Meshlet_Grid_Debug_Mode.MESHLETS) draw.debug_mode = cast(u32) Meshlet_Grid_Debug_Mode.MESHLETS;
+    SliderFloat("LOD Screen Radius", *lod_screen_radius, 8.0, 1024.0);
+    SliderFloat("LOD Power", *lod_distance_power, 0.5, 2.0);
+
+    if Button("Reload Now") {
+        load_blender_scene();
+    }
+} @on_ui
+
+#scope_file
+
+resolve_blend_source_path :: () -> string {
+    blend_path := getenv_string("PEEL_BLEND_PATH");
+    if blend_path.count == 0 blend_path = BLENDER_SCENE_DEFAULT_BLEND_PATH;
+    if !String.is_absolute_path(blend_path) {
+        blend_path = tprint("%/%", find_workspace_root(), blend_path);
+    }
+    assert(file_exists(blend_path), "Set PEEL_BLEND_PATH to a .blend file. Missing path: %", blend_path);
+    return copy_string(blend_path);
+}
+
+getenv_string :: (name: string) -> string {
+    value_c := POSIX_Getenv.getenv(temp_c_string(name));
+    if !value_c return "";
+    return to_string(value_c, c_style_strlen(value_c));
+}
+
+find_workspace_root :: () -> string {
+    cwd := get_working_directory();
+    probe := cwd;
+
+    while probe.count != 0 {
+        if file_exists(tprint("%/build.jai", probe)) return probe;
+        parent := String.path_strip_filename(probe);
+        if parent.count != 0 && parent[parent.count-1] == "/" {
+            parent.count -= 1;
+        }
+        if parent == probe break;
+        probe = parent;
+    }
+
+    return cwd;
+}
+
+init_blender_scene_pipeline :: () {
+    shader :: #run get_transpiled_task_mesh_pipeline(.METAL, task_main, mesh_main, fragment_main);
+    mesh_source = copy_string(tprint("%\n%", shader.task_source, shader.mesh_source));
+    mesh_desc := Gpu_Mesh_Pipeline_Desc.{
+        task_shader = cast([]u8) mesh_source,
+        mesh_shader = cast([]u8) mesh_source,
+        pixel_shader = cast([]u8) shader.pixel_source,
+        raster_desc = .{
+            cull = .NONE,
+            depth_format = .D32_SFLOAT,
+            color_targets = .[
+                .{format = .B8G8R8A8_UNORM},
+            ],
+        },
+        task_threads = .[1, 1, 1],
+        mesh_threads = .[1, 1, 1],
+        payload_memory_length = cast(u32) shader.payload_memory_length,
+        max_total_threadgroups_per_mesh_grid = BLENDER_SCENE_MAX_MESH_GROUPS_PER_DRAW,
+    };
+    pipeline = gpu_create_mesh_pipeline(mesh_desc);
+    assert(pipeline != 0, "Failed to create blender_scene mesh pipeline.");
+    mesh_grid_limit = gpu_get_mesh_pipeline_max_total_threadgroups_per_grid(pipeline);
+    if mesh_grid_limit == 0 mesh_grid_limit = BLENDER_SCENE_MAX_MESH_GROUPS_PER_DRAW;
+}
+
+load_blender_scene :: () {
+    if arena.cpu != null {
+        gpu_free_arena(arena);
+        arena = .{};
+    }
+    array_reset(*batches);
+    if geo.arena.cpu != null {
+        scene_geo_deinit(*geo);
+    }
+
+    model_paths := string.[source_path];
+    scene_geo_init(*geo, model_paths);
+    assert(geo.models.count > 0, "No models imported from %", source_path);
+    model_index = 0;
+    rebuild_blender_scene_runtime();
+    gpu_commit_residency();
+    update_watched_export_state();
+    reload_count += 1;
+    log("blender_scene loaded source=% batches=% instances=% reloads=%", source_path, batches.count, instances.cpu.count, reload_count);
+}
+
+rebuild_blender_scene_runtime :: () {
+    model := geo.models[model_index];
+    model_bounds := scene_geo_model_bounds(*geo, model_index);
+    log("blender_scene model '%': bounds min=% max=% meshes=% meshlets=% nodes=%",
+        model.name, model_bounds.min, model_bounds.max, geo.meshes.count, geo.meshlets.cpu.count, geo.nodes.count);
+    scene_center = (model_bounds.min + model_bounds.max) * 0.5;
+    scene_extent := model_bounds.max - model_bounds.min;
+    scene_radius = max(max(scene_extent.x, scene_extent.z), max(scene_extent.y, 1.0)) * 0.7;
+    scene_radius = max(scene_radius, 1.5);
+    camera.position = scene_center + .{0.0, max(scene_extent.y, 1.0) * 0.65, max(scene_radius * 1.5, 3.0)};
+    editor_camera_set_look_at(*camera, scene_center);
+
+    root_transforms := Matrix4.[Matrix4_Identity];
+    temp_instances: [..]Scene_Instance;
+    temp_instances.allocator = temp;
+    temp_batches: [..]Draw_Batch;
+    temp_batches.allocator = temp;
+    scene_geo_append_model_instances(*temp_batches, *temp_instances, *geo, model_index, root_transforms);
+
+    param_slot_count = 0;
+    for temp_batches {
+        meshlet_chunk_count := cast(s64) ((mesh_max_meshlet_count(it.mesh_index) + MESHLET_TASK_EMIT_MESHLET_COUNT - 1) / MESHLET_TASK_EMIT_MESHLET_COUNT);
+        total_object_groups := max(meshlet_chunk_count, cast(s64) 1) * cast(s64) it.instance_count;
+        max_object_groups_per_draw := max(cast(s64) 1, cast(s64) mesh_grid_limit / cast(s64) MESHLET_TASK_EMIT_MESHLET_COUNT);
+        draw_count := (total_object_groups + max_object_groups_per_draw - 1) / max_object_groups_per_draw;
+        param_slot_count += max(draw_count, cast(s64) 1) * 2;
+    }
+    param_slot_count = max(param_slot_count, cast(s64) 1);
+
+    total_bytes :=
+        1024 +
+        param_slot_count * SGPU_FRAMES_IN_FLIGHT * size_of(Meshlet_Grid_Params) +
+        geo.vertices.cpu.count * size_of(Scene_Vertex) +
+        geo.materials.cpu.count * size_of(Scene_Material) +
+        geo.meshes.count * size_of(Scene_Mesh) +
+        geo.meshlet_meshes.cpu.count * size_of(Scene_Meshlet_Mesh) +
+        geo.meshlets.cpu.count * size_of(Scene_Meshlet) +
+        geo.meshlet_vertices.cpu.count * size_of(u32) +
+        geo.meshlet_triangles.cpu.count * size_of(u32) +
+        geo.meshlet_bounds.cpu.count * size_of(Vector4) +
+        max(cast(s64) 1, temp_instances.count) * size_of(Meshlet_Grid_Instance) +
+        max(cast(s64) 1, temp_instances.count) * size_of(u32) +
+        max(cast(s64) 1, temp_instances.count) * size_of(u32) +
+        max(cast(s64) 1, temp_instances.count) * size_of(float);
+
+    arena = gpu_make_arena(total_bytes, label = "blender scene arena");
+    assert(arena.cpu != null, "Failed to allocate blender scene arena.");
+
+    params = sgpu_make_frame_param_allocator(*arena, Meshlet_Grid_Params, param_slot_count);
+    vertices = gpu_alloc_view(*arena, Scene_Vertex, geo.vertices.cpu.count);
+    materials = gpu_alloc_view(*arena, Scene_Material, geo.materials.cpu.count);
+    meshes = gpu_alloc_view(*arena, Scene_Mesh, geo.meshes.count);
+    meshlet_meshes = gpu_alloc_view(*arena, Scene_Meshlet_Mesh, geo.meshlet_meshes.cpu.count);
+    meshlets = gpu_alloc_view(*arena, Scene_Meshlet, geo.meshlets.cpu.count);
+    meshlet_vertices = gpu_alloc_view(*arena, u32, geo.meshlet_vertices.cpu.count);
+    meshlet_triangles = gpu_alloc_view(*arena, u32, geo.meshlet_triangles.cpu.count);
+    meshlet_bounds = gpu_alloc_view(*arena, Vector4, geo.meshlet_bounds.cpu.count);
+    instances = gpu_alloc_view(*arena, Meshlet_Grid_Instance, max(temp_instances.count, 1));
+    selected_lods = gpu_alloc_view(*arena, u32, max(temp_instances.count, 1));
+    target_lods = gpu_alloc_view(*arena, u32, max(temp_instances.count, 1));
+    lod_transition_alphas = gpu_alloc_view(*arena, float, max(temp_instances.count, 1));
+
+    memcpy(vertices.cpu.data, geo.vertices.cpu.data, geo.vertices.cpu.count * size_of(Scene_Vertex));
+    memcpy(materials.cpu.data, geo.materials.cpu.data, geo.materials.cpu.count * size_of(Scene_Material));
+    memcpy(meshes.cpu.data, geo.meshes.data, geo.meshes.count * size_of(Scene_Mesh));
+    memcpy(meshlet_meshes.cpu.data, geo.meshlet_meshes.cpu.data, geo.meshlet_meshes.cpu.count * size_of(Scene_Meshlet_Mesh));
+    memcpy(meshlets.cpu.data, geo.meshlets.cpu.data, geo.meshlets.cpu.count * size_of(Scene_Meshlet));
+    memcpy(meshlet_vertices.cpu.data, geo.meshlet_vertices.cpu.data, geo.meshlet_vertices.cpu.count * size_of(u32));
+    memcpy(meshlet_triangles.cpu.data, geo.meshlet_triangles.cpu.data, geo.meshlet_triangles.cpu.count * size_of(u32));
+    memcpy(meshlet_bounds.cpu.data, geo.meshlet_bounds.cpu.data, geo.meshlet_bounds.cpu.count * size_of(Vector4));
+
+    array_copy(*batches, temp_batches);
+    for temp_instances {
+        instances.cpu[it_index] = .{world = it.world};
+        selected_lods.cpu[it_index] = 0;
+        target_lods.cpu[it_index] = 0;
+        lod_transition_alphas.cpu[it_index] = 0.0;
+    }
+    for batches {
+        mesh := geo.meshes[it.mesh_index];
+        meshlet_mesh := geo.meshlet_meshes.cpu[it.mesh_index];
+        log("blender_scene batch mesh=% idx_count=% verts=% meshlets=% lods=% material=%",
+            it.mesh_index, mesh.index_count, mesh.vertex_count, meshlet_mesh.meshlet_count, mesh.lod_mesh_count, mesh.material_index);
+    }
+}
+
+update_watched_export_state :: () {
+    watched_export_modtime, watched_export_size, _ = file_modtime_and_size(export_path);
+}
+
+poll_for_blender_scene_changes :: () {
+    reload_poll_accum += editor_dt;
+    if reload_poll_accum < BLENDER_SCENE_POLL_SECONDS return;
+    reload_poll_accum = 0.0;
+
+    modtime, size, exists := file_modtime_and_size(export_path);
+    if !exists return;
+    if modtime == watched_export_modtime && size == watched_export_size return;
+
+    log("blender_scene detected updated export: %", export_path);
+    load_blender_scene();
+}
+
+mesh_max_meshlet_count :: (mesh_index: u32) -> u32 {
+    mesh := geo.meshes[mesh_index];
+    result := geo.meshlet_meshes.cpu[mesh_index].meshlet_count;
+    if mesh.lod_mesh_count > 0 {
+        for lod_offset: 0..mesh.lod_mesh_count-1 {
+            lod_mesh_index := mesh.lod_mesh_start + lod_offset;
+            result = max(result, geo.meshlet_meshes.cpu[lod_mesh_index].meshlet_count);
+        }
+    }
+    return max(result, 1);
+}
+
+mesh_world_max_scale :: (world: Matrix4) -> float {
+    axis_x4 := world * Vector4.{1.0, 0.0, 0.0, 0.0};
+    axis_y4 := world * Vector4.{0.0, 1.0, 0.0, 0.0};
+    axis_z4 := world * Vector4.{0.0, 0.0, 1.0, 0.0};
+    axis_x := Vector3.{axis_x4.x, axis_x4.y, axis_x4.z};
+    axis_y := Vector3.{axis_y4.x, axis_y4.y, axis_y4.z};
+    axis_z := Vector3.{axis_z4.x, axis_z4.y, axis_z4.z};
+    return max(length(axis_x), max(length(axis_y), length(axis_z)));
+}
+
+lod_metric_for_instance :: (base_mesh_index: u32, world: Matrix4, viewport_height: float) -> float {
+    meshlet_mesh := geo.meshlet_meshes.cpu[base_mesh_index];
+    local_center := meshlet_mesh.bounds_center_radius.xyz;
+    local_radius := max(meshlet_mesh.bounds_center_radius.w, 0.001);
+    world_center4 := world * Vector4.{local_center.x, local_center.y, local_center.z, 1.0};
+    world_center := Vector3.{world_center4.x, world_center4.y, world_center4.z};
+    world_radius := max(local_radius * mesh_world_max_scale(world), 0.001);
+    distance_to_eye := max(distance(camera.position, world_center), 0.001);
+    tan_half_fov := max(tan(camera.fov_y * 0.5), 0.0001);
+    projected_radius_px := world_radius * viewport_height / max(2.0 * distance_to_eye * tan_half_fov, 0.0001);
+    return pow(lod_screen_radius / max(projected_radius_px, 0.0001), lod_distance_power);
+}
+
+lod_slot_for_metric :: (metric: float, max_lod: u32) -> u32 {
+    lod_slot: u32;
+    while lod_slot < max_lod {
+        threshold := cast(float) (lod_slot + 1);
+        if metric < threshold break;
+        lod_slot += 1;
+    }
+    return lod_slot;
+}
+
+update_selected_lods :: (viewport_height: float) {
+    for batches {
+        max_lod := meshes.cpu[it.mesh_index].lod_mesh_count;
+        for instance_offset: 0..it.instance_count-1 {
+            instance_index := it.first_instance + instance_offset;
+            metric := lod_metric_for_instance(it.mesh_index, instances.cpu[instance_index].world, viewport_height);
+            selected_lod := lod_slot_for_metric(metric, max_lod);
+            selected_lods.cpu[instance_index] = selected_lod;
+            target_lods.cpu[instance_index] = selected_lod;
+            lod_transition_alphas.cpu[instance_index] = 0.0;
+        }
+    }
+}
+
+normalize_plane4 :: (p: Vector4) -> Vector4 {
+    n := Vector3.{p.x, p.y, p.z};
+    len := max(length(n), 0.000001);
+    return p / len;
+}
+
+extract_frustum_planes :: (m: Matrix4) -> [6]Vector4 {
+    row0 := Vector4.{m._11, m._12, m._13, m._14};
+    row1 := Vector4.{m._21, m._22, m._23, m._24};
+    row2 := Vector4.{m._31, m._32, m._33, m._34};
+    row3 := Vector4.{m._41, m._42, m._43, m._44};
+    return .[
+        normalize_plane4(row3 + row0),
+        normalize_plane4(row3 - row0),
+        normalize_plane4(row3 + row1),
+        normalize_plane4(row3 - row1),
+        normalize_plane4(row3 + row2),
+        normalize_plane4(row3 - row2),
+    ];
+}
+
+ensure_depth_target :: (width: u32, height: u32) {
+    if width == 0 || height == 0 return;
+    if depth_view != 0 && depth_w == width && depth_h == height return;
+
+    if depth_texture != 0 gpu_free(depth_texture);
+    depth_texture = 0;
+    depth_view = 0;
+
+    res, depth_texture= := gpu_create_texture(.{
+        dimensions = .[width, height, 1],
+        format = .D32_SFLOAT,
+        usage = .DEPTH_STENCIL_ATTACHMENT,
+    });
+    assert(res == .SUCCESS, "Depth texture creation failed: %", res);
+    depth_view = gpu_texture_view(depth_texture);
+    assert(depth_view != 0, "Depth view creation failed.");
+    depth_w = width;
+    depth_h = height;
+}
+
+#load "../SGPU_App_Common.jai";
+#load "../editor_camera.jai";
+#load "../scene_geo.jai";
+#import "Jai-Shader-Transpiler";
+ImGui :: #import "ImGui";
+Input :: #import "Input";
+String :: #import "String";
+#import "Math";
+using,only(getenv) POSIX_Getenv :: #import "POSIX";
+#load "shaders/meshlet_lizard_grid_shader.jai";

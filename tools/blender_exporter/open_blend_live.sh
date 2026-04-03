@@ -4,31 +4,36 @@ set -euo pipefail
 
 ROOT=/Users/kev/src/peel
 BLENDER_BIN="${BLENDER_BIN:-$HOME/src/build_darwin_release/bin/Blender.app/Contents/MacOS/Blender}"
-PY_DRIVER="$ROOT/tools/blender_exporter/export_blend.py"
+LIVE_SYNC_PY="$ROOT/tools/blender_exporter/live_sync.py"
 
 usage() {
-    echo "Usage: $0 <input.blend|--factory-startup> <output.peelscene>" >&2
+    echo "Usage: $0 <input.blend|--factory-startup> [output.peelscene]" >&2
     exit 1
 }
 
-if [[ $# -ne 2 ]]; then
+if [[ $# -lt 1 || $# -gt 2 ]]; then
     usage
 fi
 
 INPUT_PATH="$1"
-OUTPUT_PATH="$2"
+OUTPUT_PATH="${2:-}"
 
 if [[ ! -x "$BLENDER_BIN" ]]; then
     echo "Missing Blender binary: $BLENDER_BIN" >&2
     exit 1
 fi
 
-export PEEL_EXPORT_OUTPUT="$OUTPUT_PATH"
+if [[ ! -f "$LIVE_SYNC_PY" ]]; then
+    echo "Missing live sync script: $LIVE_SYNC_PY" >&2
+    exit 1
+fi
+
+if [[ -n "$OUTPUT_PATH" ]]; then
+    export PEEL_LIVE_OUTPUT="$OUTPUT_PATH"
+fi
 
 BLENDER_ARGS=(
-    --background
-    --python-exit-code 1
-    --python "$PY_DRIVER"
+    --python "$LIVE_SYNC_PY"
 )
 
 if [[ "$INPUT_PATH" == "--factory-startup" ]]; then

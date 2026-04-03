@@ -7,6 +7,11 @@ MESHLET_MAX_TRIANGLES :: 124;
 TASK_EMIT_MESHLET_COUNT : u32 : 64;
 SCENE_ALPHA_MODE_OPAQUE :: 0;
 SCENE_ALPHA_MODE_MASK   :: 1;
+MESHLET_DEBUG_DISABLE_FRUSTUM_CULL : u32 : 1;
+MESHLET_DEBUG_FORCE_FIRST_MESHLET  : u32 : 2;
+MESHLET_DEBUG_SYNTHETIC_TRIANGLE   : u32 : 4;
+MESHLET_DEBUG_FORCE_ALL_MESHLETS   : u32 : 8;
+MESHLET_DEBUG_SIMPLE_SELECTION    : u32 : 16;
 
 Fragment_In :: struct {
     position: Vector4; @SV_Position
@@ -56,6 +61,7 @@ lod_from_mesh_index :: (meshes: *Scene_Mesh, base_mesh_index: u32, selected_mesh
 }
 
 sphere_visible :: (params: *Meshlet_Grid_Params, center: Vector3, radius: float) -> bool {
+    if (params.debug_flags & MESHLET_DEBUG_DISABLE_FRUSTUM_CULL) != 0 return true;
     for plane: params.frustum_planes {
         distance := dot(plane.xyz, center) + plane.w;
         if distance < -radius return false;
@@ -101,58 +107,88 @@ mesh_main :: (
 ) {
     _ = selected_lods; _ = target_lods; _ = transition_alphas;
     mesh_set_max_output_counts(MESHLET_MAX_VERTICES, MESHLET_MAX_TRIANGLES);
-    payload_instance_index := mesh_payload_ptr(Task_Payload).instance_index;
-    instance := instances[payload_instance_index];
-    payload_mesh_index := mesh_payload_ptr(Task_Payload).mesh_index;
-    meshlet_index := mesh_payload_ptr(Task_Payload).meshlet_start + mesh_group_id_x();
-    meshlet := meshlets[meshlet_index];
-    meshlet_bound := meshlet_bounds[meshlet_index];
-    meshlet_center4 := instance.world * Vector4.{meshlet_bound.x, meshlet_bound.y, meshlet_bound.z, 1.0};
-    meshlet_center := Vector3.{meshlet_center4.x, meshlet_center4.y, meshlet_center4.z};
-    meshlet_radius := max(meshlet_bound.w * world_max_scale(instance.world), 0.001);
-    clamped_vertex_count := min(meshlet.vertex_count, cast(u32) MESHLET_MAX_VERTICES);
-    clamped_triangle_count := min(meshlet.triangle_count, cast(u32) MESHLET_MAX_TRIANGLES);
-    if !sphere_visible(params, meshlet_center, meshlet_radius) || clamped_vertex_count < 3 || clamped_triangle_count == 0 {
-        mesh_set_output_counts(0, 0);
+    debug_synthetic_triangle := (params.debug_flags & MESHLET_DEBUG_SYNTHETIC_TRIANGLE) != 0;
+    if debug_synthetic_triangle {
+        mesh_set_output_counts(3, 1);
+        mesh_set_vertex(0, Fragment_In.{
+            position = .{-0.55, -0.45, 0.0, 1.0},
+            color = .{1.0, 0.2, 0.1},
+            uv = .{0.0, 0.0},
+            world_pos = .{0.0, 0.0, 0.0},
+            normal = .{0.0, 0.0, 1.0},
+            tangent = .{1.0, 0.0, 0.0, 1.0},
+        });
+        mesh_set_vertex(1, Fragment_In.{
+            position = .{0.0, 0.62, 0.0, 1.0},
+            color = .{0.1, 1.0, 0.2},
+            uv = .{1.0, 0.0},
+            world_pos = .{0.0, 0.0, 0.0},
+            normal = .{0.0, 0.0, 1.0},
+            tangent = .{1.0, 0.0, 0.0, 1.0},
+        });
+        mesh_set_vertex(2, Fragment_In.{
+            position = .{0.55, -0.45, 0.0, 1.0},
+            color = .{0.1, 0.3, 1.0},
+            uv = .{0.0, 1.0},
+            world_pos = .{0.0, 0.0, 0.0},
+            normal = .{0.0, 0.0, 1.0},
+            tangent = .{1.0, 0.0, 0.0, 1.0},
+        });
+        mesh_set_triangle(0, 0, 1, 2);
     } else {
-        mesh_set_output_counts(clamped_vertex_count, clamped_triangle_count);
+        payload_instance_index := mesh_payload_ptr(Task_Payload).instance_index;
+        instance := instances[payload_instance_index];
+        payload_mesh_index := mesh_payload_ptr(Task_Payload).mesh_index;
+        meshlet_index := mesh_payload_ptr(Task_Payload).meshlet_start + mesh_group_id_x();
+        meshlet := meshlets[meshlet_index];
+        meshlet_bound := meshlet_bounds[meshlet_index];
+        meshlet_center4 := instance.world * Vector4.{meshlet_bound.x, meshlet_bound.y, meshlet_bound.z, 1.0};
+        meshlet_center := Vector3.{meshlet_center4.x, meshlet_center4.y, meshlet_center4.z};
+        meshlet_radius := max(meshlet_bound.w * world_max_scale(instance.world), 0.001);
+        clamped_vertex_count := min(meshlet.vertex_count, cast(u32) MESHLET_MAX_VERTICES);
+        clamped_triangle_count := min(meshlet.triangle_count, cast(u32) MESHLET_MAX_TRIANGLES);
+        if !sphere_visible(params, meshlet_center, meshlet_radius) || clamped_vertex_count < 3 || clamped_triangle_count == 0 {
+            mesh_set_output_counts(0, 0);
+        } else {
+            mesh_set_output_counts(clamped_vertex_count, clamped_triangle_count);
 
-        meshlet_hue := hash01(meshlet_index);
-        meshlet_tint := hue2rgb(meshlet_hue);
-        for vertex_local: 0..cast(s64) clamped_vertex_count-1 {
-            vertex_index := meshlet.vertex_offset + cast(u32) vertex_local;
-            v := vertices[meshlet_vertices[vertex_index]];
-            world_pos4 := instance.world * Vector4.{v.position.x, v.position.y, v.position.z, 1.0};
-            world_pos := Vector3.{world_pos4.x, world_pos4.y, world_pos4.z};
-            world_normal4 := instance.world * Vector4.{v.normal.x, v.normal.y, v.normal.z, 0.0};
-            world_normal := normalize(Vector3.{world_normal4.x, world_normal4.y, world_normal4.z});
-            world_tangent4 := instance.world * Vector4.{v.tangent.x, v.tangent.y, v.tangent.z, 0.0};
-            world_tangent := normalize(Vector3.{world_tangent4.x, world_tangent4.y, world_tangent4.z});
+            meshlet_hue := hash01(meshlet_index);
+            meshlet_tint := hue2rgb(meshlet_hue);
+            for vertex_local: 0..cast(s64) clamped_vertex_count-1 {
+                vertex_index := meshlet.vertex_offset + cast(u32) vertex_local;
+                v := vertices[meshlet_vertices[vertex_index]];
+                world_pos4 := instance.world * Vector4.{v.position.x, v.position.y, v.position.z, 1.0};
+                world_pos := Vector3.{world_pos4.x, world_pos4.y, world_pos4.z};
+                world_normal4 := instance.world * Vector4.{v.normal.x, v.normal.y, v.normal.z, 0.0};
+                world_normal := normalize(Vector3.{world_normal4.x, world_normal4.y, world_normal4.z});
+                world_tangent4 := instance.world * Vector4.{v.tangent.x, v.tangent.y, v.tangent.z, 0.0};
+                world_tangent := normalize(Vector3.{world_tangent4.x, world_tangent4.y, world_tangent4.z});
 
-            color := Vector3.{1.0, 1.0, 1.0};
-            if params.debug_mode == cast(u32) Meshlet_Grid_Debug_Mode.LODS {
-                color = lod_debug_color(lod_from_mesh_index(meshes, params.batch_mesh_index, payload_mesh_index));
-            } else if params.debug_mode == cast(u32) Meshlet_Grid_Debug_Mode.MESHLETS {
-                color = meshlet_tint;
+                color := Vector3.{1.0, 1.0, 1.0};
+                if params.debug_mode == cast(u32) Meshlet_Grid_Debug_Mode.LODS {
+                    color = lod_debug_color(lod_from_mesh_index(meshes, params.batch_mesh_index, payload_mesh_index));
+                } else if params.debug_mode == cast(u32) Meshlet_Grid_Debug_Mode.MESHLETS {
+                    color = meshlet_tint;
+                }
+
+                vertex_out: Fragment_In = .{
+                    position = params.camera_vp * Vector4.{world_pos.x, world_pos.y, world_pos.z, 1.0},
+                    color = color,
+                    uv = v.uv,
+                    world_pos = world_pos,
+                    normal = world_normal,
+                    tangent = .{world_tangent.x, world_tangent.y, world_tangent.z, v.tangent.w},
+                };
+                mesh_set_vertex(cast(u32) vertex_local, vertex_out);
             }
 
-            vertex_out: Fragment_In = .{
-                position = params.camera_vp * Vector4.{world_pos.x, world_pos.y, world_pos.z, 1.0},
-                color = color,
-                uv = v.uv,
-                world_pos = world_pos,
-                normal = world_normal,
-                tangent = .{world_tangent.x, world_tangent.y, world_tangent.z, v.tangent.w},
-            };
-            mesh_set_vertex(cast(u32) vertex_local, vertex_out);
-        }
-
-        for triangle_local: 0..cast(s64) clamped_triangle_count-1 {
-            packed := meshlet_triangles[meshlet.triangle_offset + cast(u32) triangle_local];
-            i0 := packed & 0xFF;
-            i1 := (packed >> 8) & 0xFF;
-            i2 := (packed >> 16) & 0xFF;
-            mesh_set_triangle(cast(u32) triangle_local, i0, i1, i2);
+            for triangle_local: 0..cast(s64) clamped_triangle_count-1 {
+                packed := meshlet_triangles[meshlet.triangle_offset + cast(u32) triangle_local];
+                i0 := packed & 0xFF;
+                i1 := (packed >> 8) & 0xFF;
+                i2 := (packed >> 16) & 0xFF;
+                mesh_set_triangle(cast(u32) triangle_local, i0, i1, i2);
+            }
         }
     }
 } @mesh_shader
@@ -182,15 +218,57 @@ task_main :: (
     selected_meshlet_start: u32;
     selected_mesh_index: u32 = params.batch_mesh_index;
 
-    if meshlet_chunk_count > 0 && params.batch_max_meshlet_count > 0 {
-        object_group_index := params.batch_object_group_start + task_id;
-        instance_local := object_group_index / meshlet_chunk_count;
-        chunk_local := object_group_index % meshlet_chunk_count;
-        if instance_local < params.batch_instance_count {
-            chunk_meshlet_start := chunk_local * TASK_EMIT_MESHLET_COUNT;
-            if chunk_meshlet_start < params.batch_max_meshlet_count {
+    if (params.debug_flags & MESHLET_DEBUG_SYNTHETIC_TRIANGLE) != 0 {
+        task_payload_ptr(Task_Payload).instance_index = 0;
+        task_payload_ptr(Task_Payload).mesh_index = params.batch_mesh_index;
+        task_payload_ptr(Task_Payload).meshlet_start = 0;
+        task_set_mesh_groups(1, 1, 1);
+    } else if (params.debug_flags & MESHLET_DEBUG_FORCE_ALL_MESHLETS) != 0 {
+        selected_instance_index = params.batch_first_instance;
+        selected_mesh_index = params.batch_mesh_index;
+        selected_meshlet_start = meshlet_meshes[selected_mesh_index].meshlet_start;
+        emit_meshlet_count = meshlet_meshes[selected_mesh_index].meshlet_count;
+        task_payload_ptr(Task_Payload).instance_index = selected_instance_index;
+        task_payload_ptr(Task_Payload).mesh_index = selected_mesh_index;
+        task_payload_ptr(Task_Payload).meshlet_start = selected_meshlet_start;
+        task_set_mesh_groups(emit_meshlet_count, 1, 1);
+    } else if (params.debug_flags & MESHLET_DEBUG_FORCE_FIRST_MESHLET) != 0 {
+        selected_instance_index = params.batch_first_instance;
+        selected_mesh_index = params.batch_mesh_index;
+        selected_meshlet_start = meshlet_meshes[selected_mesh_index].meshlet_start;
+        emit_meshlet_count = min(cast(u32) 1, meshlet_meshes[selected_mesh_index].meshlet_count);
+        task_payload_ptr(Task_Payload).instance_index = selected_instance_index;
+        task_payload_ptr(Task_Payload).mesh_index = selected_mesh_index;
+        task_payload_ptr(Task_Payload).meshlet_start = selected_meshlet_start;
+        task_set_mesh_groups(emit_meshlet_count, 1, 1);
+    } else if (params.debug_flags & MESHLET_DEBUG_SIMPLE_SELECTION) != 0 {
+        if meshlet_chunk_count > 0 {
+            object_group_index := params.batch_object_group_start + task_id;
+            instance_local := object_group_index / meshlet_chunk_count;
+            chunk_local := object_group_index % meshlet_chunk_count;
+            if instance_local < params.batch_instance_count {
                 selected_instance_index = params.batch_first_instance + instance_local;
-                instance := instances[selected_instance_index];
+                selected_mesh_index = params.batch_mesh_index;
+                chunk_meshlet_start := chunk_local * TASK_EMIT_MESHLET_COUNT;
+                total_meshlet_count := meshlet_meshes[selected_mesh_index].meshlet_count;
+                if chunk_meshlet_start < total_meshlet_count {
+                    selected_meshlet_start = meshlet_meshes[selected_mesh_index].meshlet_start + chunk_meshlet_start;
+                    emit_meshlet_count = min(TASK_EMIT_MESHLET_COUNT, total_meshlet_count - chunk_meshlet_start);
+                }
+            }
+        }
+
+        task_payload_ptr(Task_Payload).instance_index = selected_instance_index;
+        task_payload_ptr(Task_Payload).mesh_index = selected_mesh_index;
+        task_payload_ptr(Task_Payload).meshlet_start = selected_meshlet_start;
+        task_set_mesh_groups(emit_meshlet_count, 1, 1);
+    } else {
+        if meshlet_chunk_count > 0 {
+            object_group_index := params.batch_object_group_start + task_id;
+            instance_local := object_group_index / meshlet_chunk_count;
+            chunk_local := object_group_index % meshlet_chunk_count;
+            if instance_local < params.batch_instance_count {
+                selected_instance_index = params.batch_first_instance + instance_local;
                 selected_lod_mesh_index := params.batch_mesh_index;
                 if meshes[params.batch_mesh_index].lod_mesh_count > 0 {
                     lod_count := meshes[params.batch_mesh_index].lod_mesh_count;
@@ -199,26 +277,34 @@ task_main :: (
                         selected_lod_mesh_index = meshes[params.batch_mesh_index].lod_mesh_start + (lod_slot - 1);
                     }
                 }
+
+                chunk_meshlet_start := chunk_local * TASK_EMIT_MESHLET_COUNT;
                 lod_meshlet_mesh := meshlet_meshes[selected_lod_mesh_index];
-                lod_local_center := lod_meshlet_mesh.bounds_center_radius.xyz;
-                lod_local_radius := max(lod_meshlet_mesh.bounds_center_radius.w, 0.001);
-                lod_world_center4 := instance.world * Vector4.{lod_local_center.x, lod_local_center.y, lod_local_center.z, 1.0};
-                lod_world_center := Vector3.{lod_world_center4.x, lod_world_center4.y, lod_world_center4.z};
-                instance_origin := instance.world * Vector4.{0.0, 0.0, 0.0, 1.0};
-                lod_meshlet_count := meshlet_meshes[selected_lod_mesh_index].meshlet_count;
-                if chunk_meshlet_start < lod_meshlet_count && instance_origin.w > 0.0 && sphere_visible(params, lod_world_center, lod_local_radius) {
+                lod_meshlet_count := lod_meshlet_mesh.meshlet_count;
+                if chunk_meshlet_start < lod_meshlet_count {
                     selected_mesh_index = selected_lod_mesh_index;
-                    selected_meshlet_start = meshlet_meshes[selected_lod_mesh_index].meshlet_start + chunk_meshlet_start;
+                    selected_meshlet_start = lod_meshlet_mesh.meshlet_start + chunk_meshlet_start;
                     emit_meshlet_count = min(TASK_EMIT_MESHLET_COUNT, lod_meshlet_count - chunk_meshlet_start);
+
+                    if emit_meshlet_count > 0 && (params.debug_flags & MESHLET_DEBUG_DISABLE_FRUSTUM_CULL) == 0 {
+                        instance := instances[selected_instance_index];
+                        lod_local_center := lod_meshlet_mesh.bounds_center_radius.xyz;
+                        lod_local_radius := max(lod_meshlet_mesh.bounds_center_radius.w, 0.001);
+                        lod_world_center4 := instance.world * Vector4.{lod_local_center.x, lod_local_center.y, lod_local_center.z, 1.0};
+                        lod_world_center := Vector3.{lod_world_center4.x, lod_world_center4.y, lod_world_center4.z};
+                        if !sphere_visible(params, lod_world_center, lod_local_radius) {
+                            emit_meshlet_count = 0;
+                        }
+                    }
                 }
             }
         }
-    }
 
-    task_payload_ptr(Task_Payload).instance_index = selected_instance_index;
-    task_payload_ptr(Task_Payload).mesh_index = selected_mesh_index;
-    task_payload_ptr(Task_Payload).meshlet_start = selected_meshlet_start;
-    task_set_mesh_groups(emit_meshlet_count, 1, 1);
+        task_payload_ptr(Task_Payload).instance_index = selected_instance_index;
+        task_payload_ptr(Task_Payload).mesh_index = selected_mesh_index;
+        task_payload_ptr(Task_Payload).meshlet_start = selected_meshlet_start;
+        task_set_mesh_groups(emit_meshlet_count, 1, 1);
+    }
 } @task_shader
 
 fragment_main :: (

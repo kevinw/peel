@@ -92,3 +92,4 @@ dist/cel_shading
 dist/cel_shading.dylib
 dist/decal_painter
 dist/decal_painter.dylib
+__pycache__

@@ -518,17 +518,26 @@ imported_scene_deinit :: (using scene: *Imported_Scene) {
 }
 
 imported_scene_load_cached :: (scene: *Imported_Scene, model_paths: []string) {
-    cache_path := imported_scene_cache_path(model_paths);
-    data, ok := File.read_entire_file(cache_path);
-    if ok {
-        loaded, parse_ok := imported_scene_deserialize(scene, data);
-        free(data);
-        if parse_ok && loaded return;
-        imported_scene_deinit(scene);
+    resolved_model_paths := resolve_scene_model_import_paths(model_paths);
+    defer if resolved_model_paths.data != null array_free(resolved_model_paths);
+
+    cache_path := imported_scene_cache_path(model_paths, resolved_model_paths);
+    if file_exists(cache_path) {
+        data, ok := File.read_entire_file(cache_path);
+        if ok {
+            loaded, parse_ok := imported_scene_deserialize(scene, data);
+            free(data);
+            if parse_ok && loaded {
+                log("loaded from cache %", cache_path);
+                return;
+            }
+
+            imported_scene_deinit(scene);
+        }
     }
 
     imported_scene_create_default_white_texture(scene);
-    for model_paths load_model_into_imported_scene(scene, it);
+    for resolved_model_paths load_model_into_imported_scene(scene, it);
 
     cache_blob: [..]u8;
     cache_blob.allocator = context.allocator;
@@ -579,8 +588,10 @@ compute_model_bounds_from_geo :: (geo: *Scene_Geo, model_index: s32) -> Scene_Bo
 
 Hash_Table :: #import "Hash_Table";
 using,only(Table, table_find, table_reset, table_set) _ :: Hash_Table;
-IMPORTED_SCENE_CACHE_VERSION : u32 : 19;
+IMPORTED_SCENE_CACHE_VERSION : u32 : 20;
 IMPORTED_SCENE_CACHE_MAGIC : u32 : 0x53474d44; // SGMD
+PEEL_BLEND_SCENE_MAGIC :: "PEBLEND1";
+PEEL_BLEND_SCENE_VERSION : u32 : 1;
 
 STATIC_MESH_LOD_TARGET_RATIOS :: float.[0.18, 0.02, 0.002];
 STATIC_MESH_LOD_TARGET_TRIANGLE_CAPS :: u32.[50000, 5000, 500];
@@ -592,13 +603,16 @@ STATIC_MESH_LOD_ATTRIBUTE_WEIGHTS :: float.[
 ];
 STATIC_MESH_LOD_SIMPLIFY_OPTIONS : u32 : cast(u32) meshopt.Simplify.Regularize;
 
-imported_scene_cache_path :: (model_paths: []string) -> string {
+imported_scene_cache_path :: (model_paths: []string, resolved_model_paths: []string) -> string {
     builder: String_Builder;
     append(*builder, tprint("v%|", IMPORTED_SCENE_CACHE_VERSION));
     append(*builder, tprint("recipe=%|", imported_scene_recipe_hash()));
-    for model_paths {
-        modtime, size, _ := file_modtime_and_size(it);
-        append(*builder, tprint("%|%|%|", it, size, modtime));
+    path_count := max(model_paths.count, resolved_model_paths.count);
+    for i: 0..path_count-1 {
+        source_path := ifx i < model_paths.count then model_paths[i] else "";
+        resolved_path := ifx i < resolved_model_paths.count then resolved_model_paths[i] else source_path;
+        modtime, size, _ := file_modtime_and_size(resolved_path);
+        append(*builder, tprint("%|=>%|%|%|", source_path, resolved_path, size, modtime));
     }
     key_source := builder_to_string(*builder,, temp);
     hash := fnv1a_hash(key_source.data, key_source.count);
@@ -643,6 +657,7 @@ imported_scene_recipe_hash :: () -> u64 {
     for STATIC_MESH_LOD_ATTRIBUTE_WEIGHTS append(*builder, tprint("%|", it));
     append(*builder, tprint("simplify_options=%|", STATIC_MESH_LOD_SIMPLIFY_OPTIONS));
     append(*builder, tprint("meshlets=%|%|", SCENE_GEO_MESHLET_MAX_VERTICES, SCENE_GEO_MESHLET_MAX_TRIANGLES));
+    append(*builder, tprint("blend_scene=%|", PEEL_BLEND_SCENE_VERSION));
     key := builder_to_string(*builder,, temp);
     return fnv1a_hash(key.data, key.count);
 }
@@ -937,7 +952,239 @@ Texture_Load_Result :: struct {
     texture_flags: u32;
 }
 
+resolve_scene_model_import_paths :: (model_paths: []string) -> [..]string {
+    resolved: [..]string;
+    resolved.allocator = temp;
+    for model_paths {
+        array_add(*resolved, resolve_scene_model_import_path(it));
+    }
+    return resolved;
+}
+
+resolve_scene_model_import_path :: (path: string) -> string {
+    if !String.ends_with_nocase(path, ".blend") return path;
+    return ensure_blend_scene_sidecar(path);
+}
+
+ensure_blend_scene_sidecar :: (blend_path: string) -> string {
+    assert(file_exists(blend_path), "Blend source file does not exist: %", blend_path);
+    output_path := tprint("%.peelscene", blend_path);
+
+    blend_modtime, _, blend_exists := file_modtime_and_size(blend_path);
+    output_modtime, _, output_exists := file_modtime_and_size(output_path);
+    assert(blend_exists, "Blend source file does not exist: %", blend_path);
+
+    if !output_exists || output_modtime < blend_modtime {
+        workspace_root := find_workspace_root_for_cache();
+        export_script := tprint("%/tools/blender_exporter/export_blend.sh", workspace_root);
+        assert(file_exists(export_script), "Missing Blender export script: %", export_script);
+
+        result, stdout, stderr, timeout_reached := Process_Module.run_command(
+            export_script,
+            blend_path,
+            output_path,
+            working_directory = workspace_root,
+            capture_and_return_output = true,
+            timeout_ms = 120000);
+        assert(!timeout_reached, "Timed out exporting blend scene: %", blend_path);
+        assert(result.type == .EXITED && result.exit_code == 0,
+            "Blend export failed for %\nstdout:\n%\nstderr:\n%", blend_path, stdout, stderr);
+
+        _, _, output_exists = file_modtime_and_size(output_path);
+        assert(output_exists, "Blend export did not produce output: %", output_path);
+    }
+
+    return output_path;
+}
+
+blend_scene_remap_node_index :: (raw_index: s32, node_base: u32) -> s32 {
+    if raw_index < 0 return -1;
+    return cast(s32) node_base + raw_index;
+}
+
+load_peel_blender_scene_into_imported_scene :: (imported: *Imported_Scene, path: string) {
+    data, ok := File.read_entire_file(path);
+    assert(ok, "Failed to read PEEL Blender scene: %", path);
+    defer free(data);
+
+    source := data;
+    assert(source.count >= PEEL_BLEND_SCENE_MAGIC.count, "PEEL Blender scene too small: %", path);
+    magic := string.{count = PEEL_BLEND_SCENE_MAGIC.count, data = source.data};
+    assert(magic == PEEL_BLEND_SCENE_MAGIC, "PEEL Blender scene magic mismatch: %", path);
+    source.data += PEEL_BLEND_SCENE_MAGIC.count;
+    source.count -= PEEL_BLEND_SCENE_MAGIC.count;
+
+    version: u32;
+    assert(cache_get(*source, *version) && version == PEEL_BLEND_SCENE_VERSION,
+        "PEEL Blender scene version mismatch for %: %", path, version);
+
+    material_count: u32;
+    mesh_count: u32;
+    node_count: u32;
+    node_mesh_ref_count: u32;
+    vertex_count: u32;
+    index_count: u32;
+    assert(cache_get(*source, *material_count));
+    assert(cache_get(*source, *mesh_count));
+    assert(cache_get(*source, *node_count));
+    assert(cache_get(*source, *node_mesh_ref_count));
+    assert(cache_get(*source, *vertex_count));
+    assert(cache_get(*source, *index_count));
+
+    model_name: string;
+    assert(cache_get_string(*source, *model_name), "Failed to read model name from %", path);
+
+    material_base := cast(u32) imported.materials.count;
+    mesh_base := cast(u32) imported.meshes.count;
+    node_base := cast(u32) imported.nodes.count;
+    node_mesh_ref_base := cast(u32) imported.node_mesh_refs.count;
+    vertex_base := cast(u32) imported.vertices.count;
+    index_base := cast(u32) imported.indices.count;
+
+    repeat_address_mode := cast(u32) Gpu_Sampler_Desc.Address_Mode.REPEAT;
+
+    for 0..cast(s64) material_count-1 {
+        material_name: string;
+        assert(cache_get_string(*source, *material_name), "Failed to read material name from %", path);
+        base_color_factor: Vector4;
+        assert(cache_get(*source, *base_color_factor), "Failed to read material color from %", path);
+        if material_name.count != 0 free(material_name);
+        array_add(*imported.materials, .{
+            base_color_factor = base_color_factor,
+            base_color_texture_index = 0,
+            opacity_texture_index = SCENE_INVALID_TEXTURE_INDEX,
+            normal_texture_index = SCENE_INVALID_TEXTURE_INDEX,
+            roughness_texture_index = SCENE_INVALID_TEXTURE_INDEX,
+            ao_texture_index = SCENE_INVALID_TEXTURE_INDEX,
+            alpha_mode = SCENE_ALPHA_MODE_OPAQUE,
+            alpha_cutoff = 0.5,
+            address_mode_u = repeat_address_mode,
+            address_mode_v = repeat_address_mode,
+        });
+    }
+
+    for 0..cast(s64) mesh_count-1 {
+        base_vertex: u32;
+        vertex_count_for_mesh: u32;
+        first_index: u32;
+        index_count_for_mesh: u32;
+        material_index: u32;
+        assert(cache_get(*source, *base_vertex));
+        assert(cache_get(*source, *vertex_count_for_mesh));
+        assert(cache_get(*source, *first_index));
+        assert(cache_get(*source, *index_count_for_mesh));
+        assert(cache_get(*source, *material_index));
+        array_add(*imported.meshes, .{
+            base_vertex = vertex_base + base_vertex,
+            vertex_count = vertex_count_for_mesh,
+            first_index = index_base + first_index,
+            index_count = index_count_for_mesh,
+            material_index = material_base + material_index,
+            skin_bone_start = 0,
+            skin_bone_count = 0,
+            morph_target_start = 0,
+            morph_target_count = 0,
+            lod_mesh_start = 0,
+            lod_mesh_count = 0,
+        });
+    }
+
+    for 0..cast(s64) node_count-1 {
+        node_name: string;
+        assert(cache_get_string(*source, *node_name), "Failed to read node name from %", path);
+
+        parent_index: s32;
+        first_child_index: s32;
+        next_sibling_index: s32;
+        pad_i: s32;
+        assert(cache_get(*source, *parent_index));
+        assert(cache_get(*source, *first_child_index));
+        assert(cache_get(*source, *next_sibling_index));
+        assert(cache_get(*source, *pad_i));
+        _ = pad_i;
+
+        first_mesh_ref: u32;
+        mesh_ref_count: u32;
+        pad_u0: u32;
+        pad_u1: u32;
+        assert(cache_get(*source, *first_mesh_ref));
+        assert(cache_get(*source, *mesh_ref_count));
+        assert(cache_get(*source, *pad_u0));
+        assert(cache_get(*source, *pad_u1));
+        _ = pad_u0;
+        _ = pad_u1;
+
+        translation: Vector3;
+        rotation: Quaternion;
+        scale: Vector3;
+        assert(cache_get(*source, *translation));
+        assert(cache_get(*source, *rotation));
+        assert(cache_get(*source, *scale));
+        normalize_or_identity(*rotation);
+
+        array_add(*imported.nodes, .{
+            parent_index = blend_scene_remap_node_index(parent_index, node_base),
+            first_child_index = blend_scene_remap_node_index(first_child_index, node_base),
+            next_sibling_index = blend_scene_remap_node_index(next_sibling_index, node_base),
+            first_mesh_ref = node_mesh_ref_base + first_mesh_ref,
+            mesh_ref_count = mesh_ref_count,
+            local = make_trs_matrix(translation, rotation, scale),
+            world = Matrix4_Identity,
+        });
+        array_add(*imported.node_names, node_name);
+        array_add(*imported.node_bind_transforms, .{
+            translation = translation,
+            rotation = rotation,
+            scale = scale,
+        });
+    }
+
+    for 0..cast(s64) node_mesh_ref_count-1 {
+        mesh_ref: u32;
+        assert(cache_get(*source, *mesh_ref));
+        array_add(*imported.node_mesh_refs, mesh_base + mesh_ref);
+    }
+
+    for 0..cast(s64) vertex_count-1 {
+        vertex: Scene_Vertex;
+        assert(cache_get(*source, *vertex.position));
+        assert(cache_get(*source, *vertex.normal));
+        assert(cache_get(*source, *vertex.tangent));
+        assert(cache_get(*source, *vertex.uv));
+        array_add(*imported.vertices, vertex);
+    }
+
+    for 0..cast(s64) index_count-1 {
+        index: u32;
+        assert(cache_get(*source, *index));
+        array_add(*imported.indices, vertex_base + index);
+    }
+
+    assert(source.count == 0, "Unexpected trailing bytes in %", path);
+
+    compute_world_matrices(imported.nodes, node_base, node_count);
+    for local_mesh_index: 0..cast(s64) mesh_count-1 {
+        build_static_mesh_lods(imported, cast(s32) mesh_base + cast(s32) local_mesh_index);
+    }
+
+    array_add(*imported.models, .{
+        name = model_name,
+        root_node_index = cast(s32) node_base,
+        node_start = node_base,
+        node_count = node_count,
+        mesh_start = mesh_base,
+        mesh_count = mesh_count,
+        anim_clip_start = cast(u32) imported.anim_clips.count,
+        anim_clip_count = 0,
+    });
+}
+
 load_model_into_imported_scene :: (imported: *Imported_Scene, path: string) {
+    if String.ends_with_nocase(path, ".peelscene") {
+        load_peel_blender_scene_into_imported_scene(imported, path);
+        return;
+    }
+
     load_flags: ai.PostProcessSteps :
           .Triangulate | .JoinIdenticalVertices | .ImproveCacheLocality | .OptimizeMeshes
         | .GenUVCoords | .CalcTangentSpace | .FindInvalidData | .FindDegenerates | .RemoveRedundantMaterials
@@ -1226,10 +1473,15 @@ generate_missing_normals :: (vertices: []Scene_Vertex, indices: []u32, first_ind
 
 build_static_mesh_lods :: (imported: *Imported_Scene, mesh_index: s32) {
     if mesh_index < 0 || mesh_index >= imported.meshes.count return;
-    mesh := *imported.meshes[mesh_index];
+    mesh := imported.meshes[mesh_index];
     if mesh.skin_bone_count != 0 return;
     if mesh.morph_target_count != 0 return;
     if mesh.index_count < 192 return;
+    if !validate_imported_mesh_indices(imported, mesh, require_mesh_local_range = true) {
+        log_error("Skipping LOD build for mesh % due to invalid source indices. first_index=% index_count=% base_vertex=% vertex_count=%",
+            mesh_index, mesh.first_index, mesh.index_count, mesh.base_vertex, mesh.vertex_count);
+        return;
+    }
     source_triangle_count := cast(u64) mesh.index_count / 3;
 
     source_indices := NewArray(mesh.index_count, u32);
@@ -1296,6 +1548,17 @@ build_static_mesh_lods :: (imported: *Imported_Scene, mesh_index: s32) {
             simplified_count,
             cast(u64) mesh.vertex_count);
 
+        invalid_lod := false;
+        for 0..cast(s64) simplified_count-1 {
+            if optimized[it] >= mesh.vertex_count {
+                invalid_lod = true;
+                log_error("Skipping invalid LOD % for mesh %: optimized index % out of local vertex range %.",
+                    lod_i, mesh_index, optimized[it], mesh.vertex_count);
+                break;
+            }
+        }
+        if invalid_lod continue;
+
         lod_first_index := cast(u32) imported.indices.count;
         for 0..cast(s64) simplified_count-1 {
             array_add(*imported.indices, optimized[it] + mesh.base_vertex);
@@ -1341,6 +1604,11 @@ build_scene_meshlets :: (
     array_resize(*meshlet_meshes, imported.meshes.count);
 
     for *mesh_src, mesh_index: imported.meshes {
+        if !validate_imported_mesh_indices(imported, mesh_src, require_mesh_local_range = true) {
+            log_error("Skipping meshlet build for invalid mesh %. first_index=% index_count=% base_vertex=% vertex_count=%",
+                mesh_index, mesh_src.first_index, mesh_src.index_count, mesh_src.base_vertex, mesh_src.vertex_count);
+            continue;
+        }
         meshlet_meshes[mesh_index].bounds_center_radius = compute_imported_mesh_bounds_sphere(imported, mesh_src);
         if mesh_src.index_count < 3 || mesh_src.vertex_count == 0 {
             continue;
@@ -1478,6 +1746,23 @@ compute_imported_mesh_bounds_sphere :: (imported: *Imported_Scene, mesh: *Scene_
     }
 
     return .{center.x, center.y, center.z, radius};
+}
+
+validate_imported_mesh_indices :: (imported: *Imported_Scene, mesh: Scene_Mesh, require_mesh_local_range: bool = false) -> bool {
+    if mesh.first_index + mesh.index_count > imported.indices.count return false;
+    if mesh.base_vertex + mesh.vertex_count > imported.vertices.count return false;
+
+    mesh_vertex_end := mesh.base_vertex + mesh.vertex_count;
+    for index_offset: 0..mesh.index_count-1 {
+        vertex_index := imported.indices[mesh.first_index + index_offset];
+        if vertex_index >= imported.vertices.count return false;
+        if require_mesh_local_range {
+            if vertex_index < mesh.base_vertex return false;
+            if vertex_index >= mesh_vertex_end return false;
+        }
+    }
+
+    return true;
 }
 
 append_ai_node_recursive :: (
@@ -1947,6 +2232,7 @@ File :: #import "File";
 #import "Hash";
 meshopt :: #import "meshoptimizer";
 #import "Math";
+Process_Module :: #import "Process";
 #import "stb_image";
 
 find_workspace_root_for_cache :: () -> string {
