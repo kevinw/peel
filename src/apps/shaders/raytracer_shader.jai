@@ -1,12 +1,3 @@
-Raytracer_Vertex_In :: struct {
-    vertex_id: u32; @SV_VertexID
-}
-
-Raytracer_Vertex_Out :: struct {
-    position: Vector4; @SV_Position
-    uv: Vector2; @TEXCOORD0
-}
-
 Raytracer_Params :: struct {
     camera_pos: Vector3;
     time: float;
@@ -299,22 +290,7 @@ raytracer_shadow_visibility :: (
     return 1.0;
 }
 
-raytracer_vertex_main :: (using in: Raytracer_Vertex_In) -> Raytracer_Vertex_Out {
-    using out: Raytracer_Vertex_Out;
-    if vertex_id == 0 {
-        position = .{-1.0, -1.0, 0.0, 1.0};
-        uv = .{0.0, 0.0};
-    } else if vertex_id == 1 {
-        position = .{3.0, -1.0, 0.0, 1.0};
-        uv = .{2.0, 0.0};
-    } else {
-        position = .{-1.0, 3.0, 0.0, 1.0};
-        uv = .{0.0, 2.0};
-    }
-    return out;
-} @vertex_shader
-
-raytracer_fragment_main :: (using in: Raytracer_Vertex_Out, using params: *Raytracer_Params) -> struct { out_color: Vector4; } {
+raytracer_fragment_main :: (using in: struct { uv: Vector2; }, using params: *Raytracer_Params) -> struct { out_color: Vector4; } {
     // Camera ray setup.
     p := Vector2.{uv.x * 2.0 - 1.0, uv.y * 2.0 - 1.0};
     p.x *= params.aspect;
@@ -435,3 +411,6 @@ raytracer_fragment_main :: (using in: Raytracer_Vertex_Out, using params: *Raytr
     gamma := Vector3.{sqrt(mapped.x), sqrt(mapped.y), sqrt(mapped.z)};
     return .{out_color = .{gamma.x, gamma.y, gamma.z, 1.0}};
 } @fragment_shader
+
+#scope_file
+#import "Jai-Shader-Transpiler/modules/ShaderLib";

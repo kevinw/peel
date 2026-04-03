@@ -36,7 +36,7 @@ using app: Caustics_Pool_App = .{
 };
 
 on_dll_init :: () {
-    graphics_source := cast([]u8) get_transpiled(.METAL, caustics_pool_vertex_main, caustics_pool_fragment_main);
+    graphics_source := cast([]u8) get_transpiled(.METAL, fullscreen_tri_vert, caustics_pool_fragment_main);
     raster_desc: Gpu_Raster_Desc = .{
         cull = .NONE,
         color_targets = .[
@@ -44,7 +44,7 @@ on_dll_init :: () {
         ],
     };
 
-    SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, caustics_pool_vertex_main, caustics_pool_fragment_main);
+    SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, fullscreen_tri_vert, caustics_pool_fragment_main);
     gpu_arena = gpu_make_arena(64 * 1024, label = "caustics pool arena");
     params = sgpu_make_frame_param_allocator(*gpu_arena, Caustics_Pool_Params);
 
@@ -84,39 +84,6 @@ tick :: () {
     submit_and_present_with_ui(cmd_buff);
 } @on_tick
 
-Caustics_Pool_Vertex_In :: struct {
-    vertex_id: u32; @SV_VertexID
-}
-
-Caustics_Pool_Vertex_Out :: struct {
-    gl_Position: Vector4; @position
-    uv: Vector2;
-}
-
-Caustics_Pool_Fragment_In :: struct {
-    uv: Vector2;
-}
-
-caustics_pool_vertex_main :: (using in: Caustics_Pool_Vertex_In) -> Caustics_Pool_Vertex_Out {
-    using out: Caustics_Pool_Vertex_Out;
-
-    pos: Vector2;
-    if vertex_id == 0 {
-        pos = .{-1.0, -1.0};
-    } else if vertex_id == 1 {
-        pos = .{3.0, -1.0};
-    } else {
-        pos = .{-1.0, 3.0};
-    }
-
-    gl_Position = .{pos.x, pos.y, 0.0, 1.0};
-    uv = .{
-        pos.x * 0.5 + 0.5,
-        pos.y * 0.5 + 0.5,
-    };
-    return out;
-} @vertex_shader
-
 CAUSTICS_HASH_DOT :: Vector2.{41.0, 289.0};
 CAUSTICS_HASH_SCALE: float : 45758.547;
 CAUSTICS_PI: float : 3.1415927;
@@ -154,12 +121,12 @@ caustics_field :: (p: Vector2, t: float) -> float {
     return total;
 }
 
-caustics_pool_fragment_main :: (using in: Caustics_Pool_Fragment_In, using params: Caustics_Pool_Params) -> Vector4 @SV_Target0 {
+caustics_pool_fragment_main :: (using in: struct { uv: Vector2; }, using params: Caustics_Pool_Params) -> Vector4 @SV_Target0 {
     denom := resolution.y;
     if denom < 1.0 denom = 1.0;
 
     aspect := resolution.x / denom;
-    p := Vector2.{(uv.x * 2.0 - 1.0) * aspect, uv.y * 2.0 - 1.0};
+    p := uv * 2 - 1;
     t := current_time * speed;
 
     drift := Vector2.{sin(t * 0.7), cos(t * 0.53)} * 0.12;
@@ -188,7 +155,7 @@ caustics_pool_fragment_main :: (using in: Caustics_Pool_Fragment_In, using param
     color *= lerp(1.0, vignette_term, vignette);
     color = clamp(color, 0.0, 1.0);
 
-    return .{color.x, color.y, color.z, 1.0};
+    return vec4(color, 1);
 } @fragment_shader
 
 #scope_file
@@ -197,6 +164,7 @@ ImGui :: #import "ImGui";
 #import "Math";
 #import "Jai-Shader-Transpiler";
 #import "Jai-Shader-Transpiler/modules/ShaderFuncs";
+#import "Jai-Shader-Transpiler/modules/ShaderLib";
 SHR :: #import,file "../shader_hot_reload.jai";
 
 draw_ui :: () {

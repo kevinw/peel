@@ -22,7 +22,7 @@ raytracer_camera: Editor_Camera = .{
 };
 
 on_dll_init :: () {
-    graphics_source := cast([]u8) get_transpiled(.METAL, raytracer_vertex_main, raytracer_fragment_main);
+    graphics_source := cast([]u8) get_transpiled(.METAL, fullscreen_tri_vert, raytracer_fragment_main);
     assert(graphics_source.count > 0, "Transpilation failed for raytracer graphics shaders.");
     raster_desc: Gpu_Raster_Desc = .{
         cull = .CW,
@@ -31,7 +31,7 @@ on_dll_init :: () {
         ],
     };
 
-    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, raytracer_vertex_main, raytracer_fragment_main);
+    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, fullscreen_tri_vert, raytracer_fragment_main);
     assert(graphics_ok, "Raytracer graphics pipeline creation failed.");
 
     gpu_arena = gpu_make_arena(64 * 1024, label = "raytracer arena");

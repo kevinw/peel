@@ -30,15 +30,6 @@ Texture3D_Compute_In :: struct {
     thread_id: UVector3; @thread_position_in_grid
 }
 
-Texture3D_Vertex_In :: struct {
-    vertex_id: u32; @SV_VertexID
-}
-
-Texture3D_Vertex_Out :: struct {
-    gl_Position: Vector4; @position
-    uv: Vector2;
-}
-
 Texture3D_Fragment_In :: struct {
     uv: Vector2;
 }
@@ -137,19 +128,6 @@ texture3d_compute_main :: (using in: Texture3D_Compute_In, params: *Texture3D_Pa
     texture_index := min(params[0].texture_index, 126);
     write_3d(texture_index, x, y, z, .{density, 0.0, 0.0, 0.0});
 } @compute_shader
-
-texture3d_vertex_main :: (using in: Texture3D_Vertex_In) -> Texture3D_Vertex_Out {
-    using out: Texture3D_Vertex_Out;
-    positions := Vector2.[
-        .{-1.0, -1.0},
-        .{ 3.0, -1.0},
-        .{-1.0,  3.0},
-    ];
-    pos := positions[vertex_id];
-    gl_Position = .{pos.x, pos.y, 0.0, 1.0};
-    uv = pos * 0.5 + Vector2.{0.5, 0.5};
-    return out;
-} @vertex_shader
 
 texture3d_fragment_main :: (using in: Texture3D_Fragment_In, params: *Texture3D_Params) -> struct { out_color: Vector4; } {
     if (params[0].flags & cast(u32) 2) != 0 {
