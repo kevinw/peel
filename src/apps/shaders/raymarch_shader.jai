@@ -1,25 +1,9 @@
-#import "Jai-Shader-Transpiler";
-#import "Math";
-#import,file "../../../modules/Jai-Shader-Transpiler/modules/ShaderFuncs/module.jai"; // TODO
 
 Raymarch_Params :: struct {
     resolution: Vector2;
     mouse_uv: Vector2;
     current_time: float;
     _pad: float;
-}
-
-Raymarch_Vertex_In :: struct {
-    vertex_id: u32; @SV_VertexID
-}
-
-Raymarch_Vertex_Out :: struct {
-    gl_Position: Vector4; @position
-    uv: Vector2;
-}
-
-Raymarch_Fragment_In :: struct {
-    uv: Vector2;
 }
 
 sphere_dist :: (p: Vector3, c: Vector3, r: float) -> float {
@@ -250,30 +234,10 @@ scene_normal :: (p: Vector3, time: float) -> Vector3 {
     return normalize(Vector3.{nx, ny, nz});
 }
 
-raymarch_vertex_main :: (using in: Raymarch_Vertex_In) -> Raymarch_Vertex_Out {
-    using out: Raymarch_Vertex_Out;
-
-    pos: Vector2;
-    if vertex_id == 0 {
-        pos = .{-1.0, -1.0};
-    } else if vertex_id == 1 {
-        pos = .{3.0, -1.0};
-    } else {
-        pos = .{-1.0, 3.0};
-    }
-
-    gl_Position = .{pos.x, pos.y, 0.0, 1.0};
-    uv = .{
-        pos.x * 0.5 + 0.5,
-        pos.y * 0.5 + 0.5,
-    };
-    return out;
-} @vertex_shader
-
-raymarch_fragment_main :: (using in: Raymarch_Fragment_In, params: *Raymarch_Params) -> struct { out_color: Vector4; } {
+raymarch_fragment_main :: (using in: struct { uv: Vector2; }, params: *Raymarch_Params) -> struct { out_color: Vector4; } {
     time := params[0].current_time;
 
-    uv_ndc := Vector2.{uv.x * 2.0 - 1.0, uv.y * 2.0 - 1.0};
+    uv_ndc := uv * 2.0 - 1.0;
     denom := params[0].resolution.y;
     if denom < 1.0 denom = 1.0;
     aspect := params[0].resolution.x / denom;
@@ -308,11 +272,7 @@ raymarch_fragment_main :: (using in: Raymarch_Fragment_In, params: *Raymarch_Par
     sky_top := Vector3.{0.06, 0.09, 0.16};
     sky_bottom := Vector3.{0.92, 0.63, 0.34};
     sky_mix := clamp(0.5 + 0.5 * rd.y, 0.0, 1.0);
-    color := Vector3.{
-        lerp(sky_bottom.x, sky_top.x, sky_mix),
-        lerp(sky_bottom.y, sky_top.y, sky_mix),
-        lerp(sky_bottom.z, sky_top.z, sky_mix),
-    };
+    color := lerp(sky_bottom, sky_top, sky_mix);
 
     // Soft volumetric cloud integration in sky.
     cloud_alpha := 0.0;
@@ -386,29 +346,17 @@ raymarch_fragment_main :: (using in: Raymarch_Fragment_In, params: *Raymarch_Par
             grain := clamp(0.5 + 0.5 * sin(p.x * 7.0 + p.z * 6.0 + p.y * 10.0), 0.0, 1.0);
             rock_a := Vector3.{0.24, 0.25, 0.28};
             rock_b := Vector3.{0.36, 0.34, 0.30};
-            base = .{
-                lerp(rock_a.x, rock_b.x, grain),
-                lerp(rock_a.y, rock_b.y, grain),
-                lerp(rock_a.z, rock_b.z, grain),
-            };
+            base = lerp(rock_a, rock_b, grain);
         } else if is_ruin {
             wear := clamp((p.y + 0.8) * 0.8, 0.0, 1.0);
             ruin_a := Vector3.{0.30, 0.30, 0.33};
             ruin_b := Vector3.{0.44, 0.41, 0.36};
-            base = .{
-                lerp(ruin_a.x, ruin_b.x, wear),
-                lerp(ruin_a.y, ruin_b.y, wear),
-                lerp(ruin_a.z, ruin_b.z, wear),
-            };
+            base = lerp(ruin_a, ruin_b, wear);
         } else if is_trunk {
             bark_mix := clamp((q.y + 0.65) * 0.9, 0.0, 1.0);
             bark_a := Vector3.{0.24 + 0.07 * tree_h, 0.15 + 0.04 * tree_h, 0.08};
             bark_b := Vector3.{0.34 + 0.08 * tree_h, 0.22 + 0.05 * tree_h, 0.11};
-            base = .{
-                lerp(bark_a.x, bark_b.x, bark_mix),
-                lerp(bark_a.y, bark_b.y, bark_mix),
-                lerp(bark_a.z, bark_b.z, bark_mix),
-            };
+            base = lerp(bark_a, bark_b, bark_mix);
         }
 
         shadow := 1.0;
@@ -465,3 +413,8 @@ raymarch_fragment_main :: (using in: Raymarch_Fragment_In, params: *Raymarch_Par
         },
     };
 } @fragment_shader
+
+#scope_file
+#import "Jai-Shader-Transpiler/modules/ShaderFuncs";
+#import "Jai-Shader-Transpiler/modules/ShaderLib";
+#import "Math";

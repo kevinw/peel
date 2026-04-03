@@ -20,42 +20,12 @@ SHOW_SHAPES     :: cast(u32) 0x4;
 SHOW_COORDS     :: cast(u32) 0x8;
 SHOW_PROJECTED  :: cast(u32) 0x10;
 
-Shader_To_Human_Vertex_In :: struct {
-    vertex_id: u32; @SV_VertexID
-}
-
-Shader_To_Human_Vertex_Out :: struct {
-    gl_Position: Vector4; @position
-    uv: Vector2; @TEXCOORD0
-}
-
-Shader_To_Human_Fragment_In :: struct {
-    uv: Vector2; @TEXCOORD0
-}
-
-shader_to_human_vertex_main :: (using in: Shader_To_Human_Vertex_In) -> Shader_To_Human_Vertex_Out {
-    using out: Shader_To_Human_Vertex_Out;
-
-    pos: Vector2;
-    if vertex_id == 0 {
-        pos = .{-1.0, -1.0};
-    } else if vertex_id == 1 {
-        pos = .{3.0, -1.0};
-    } else {
-        pos = .{-1.0, 3.0};
-    }
-
-    gl_Position = .{pos.x, pos.y, 0.0, 1.0};
-    uv = .{pos.x * 0.5 + 0.5, pos.y * 0.5 + 0.5};
-    return out;
-} @vertex_shader
-
 draw_projected_line :: (ctx: *STH_Context, using params: *Shader_To_Human_Params, a: Vector3, b: Vector3, color: Vector4) {
-    a_clip := view_proj * Vector4.{a.x, a.y, a.z, 1.0};
-    b_clip := view_proj * Vector4.{b.x, b.y, b.z, 1.0};
+    a_clip := view_proj * vec4(a, 1.0);
+    b_clip := view_proj * vec4(b, 1.0);
     if abs(a_clip.w) < 0.00001 || abs(b_clip.w) < 0.00001 return;
-    a_ndc := Vector3.{a_clip.x, a_clip.y, a_clip.z} / a_clip.w;
-    b_ndc := Vector3.{b_clip.x, b_clip.y, b_clip.z} / b_clip.w;
+    a_ndc := a_clip.xyz / a_clip.w;
+    b_ndc := b_clip.xyz / b_clip.w;
     if a_ndc.z < 0.0 || a_ndc.z > 1.2 return;
     if b_ndc.z < 0.0 || b_ndc.z > 1.2 return;
     a_px := Vector2.{
@@ -105,7 +75,7 @@ draw_projected_box :: (ctx: *STH_Context, params: *Shader_To_Human_Params, cente
     draw_projected_line(ctx, params, v3, v7, color);
 }
 
-shader_to_human_fragment_main :: (using in: Shader_To_Human_Fragment_In, params: *Shader_To_Human_Params) -> struct { out_color: Vector4; } {
+shader_to_human_fragment_main :: (using in: struct { uv: Vector2; }, params: *Shader_To_Human_Params) -> struct { out_color: Vector4; } {
     px := Vector2.{uv.x * params.resolution.x, (1.0 - uv.y) * params.resolution.y};
 
     bg_a := Vector3.{0.06, 0.07, 0.10};

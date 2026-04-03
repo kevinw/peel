@@ -3,6 +3,7 @@
 
 SHR :: #import,file "../shader_hot_reload.jai";
 #import "Jai-Shader-Transpiler";
+#import "Jai-Shader-Transpiler/modules/ShaderLib";
 #import "Math";
 #import "ImGui";
 Env_Vars :: #import "Env_Vars";
@@ -28,7 +29,7 @@ on_dll_init :: () {
     show_text_env, show_text_env_set := Env_Vars.try_parse_env_int("PEEL_SHADER_TO_HUMAN_TEXT");
     if show_text_env_set shader_to_human_show_text = show_text_env != 0;
 
-    graphics_source := cast([]u8) get_transpiled(.METAL, shader_to_human_vertex_main, shader_to_human_fragment_main);
+    graphics_source := cast([]u8) get_transpiled(.METAL, fullscreen_tri_vert, shader_to_human_fragment_main);
     assert(graphics_source.count > 0, "Transpilation failed for shader_to_human shaders.");
 
     raster_desc: Gpu_Raster_Desc = .{
@@ -38,7 +39,7 @@ on_dll_init :: () {
         ],
     };
 
-    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, shader_to_human_vertex_main, shader_to_human_fragment_main);
+    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, fullscreen_tri_vert, shader_to_human_fragment_main);
     assert(graphics_ok, "shader_to_human graphics pipeline creation failed.");
 
     gpu_arena = gpu_make_arena(64 * 1024, label = "shader_to_human arena");

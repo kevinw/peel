@@ -9,7 +9,7 @@ using app: struct {
 };
 
 on_dll_init :: () {
-    graphics_source := cast([]u8) get_transpiled(.METAL, raymarch_vertex_main, raymarch_fragment_main);
+    graphics_source := cast([]u8) get_transpiled(.METAL, fullscreen_tri_vert, raymarch_fragment_main);
     raster_desc: Gpu_Raster_Desc = {
         cull = .CW,
         color_targets = .[
@@ -17,7 +17,7 @@ on_dll_init :: () {
         ],
     };
 
-    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, raymarch_vertex_main, raymarch_fragment_main);
+    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, fullscreen_tri_vert, raymarch_fragment_main);
     assert(graphics_ok, "Raymarch graphics pipeline creation failed.");
 
     gpu_arena = gpu_make_arena(64 * 1024, label = "raymarch arena");
