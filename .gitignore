@@ -93,3 +93,5 @@ dist/cel_shading.dylib
 dist/decal_painter
 dist/decal_painter.dylib
 __pycache__
+dist/blender_scene
+dist/blender_scene.dylib
