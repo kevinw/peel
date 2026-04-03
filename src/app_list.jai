@@ -21,6 +21,7 @@ APP_FILES :: string.[
     "texture3d.jai",
     "meshlet_lizard_grid.jai",
     "mesh_shader_triangle.jai",
+    "decal_painter.jai",
 ];
 
 active_app_filename :: () -> string {

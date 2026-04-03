@@ -24,6 +24,10 @@
     "command": "jai ~/src/peel/build.jai - src/apps/crowd_nav.jai -run -dll"
   },
   {
+    "label": "decal_painter",
+    "command": "jai ~/src/peel/build.jai - src/apps/decal_painter.jai -run -dll"
+  },
+  {
     "label": "fluid2d",
     "command": "jai ~/src/peel/build.jai - src/apps/fluid2d.jai -run -dll"
   },

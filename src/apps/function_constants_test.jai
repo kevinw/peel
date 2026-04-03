@@ -17,16 +17,9 @@ Function_Constants_Test_VS_Out :: struct {
 use_alternate_color: bool = false; @function_constant
 
 vert :: (using in: struct { vertex_id: u32; @Vertex_ID }) -> Function_Constants_Test_VS_Out @vertex_shader {
-    positions : [3] Vector2 = .[
-        .{-1.0, -1.0},
-        .{ 3.0, -1.0},
-        .{-1.0,  3.0},
-    ];
-
+    positions : [3] Vector2 : .[ .{-1.0, -1.0}, .{ 3.0, -1.0}, .{-1.0,  3.0} ];
     p := positions[vertex_id];
-    return .{
-        position = .{p.x, p.y, 0.0, 1.0},
-    };
+    return .{ position = .{p.x, p.y, 0.0, 1.0} };
 } @vertex_shader
 
 frag :: (using input: Function_Constants_Test_VS_Out, using params: *Function_Constants_Test_Params) -> Vector4 @SV_Target {
