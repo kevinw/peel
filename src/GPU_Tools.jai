@@ -55,10 +55,17 @@ sgpu_arena_alloc_frame_ring :: (arena: *Gpu_Arena, $T: Type, min_alignment: s64 
 }
 
 Gpu_Frame_Param_Allocator :: struct($T: Type, $N: s64 = SGPU_FRAMES_IN_FLIGHT) {
+    Struct_Type :: T;
+
     view: Gpu_View(T);
     slots_per_frame: s64;
     frame_epochs: [N] u64;
     cursors: [N] s64;
+}
+
+init_frame_param_alloc :: (ptr: *$T/Gpu_Frame_Param_Allocator, arena: *Gpu_Arena, slots_per_frame: s64 = 1, min_alignment: s64 = 16) {
+    // TODO: reverse this and the func below (this should do the init)
+    ptr.* = sgpu_make_frame_param_allocator(arena, T.Struct_Type, slots_per_frame, min_alignment);
 }
 
 sgpu_make_frame_param_allocator :: (arena: *Gpu_Arena, $T: Type, slots_per_frame: s64 = 1, min_alignment: s64 = 16) -> Gpu_Frame_Param_Allocator(T) {
@@ -74,7 +81,7 @@ sgpu_make_frame_param_allocator :: (arena: *Gpu_Arena, $T: Type, slots_per_frame
 }
 
 sgpu_frame_param_alloc :: (allocator: *Gpu_Frame_Param_Allocator($T), data: T, frame_number: s64 = -1) -> Gpu_Buffer(T) {
-    buf := sgpu_frame_param_alloc(allocator=allocator, frame_number=frame_number);
+    buf := sgpu_frame_param_alloc(allocator, frame_number);
     buf.cpu.* = data;
     return buf;
 }

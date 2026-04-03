@@ -129,3 +129,6 @@ if failed {
 
 In Jai shaders, prefer:
 `my_vec4.xyz` over `Vector3.{my_vec4.x, my_vec4.y, my_vec4.z}`
+
+When writing shader math, prefer swizzles and whole-vector operators over split scalar lane updates.
+Prefer `color.xyz += sun_color.xyz * sun_mix` and `return vec4(color.xyz, 1.0)` over separate `color_r/color_g/color_b` or `x/y/z` component code when the operation is naturally vector-shaped.

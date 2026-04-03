@@ -16,6 +16,10 @@
     "command": "jai ~/src/peel/build.jai - src/apps/caustics_pool.jai -run -dll"
   },
   {
+    "label": "cel_shading",
+    "command": "jai ~/src/peel/build.jai - src/apps/cel_shading.jai -run -dll"
+  },
+  {
     "label": "crowd_nav",
     "command": "jai ~/src/peel/build.jai - src/apps/crowd_nav.jai -run -dll"
   },
@@ -66,6 +70,10 @@
   {
     "label": "physics_test",
     "command": "jai ~/src/peel/build.jai - src/apps/physics_test.jai -run -dll"
+  },
+  {
+    "label": "procedural_geometry",
+    "command": "jai ~/src/peel/build.jai - src/apps/procedural_geometry.jai -run -dll"
   },
   {
     "label": "raymarch",

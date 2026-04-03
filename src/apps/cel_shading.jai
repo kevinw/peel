@@ -72,14 +72,6 @@ Cel_Fragment_In :: struct {
     clip_depth: float;
 }
 
-Cel_Sky_Vertex_In :: struct {
-    vertex_id: u32; @SV_VertexID
-}
-
-Cel_Sky_Vertex_Out :: struct {
-    gl_Position: Vector4; @position
-    uv: Vector2;
-}
 
 Cel_Sky_Fragment_In :: struct {
     uv: Vector2;
@@ -138,10 +130,10 @@ app: struct {
 
 on_dll_init :: () {
     using app;
-    sky_source := cast([]u8) get_transpiled(.METAL, cel_sky_vertex_main, cel_sky_fragment_main);
+    sky_source := cast([]u8) get_transpiled(.METAL, fullscreen_tri_vert, cel_sky_fragment_main);
     scene_source := cast([]u8) get_transpiled(.METAL, cel_vertex_main, cel_fragment_main);
     edge_source := cast([]u8) get_transpiled(.METAL, cel_vertex_main, cel_edge_fragment_main);
-    composite_source := cast([]u8) get_transpiled(.METAL, cel_composite_vertex_main, cel_composite_fragment_main);
+    composite_source := cast([]u8) get_transpiled(.METAL, fullscreen_tri_vert, cel_composite_fragment_main);
 
     sky_raster: Gpu_Raster_Desc = .{
         cull = .NONE,
@@ -170,10 +162,10 @@ on_dll_init :: () {
         ],
     };
 
-    assert(SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *sky_pipeline, sky_source, sky_raster, .METAL, cel_sky_vertex_main, cel_sky_fragment_main));
+    assert(SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *sky_pipeline, sky_source, sky_raster, .METAL, fullscreen_tri_vert, cel_sky_fragment_main));
     assert(SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *scene_pipeline, scene_source, scene_raster, .METAL, cel_vertex_main, cel_fragment_main));
     assert(SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *edge_pipeline, edge_source, edge_raster, .METAL, cel_vertex_main, cel_edge_fragment_main));
-    assert(SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *composite_pipeline, composite_source, composite_raster, .METAL, cel_composite_vertex_main, cel_composite_fragment_main));
+    assert(SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *composite_pipeline, composite_source, composite_raster, .METAL, fullscreen_tri_vert, cel_composite_fragment_main));
 
     build_scene_geometry();
     init_scene_objects();
@@ -365,64 +357,39 @@ cel_fragment_main :: (using in: Cel_Fragment_In, params: *Cel_Scene_Params) -> V
     lit_color += base_color.xyz * (rim * 0.12);
 
     color := clamp(lit_color, 0.0, 1.0);
-    return .{color.x, color.y, color.z, 1.0};
+    return vec4(color, 1.0);
 } @fragment_shader
 
 cel_edge_fragment_main :: (using in: Cel_Fragment_In, params: *Cel_Scene_Params) -> Vector4 @SV_Target0 {
     n := normalize(normal) * 0.5 + .{0.5, 0.5, 0.5};
     depth01 := clamp(clip_depth * 0.5 + 0.5, 0.0, 1.0);
-    return .{n.x, n.y, n.z, depth01};
+    return vec4(n, depth01);
 } @fragment_shader
-
-Cel_Composite_Vertex_In :: struct {
-    vertex_id: u32; @SV_VertexID
-}
-
-Cel_Composite_Vertex_Out :: struct {
-    gl_Position: Vector4; @position
-    uv: Vector2;
-}
 
 Cel_Composite_Fragment_In :: struct {
     uv: Vector2;
 }
 
-cel_composite_vertex_main :: (using in: Cel_Composite_Vertex_In) -> Cel_Composite_Vertex_Out {
-    using out: Cel_Composite_Vertex_Out;
-    pos: Vector2;
-    if vertex_id == 0 {
-        pos = .{-1.0, -1.0};
-    } else if vertex_id == 1 {
-        pos = .{3.0, -1.0};
-    } else {
-        pos = .{-1.0, 3.0};
-    }
-
-    gl_Position = .{pos.x, pos.y, 0.0, 1.0};
-    uv = .{pos.x * 0.5 + 0.5, pos.y * 0.5 + 0.5};
-    return out;
-} @vertex_shader
-
-cel_composite_fragment_main :: (using in: Cel_Composite_Fragment_In, params: *Cel_Post_Params) -> Vector4 @SV_Target0 {
+cel_composite_fragment_main :: (using in: Cel_Composite_Fragment_In, using params: *Cel_Post_Params) -> Vector4 @SV_Target0 {
     uv.y = 1.0 - uv.y;
-    base := sample_2d(params.scene_texture_index, params.sampler_index, uv);
-    texel := Vector2.{1.0 / max(params.resolution.x, 1.0), 1.0 / max(params.resolution.y, 1.0)};
-    radius := max(1.0, params.outline_thickness);
+    base := sample_2d(scene_texture_index, sampler_index, uv);
+    texel := Vector2.{1.0 / max(resolution.x, 1.0), 1.0 / max(resolution.y, 1.0)};
+    radius := max(1.0, outline_thickness);
     dx := Vector2.{texel.x * radius, 0.0};
     dy := Vector2.{0.0, texel.y * radius};
 
-    base_r := sample_2d(params.scene_texture_index, params.sampler_index, uv + dx);
-    base_l := sample_2d(params.scene_texture_index, params.sampler_index, uv - dx);
-    base_u := sample_2d(params.scene_texture_index, params.sampler_index, uv + dy);
-    base_d := sample_2d(params.scene_texture_index, params.sampler_index, uv - dy);
+    base_r := sample_2d(scene_texture_index, sampler_index, uv + dx);
+    base_l := sample_2d(scene_texture_index, sampler_index, uv - dx);
+    base_u := sample_2d(scene_texture_index, sampler_index, uv + dy);
+    base_d := sample_2d(scene_texture_index, sampler_index, uv - dy);
 
-    center := sample_2d(params.edge_texture_index, params.sampler_index, uv);
-    sample_r := sample_2d(params.edge_texture_index, params.sampler_index, uv + dx);
-    sample_l := sample_2d(params.edge_texture_index, params.sampler_index, uv - dx);
-    sample_u := sample_2d(params.edge_texture_index, params.sampler_index, uv + dy);
-    sample_d := sample_2d(params.edge_texture_index, params.sampler_index, uv - dy);
+    center :=   sample_2d(edge_texture_index, sampler_index, uv);
+    sample_r := sample_2d(edge_texture_index, sampler_index, uv + dx);
+    sample_l := sample_2d(edge_texture_index, sampler_index, uv - dx);
+    sample_u := sample_2d(edge_texture_index, sampler_index, uv + dy);
+    sample_d := sample_2d(edge_texture_index, sampler_index, uv - dy);
 
-    center_n := Vector3.{center.x, center.y, center.z};
+    center_n := center.xyz;
     edge_n := max(max(length(center_n - sample_r.xyz),
                        length(center_n - sample_l.xyz)),
                   max(length(center_n - sample_u.xyz),
@@ -442,67 +409,34 @@ cel_composite_fragment_main :: (using in: Cel_Composite_Fragment_In, params: *Ce
     return lerp(base, ink, edge);
 } @fragment_shader
 
-cel_sky_vertex_main :: (using in: Cel_Sky_Vertex_In) -> Cel_Sky_Vertex_Out {
-    using out: Cel_Sky_Vertex_Out;
-    pos: Vector2;
-    if vertex_id == 0 {
-        pos = .{-1.0, -1.0};
-    } else if vertex_id == 1 {
-        pos = .{3.0, -1.0};
-    } else {
-        pos = .{-1.0, 3.0};
-    }
-    gl_Position = .{pos.x, pos.y, 0.0, 1.0};
-    uv = .{pos.x * 0.5 + 0.5, pos.y * 0.5 + 0.5};
-    return out;
-} @vertex_shader
 
 CEL_SKY_HASH :: Vector2.{37.0, 157.0};
 
-cel_sky_fragment_main :: (using in: Cel_Sky_Fragment_In, params: *Cel_Sky_Params) -> Vector4 @SV_Target0 {
-    resolution := Vector2.{params.resolution_time.x, params.resolution_time.y};
-    denom := max(resolution.y, 1.0);
-    aspect := resolution.x / denom;
+cel_sky_fragment_main :: (using in: Cel_Sky_Fragment_In, using params: *Cel_Sky_Params) -> Vector4 @SV_Target0 {
+    resolution := resolution_time.xy;
+    aspect := resolution.x / max(resolution.y, 1.0);
     tan_half_fov := params.sky_params.x;
-    ndc := Vector2.{uv.x * 2.0 - 1.0, uv.y * 2.0 - 1.0};
+    ndc := uv * 2 - 1;
 
-    forward := Vector3.{params.camera_forward.x, params.camera_forward.y, params.camera_forward.z};
-    right := Vector3.{params.camera_right.x, params.camera_right.y, params.camera_right.z};
-    up := Vector3.{params.camera_up.x, params.camera_up.y, params.camera_up.z};
-    ray_dir := normalize(forward + right * (ndc.x * aspect * tan_half_fov) + up * (ndc.y * tan_half_fov));
+    ray_dir := normalize(camera_forward.xyz + camera_right.xyz * (ndc.x * aspect * tan_half_fov) + camera_up.xyz * (ndc.y * tan_half_fov));
     up_mix := smoothstep(-0.15, 0.75, ray_dir.y);
-    horizon_r := params.horizon_color.x;
-    horizon_g := params.horizon_color.y;
-    horizon_b := params.horizon_color.z;
-    zenith_r := params.zenith_color.x;
-    zenith_g := params.zenith_color.y;
-    zenith_b := params.zenith_color.z;
-    color_r := horizon_r + (zenith_r - horizon_r) * up_mix;
-    color_g := horizon_g + (zenith_g - horizon_g) * up_mix;
-    color_b := horizon_b + (zenith_b - horizon_b) * up_mix;
+    color := horizon_color + (zenith_color - horizon_color) * up_mix;
 
-    cloud_wave := sin(ray_dir.x * 5.4 + params.resolution_time.z * 0.12)
-        + cos(ray_dir.z * 6.9 - params.resolution_time.z * 0.08);
+    cloud_wave := sin(ray_dir.x * 5.4 + params.resolution_time.z * 0.12) + cos(ray_dir.z * 6.9 - params.resolution_time.z * 0.08);
     cloud_band := smoothstep(0.52, 0.95, cloud_wave * 0.25 + 0.5 - ray_dir.y * 0.18);
-    color_r += (0.97 - color_r) * cloud_band * 0.22;
-    color_g += (0.92 - color_g) * cloud_band * 0.22;
-    color_b += (0.88 - color_b) * cloud_band * 0.22;
+    color.xyz += (Vector3.{0.97, 0.92, 0.88} - color.xyz) * cloud_band * 0.22;
 
     sun_dir := normalize(Vector3.{-params.light_dir.x, -params.light_dir.y, -params.light_dir.z});
     sun_amount := max(dot(ray_dir, sun_dir), 0.0);
     sun_disk := smoothstep(0.992, 0.9985, sun_amount);
     sun_glow := pow(sun_amount, 24.0) * 0.55;
     sun_mix := sun_disk * 1.45 + sun_glow;
-    color_r += params.sun_color.x * sun_mix;
-    color_g += params.sun_color.y * sun_mix;
-    color_b += params.sun_color.z * sun_mix;
+    color.xyz += sun_color.xyz * sun_mix;
 
     haze := smoothstep(-0.25, 0.12, ray_dir.y);
     haze_mix := (1.0 - haze) * 0.12;
-    color_r += ((horizon_r * 0.95 + 0.10) - color_r) * haze_mix;
-    color_g += ((horizon_g * 0.95 + 0.08) - color_g) * haze_mix;
-    color_b += ((horizon_b * 0.95 + 0.06) - color_b) * haze_mix;
-    return .{clamp(color_r, 0.0, 1.0), clamp(color_g, 0.0, 1.0), clamp(color_b, 0.0, 1.0), 1.0};
+    color.xyz += (horizon_color.xyz * 0.95 + {0.10, 0.08, 0.06} - color.xyz) * haze_mix;
+    return vec4(clamp(color.xyz, 0, 1), 1.0);
 } @fragment_shader
 
 #scope_file
@@ -536,9 +470,9 @@ build_scene_geometry :: () {
 
     draw.vertices = geometry_vertices.gpu;
     draw.indices = geometry_indices.gpu;
-    draw_params = sgpu_make_frame_param_allocator(*gpu_arena, Cel_Scene_Params_CPU, 20);
-    sky_params = sgpu_make_frame_param_allocator(*gpu_arena, Cel_Sky_Params);
-    post_params = sgpu_make_frame_param_allocator(*gpu_arena, Cel_Post_Params);
+    init_frame_param_alloc(*draw_params, *gpu_arena, 20);
+    init_frame_param_alloc(*sky_params, *gpu_arena);
+    init_frame_param_alloc(*post_params, *gpu_arena);
 }
 
 init_scene_objects :: () {
@@ -675,6 +609,7 @@ draw_ui :: () {
 #load "procedural_geometry.jai";
 #import "Jai-Shader-Transpiler";
 #import "Jai-Shader-Transpiler/modules/ShaderFuncs";
+#import "Jai-Shader-Transpiler/modules/ShaderLib";
 #import "Math";
 Input :: #import "Input";
 ImGui :: #import "ImGui";
