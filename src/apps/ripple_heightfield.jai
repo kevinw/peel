@@ -2,7 +2,6 @@
 #load "../SGPU_App_Common.jai";
 
 #import "Jai-Shader-Transpiler";
-SHR :: #import,file "../shader_hot_reload.jai";
 #load "shaders/ripple_heightfield_shader.jai";
 
 Draw_Data :: struct {
@@ -23,24 +22,13 @@ ripple_state: AB_Buffer([RIPPLE_CELL_COUNT] Vector2);
 ripple_control_ring: Gpu_Frame_Ring(Ripple_Compute_Control);
 
 on_dll_init :: () {
-    compute_source := cast([]u8) get_transpiled(.METAL, ripple_step_compute);
-    assert(compute_source.count > 0, "Compute transpilation failed (ripple_step_compute).");
-    graphics_source := cast([]u8) get_transpiled(.METAL, ripple_vertex_main, ripple_fragment_main);
-    assert(graphics_source.count > 0, "Graphics transpilation failed (ripple shaders).");
     raster_desc: Gpu_Raster_Desc = {
         cull = .CW,
-        color_targets = .[
-            .{format = .B8G8R8A8_UNORM}
-        ],
+        color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
     };
 
-    compute_pipeline = gpu_create_compute_pipeline(compute_source);
-    assert(compute_pipeline != 0, "Ripple compute pipeline creation failed.");
-
-    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, ripple_vertex_main, ripple_fragment_main);
-    assert(graphics_ok, "Ripple graphics pipeline creation failed.");
-    compute_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_pipeline, compute_source, .METAL, ripple_step_compute);
-    assert(compute_ok, "Ripple compute pipeline creation failed.");
+    SHR.gfx_pipeline(*graphics_pipeline, raster_desc, ripple_vertex_main, ripple_fragment_main);
+    SHR.compute_pipeline(*compute_pipeline, ripple_step_compute);
 
     gpu_arena = gpu_make_arena(1024 * 1024 * 8, label = "ripple arena");
 
@@ -133,11 +121,8 @@ tick :: () {
 
     gpu_set_depth_stencil_state(cmd_buff, {depth_test = .ALWAYS, depth_mode = .NONE,});
     gpu_set_pipeline(cmd_buff, graphics_pipeline);
-
     using draw_data;
-    draw_result := gpu_draw_instanced_direct(cmd_buff, vertex_params_gpu, num_vertices, num_instances);
-    assert(draw_result == .SUCCESS, tprint("Ripple draw failed: %", draw_result));
-
+    gpu_draw_instanced_direct(cmd_buff, vertex_params_gpu, num_vertices, num_instances);
     submit_and_present_with_ui(cmd_buff);
 } @on_tick
 

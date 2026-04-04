@@ -1,6 +1,6 @@
 #import "Jai-Shader-Transpiler";
+#import "Jai-Shader-Transpiler/modules/ShaderFuncs";
 #import "Math";
-#import,file "../../../modules/Jai-Shader-Transpiler/modules/ShaderFuncs/module.jai";
 
 Textured_Triangle_Vertex_In :: struct {
     vertex_id: u32; @SV_VertexID
@@ -9,10 +9,6 @@ Textured_Triangle_Vertex_In :: struct {
 
 Textured_Triangle_Vertex_Out :: struct {
     gl_Position: Vector4; @position
-    uv: Vector2;
-}
-
-Textured_Triangle_Fragment_In :: struct {
     uv: Vector2;
 }
 
@@ -45,7 +41,7 @@ textured_triangle_vertex_main :: (using in: Textured_Triangle_Vertex_In) -> Text
     return out;
 } @vertex_shader
 
-textured_triangle_fragment_main :: (using in: Textured_Triangle_Fragment_In, params: *Textured_Triangle_Pixel_Params) -> Vector4 @SV_Target0 {
+textured_triangle_fragment_main :: (using in: struct { uv: Vector2; }, params: *Textured_Triangle_Pixel_Params) -> Vector4 @SV_Target0 {
     debug: Vector4 = .{
         min(1.0, cast(float) params[0].texture_index),
         min(1.0, cast(float) params[0].sampler_index),

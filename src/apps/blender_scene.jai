@@ -228,6 +228,8 @@ tick :: () {
             if draw_instance_count > 0 {
                 batch_material := materials.cpu[meshes.cpu[it.mesh_index].material_index];
                 primary_params := sgpu_frame_param_alloc(*params, base_params);
+                // TODO: use `using material: Scene_Material;` in the params struct,
+                // so we can just assign here.
                 primary_params.cpu.base_color_factor = batch_material.base_color_factor;
                 primary_params.cpu.batch_mesh_index = it.mesh_index;
                 primary_params.cpu.base_color_texture_index = batch_material.base_color_texture_index;

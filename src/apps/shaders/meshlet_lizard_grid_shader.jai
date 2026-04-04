@@ -77,10 +77,7 @@ world_max_scale :: (world: Matrix4) -> float {
     axis_x4 := world * Vector4.{1.0, 0.0, 0.0, 0.0};
     axis_y4 := world * Vector4.{0.0, 1.0, 0.0, 0.0};
     axis_z4 := world * Vector4.{0.0, 0.0, 1.0, 0.0};
-    axis_x := Vector3.{axis_x4.x, axis_x4.y, axis_x4.z};
-    axis_y := Vector3.{axis_y4.x, axis_y4.y, axis_y4.z};
-    axis_z := Vector3.{axis_z4.x, axis_z4.y, axis_z4.z};
-    return max(length(axis_x), max(length(axis_y), length(axis_z)));
+    return max(length(axis_x4.xyz), max(length(axis_y4.xyz), length(axis_z4.xyz)));
 }
 
 scene_material_alpha :: (params: *Meshlet_Grid_Params, uv: Vector2) -> float {
@@ -215,9 +212,6 @@ mesh_main :: (
                 color := Vector3.{1.0, 1.0, 1.0};
                 if params.debug_mode == cast(u32) Meshlet_Grid_Debug_Mode.LODS {
                     color = lod_debug_color(lod_from_mesh_index(meshes, params.batch_mesh_index, payload_mesh_index));
-                } else if params.debug_mode == cast(u32) Meshlet_Grid_Debug_Mode.CHUNKS {
-                    chunk_hue := hash01(mesh_payload_ptr(Task_Payload).chunk_index);
-                    color = hue2rgb(chunk_hue);
                 } else if params.debug_mode == cast(u32) Meshlet_Grid_Debug_Mode.MESHLETS {
                     color = meshlet_tint;
                 }

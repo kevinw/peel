@@ -53,19 +53,13 @@ build_ui :: () {
 }
 
 on_dll_init :: () {
-    graphics_source := cast([]u8) get_transpiled(.METAL, boids_vertex_main, boids_frag_main); assert(graphics_source.count > 0);
-    compute_source  := cast([]u8) get_transpiled(.METAL, boids_step_compute);                 assert(compute_source.count > 0);
-
-    blend_state := Gpu_Blend_Desc.{};
     raster_desc: Gpu_Raster_Desc = {
         cull = .NONE,
         color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
-        blend_state = *blend_state,
     };
 
-    compute_pipeline = gpu_create_compute_pipeline(compute_source);
-    SHR.gfx_pipeline    (*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, boids_vertex_main, boids_frag_main);
-    SHR.compute_pipeline(*shader_reload_ctx, *compute_pipeline, compute_source, .METAL, boids_step_compute);
+    SHR.gfx_pipeline    (*graphics_pipeline, raster_desc, boids_vertex_main, boids_frag_main);
+    SHR.compute_pipeline(*compute_pipeline, boids_step_compute);
 
     gpu_arena = gpu_make_arena(1024 * 1024, label = "boids arena");
 
@@ -172,4 +166,3 @@ tick :: () {
 #import "Jai-Shader-Transpiler";
 #load "shaders/boids_shader.jai";
 #import "Random";
-SHR :: #import,file "../shader_hot_reload.jai";

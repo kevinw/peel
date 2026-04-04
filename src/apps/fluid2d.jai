@@ -41,24 +41,13 @@ fluid_init_state :: (state: *[FLUID_CELL_COUNT] Vector4) {
 }
 
 on_dll_init :: () {
-    compute_source := cast([]u8) get_transpiled(.METAL, fluid_step_compute);
-    assert(compute_source.count > 0, "Compute transpilation failed (fluid_step_compute).");
-    graphics_source := cast([]u8) get_transpiled(.METAL, fluid_vertex_main, fluid_fragment_main);
-    assert(graphics_source.count > 0, "Graphics transpilation failed (fluid shaders).");
     raster_desc: Gpu_Raster_Desc = {
         cull = .CW,
-        color_targets = .[
-            .{format = .B8G8R8A8_UNORM}
-        ],
+        color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
     };
 
-    compute_pipeline = gpu_create_compute_pipeline(compute_source);
-    assert(compute_pipeline != 0, "Fluid2D compute pipeline creation failed.");
-
-    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, fluid_vertex_main, fluid_fragment_main);
-    assert(graphics_ok, "Fluid2D graphics pipeline creation failed.");
-    compute_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_pipeline, compute_source, .METAL, fluid_step_compute);
-    assert(compute_ok, "Fluid2D compute pipeline creation failed.");
+    SHR.gfx_pipeline(*graphics_pipeline, raster_desc, fluid_vertex_main, fluid_fragment_main);
+    SHR.compute_pipeline(*compute_pipeline, fluid_step_compute);
 
     gpu_arena = gpu_make_arena(1024 * 1024 * 12, label = "fluid2d arena");
 
@@ -167,5 +156,4 @@ tick :: () {
 #import "Math";
 #load "../SGPU_App_Common.jai";
 #import "Jai-Shader-Transpiler";
-SHR :: #import,file "../shader_hot_reload.jai";
 #load "shaders/fluid2d_shader.jai";

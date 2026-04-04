@@ -36,8 +36,6 @@ noise_fill_rgba8 :: (pixels: []u8) {
 }
 
 on_dll_init :: () {
-    graphics_source := cast([]u8) get_transpiled(.METAL, textured_triangle_vertex_main, textured_triangle_fragment_main);
-    assert(graphics_source.count > 0, "Transpilation failed for textured triangle shaders.");
     raster_desc: Gpu_Raster_Desc = .{
         cull = .NONE,
         color_targets = .[
@@ -45,7 +43,7 @@ on_dll_init :: () {
         ],
     };
 
-    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, textured_triangle_vertex_main, textured_triangle_fragment_main);
+    graphics_ok := SHR.gfx_pipeline(*graphics_pipeline, raster_desc, textured_triangle_vertex_main, textured_triangle_fragment_main);
     assert(graphics_ok, "Textured triangle graphics pipeline creation failed.");
 
     gpu_arena = gpu_make_arena(1024 * 1024, label = "textured triangle arena");
@@ -119,7 +117,6 @@ tick :: () {
 #scope_file
 #load "../SGPU_App_Common.jai";
 #import "Jai-Shader-Transpiler";
-SHR :: #import,file "../shader_hot_reload.jai";
 #load "shaders/textured_triangle_shader.jai";
 #import "Random";
 ImGui :: #import "ImGui";

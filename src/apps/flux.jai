@@ -317,25 +317,16 @@ on_dll_init :: () {
         ],
     };
 
-    target :: Transpiled_Target.METAL;
+    SHR.gfx_pipeline(*graphics_pipeline, main_raster, flux_vertex_main, flux_fragment_main);
+    SHR.gfx_pipeline(*sky_pipeline, main_raster, flux_sky_vertex_main, flux_sky_fragment_main);
+    SHR.gfx_pipeline(*debug_shadow_pipeline, main_raster, flux_debug_shadow_vertex_main, flux_debug_shadow_fragment_main);
+    SHR.gfx_pipeline(*shadow_pipeline, shadow_raster, flux_shadow_vertex_main, flux_shadow_fragment_main);
+    SHR.gfx_pipeline(*grass_shadow_pipeline, shadow_raster, flux_grass_shadow_vertex_main, flux_shadow_fragment_main);
 
-    graphics_source := cast([]u8) get_transpiled(target, flux_vertex_main, flux_fragment_main);
-    grass_source := cast([]u8) get_transpiled(target, flux_grass_vertex_main, flux_grass_fragment_main);
-    sky_source := cast([]u8) get_transpiled(target, flux_sky_vertex_main, flux_sky_fragment_main);
-    debug_shadow_source := cast([]u8) get_transpiled(target, flux_debug_shadow_vertex_main, flux_debug_shadow_fragment_main);
-    shadow_source := cast([]u8) get_transpiled(target, flux_shadow_vertex_main, flux_shadow_fragment_main);
-    grass_shadow_source := cast([]u8) get_transpiled(target, flux_grass_shadow_vertex_main, flux_shadow_fragment_main);
-
-    SHR.gfx_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, main_raster, target, flux_vertex_main, flux_fragment_main);
-    SHR.gfx_pipeline(*shader_reload_ctx, *sky_pipeline, sky_source, main_raster, target, flux_sky_vertex_main, flux_sky_fragment_main);
-    SHR.gfx_pipeline(*shader_reload_ctx, *debug_shadow_pipeline, debug_shadow_source, main_raster, target, flux_debug_shadow_vertex_main, flux_debug_shadow_fragment_main);
-    SHR.gfx_pipeline(*shader_reload_ctx, *shadow_pipeline, shadow_source, shadow_raster, target, flux_shadow_vertex_main, flux_shadow_fragment_main);
-    SHR.gfx_pipeline(*shader_reload_ctx, *grass_shadow_pipeline, grass_shadow_source, shadow_raster, target, flux_grass_shadow_vertex_main, flux_shadow_fragment_main);
-
-    SHR.compute_pipeline(*shader_reload_ctx, *init_compute_pipeline, init_compute_source, target, flux_init_compute);
-    SHR.compute_pipeline(*shader_reload_ctx, *compute_pipeline, compute_source, target, flux_step_compute);
-    SHR.compute_pipeline(*shader_reload_ctx, *grass_spawn_compute_pipeline, grass_spawn_compute_source, target, flux_grass_spawn_compute);
-    SHR.gfx_pipeline    (*shader_reload_ctx, *grass_pipeline, grass_source, main_raster, target, flux_grass_vertex_main, flux_grass_fragment_main);
+    SHR.compute_pipeline(*init_compute_pipeline, flux_init_compute);
+    SHR.compute_pipeline(*compute_pipeline, flux_step_compute);
+    SHR.compute_pipeline(*grass_spawn_compute_pipeline, flux_grass_spawn_compute);
+    SHR.gfx_pipeline    (*grass_pipeline, main_raster, flux_grass_vertex_main, flux_grass_fragment_main);
 
     gpu_arena = gpu_make_arena(1024 * 1024 * 196, label = "flux arena");
 
@@ -447,18 +438,12 @@ tick :: () {
         _ = cam_up;
 
         move := Vector3.{0.0, 0.0, 0.0};
-        if Input.input_button_states[cast(Input.Key_Code) #char "W"] & .DOWN {
-            move += cam_forward;
-        }
-        if Input.input_button_states[cast(Input.Key_Code) #char "S"] & .DOWN {
-            move -= cam_forward;
-        }
-        if Input.input_button_states[cast(Input.Key_Code) #char "A"] & .DOWN {
-            move -= cam_right;
-        }
-        if Input.input_button_states[cast(Input.Key_Code) #char "D"] & .DOWN {
-            move += cam_right;
-        }
+
+        if Input.input_button_states[cast(Input.Key_Code) #char "W"] & .DOWN move += cam_forward;
+        if Input.input_button_states[cast(Input.Key_Code) #char "S"] & .DOWN move -= cam_forward;
+        if Input.input_button_states[cast(Input.Key_Code) #char "A"] & .DOWN move -= cam_right;
+        if Input.input_button_states[cast(Input.Key_Code) #char "D"] & .DOWN move += cam_right;
+
         move_len2 := dot(move, move);
         if move_len2 > 0.00001 {
             move = flux_safe_normalize3_cpu(move);
@@ -670,7 +655,6 @@ ensure_shadow_targets :: () {
 #load "../ui/toggle_widget.jai";
 #load "../ui/view_gizmo.jai";
 #import "Jai-Shader-Transpiler";
-SHR :: #import,file "../shader_hot_reload.jai";
 #load "shaders/flux_shader.jai";
 Input :: #import "Input";
 ImGui :: #import "ImGui";

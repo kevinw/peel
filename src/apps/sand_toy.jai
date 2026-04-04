@@ -112,59 +112,34 @@ sand_ui :: () -> bool {
         Text("Right click erases");
         Separator();
 
-        if Button("Sand") sand_brush_element = SAND_MAT_SAND;
-        SameLine();
-        if Button("Water") sand_brush_element = SAND_MAT_WATER;
-        SameLine();
+        if Button("Sand") sand_brush_element = SAND_MAT_SAND; SameLine();
+        if Button("Water") sand_brush_element = SAND_MAT_WATER; SameLine();
         if Button("Lava") sand_brush_element = SAND_MAT_LAVA;
 
-        if Button("Stone") sand_brush_element = SAND_MAT_STONE;
-        SameLine();
-        if Button("Glass") sand_brush_element = SAND_MAT_GLASS;
-        SameLine();
-        if Button("Ice") sand_brush_element = SAND_MAT_ICE;
-        SameLine();
+        if Button("Stone") sand_brush_element = SAND_MAT_STONE; SameLine();
+        if Button("Glass") sand_brush_element = SAND_MAT_GLASS; SameLine();
+        if Button("Ice") sand_brush_element = SAND_MAT_ICE; SameLine();
         if Button("Erase") sand_brush_element = SAND_MAT_EMPTY;
 
         Separator();
-        if RadioButton("Small Brush", sand_brush_radius_px == 5.0) sand_brush_radius_px = 5.0;
-        SameLine();
-        if RadioButton("Medium Brush", sand_brush_radius_px == 10.0) sand_brush_radius_px = 10.0;
-        SameLine();
+        if RadioButton("Small Brush", sand_brush_radius_px == 5.0) sand_brush_radius_px = 5.0; SameLine();
+        if RadioButton("Medium Brush", sand_brush_radius_px == 10.0) sand_brush_radius_px = 10.0; SameLine();
         if RadioButton("Large Brush", sand_brush_radius_px == 18.0) sand_brush_radius_px = 18.0;
     }
     End();
 
-    io := GetIO();
-    return io.WantCaptureMouse;
+    return GetIO().WantCaptureMouse;
 }
 
 on_dll_init :: () {
-    compute_plan_source := cast([]u8) get_transpiled(.METAL, sand_plan_moves_compute);
-    assert(compute_plan_source.count > 0, "Compute transpilation failed (sand_plan_moves_compute).");
-    compute_resolve_source := cast([]u8) get_transpiled(.METAL, sand_resolve_compute);
-    assert(compute_resolve_source.count > 0, "Compute transpilation failed (sand_resolve_compute).");
-    graphics_source := cast([]u8) get_transpiled(.METAL, sand_vertex_main, sand_fragment_main);
-    assert(graphics_source.count > 0, "Graphics transpilation failed (sand shaders).");
-
     raster_desc: Gpu_Raster_Desc = {
         cull = .CW,
-        color_targets = .[
-            .{format = .B8G8R8A8_UNORM}
-        ],
+        color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
     };
 
-    compute_pipeline_plan = gpu_create_compute_pipeline(compute_plan_source);
-    assert(compute_pipeline_plan != 0, "Sand compute plan pipeline creation failed.");
-    compute_pipeline_resolve = gpu_create_compute_pipeline(compute_resolve_source);
-    assert(compute_pipeline_resolve != 0, "Sand compute resolve pipeline creation failed.");
-
-    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, sand_vertex_main, sand_fragment_main);
-    assert(graphics_ok, "Sand graphics pipeline creation failed.");
-    compute_plan_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_pipeline_plan, compute_plan_source, .METAL, sand_plan_moves_compute);
-    assert(compute_plan_ok, "Sand compute plan pipeline creation failed.");
-    compute_resolve_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_pipeline_resolve, compute_resolve_source, .METAL, sand_resolve_compute);
-    assert(compute_resolve_ok, "Sand compute resolve pipeline creation failed.");
+    SHR.gfx_pipeline(*graphics_pipeline, raster_desc, sand_vertex_main, sand_fragment_main);
+    SHR.compute_pipeline(*compute_pipeline_plan, sand_plan_moves_compute);
+    SHR.compute_pipeline(*compute_pipeline_resolve, sand_resolve_compute);
 
     gpu_arena = gpu_make_arena(1024 * 1024 * 18, label = "sand toy arena");
 
@@ -308,7 +283,6 @@ tick :: () {
 #scope_file
 #load "../SGPU_App_Common.jai";
 #import "Jai-Shader-Transpiler";
-SHR :: #import,file "../shader_hot_reload.jai";
 #load "shaders/sand_toy_shader.jai";
 Input :: #import "Input";
 

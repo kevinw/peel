@@ -368,9 +368,6 @@ ui_draw_overlay :: () {
 }
 
 on_dll_init :: () {
-    graphics_source := cast([]u8) get_transpiled(.METAL, tetris_vertex_main, tetris_fragment_main);
-    assert(graphics_source.count > 0, "Transpilation failed for Tetris shaders.");
-
     blend_state: Gpu_Blend_Desc = .{
         src_color_factor = .SRC_ALPHA,
         dst_color_factor = .ONE_MINUS_SRC_ALPHA,
@@ -386,10 +383,9 @@ on_dll_init :: () {
         blend_state = *blend_state,
     };
 
-    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, tetris_vertex_main, tetris_fragment_main);
-    assert(graphics_ok, "Tetris graphics pipeline creation failed.");
+    SHR.gfx_pipeline(*graphics_pipeline, raster_desc, tetris_vertex_main, tetris_fragment_main);
 
-    gpu_arena = gpu_make_arena(1024 * 1024 * 8, label = "tetris arena");
+    gpu_arena = gpu_make_arena(1024 * 1024 * 80, label = "tetris arena");
 
     quad := gpu_alloc_view(*gpu_arena, Vector2, 6);
     quad.cpu = .[
@@ -479,4 +475,3 @@ tick :: () {
 #import "Math";
 Input :: #import "Input";
 ImGui :: #import "ImGui";
-SHR :: #import,file "../shader_hot_reload.jai";

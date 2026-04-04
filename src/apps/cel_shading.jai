@@ -130,42 +130,29 @@ app: struct {
 
 on_dll_init :: () {
     using app;
-    sky_source := cast([]u8) get_transpiled(.METAL, fullscreen_tri_vert, cel_sky_fragment_main);
-    scene_source := cast([]u8) get_transpiled(.METAL, cel_vertex_main, cel_fragment_main);
-    edge_source := cast([]u8) get_transpiled(.METAL, cel_vertex_main, cel_edge_fragment_main);
-    composite_source := cast([]u8) get_transpiled(.METAL, fullscreen_tri_vert, cel_composite_fragment_main);
-
     sky_raster: Gpu_Raster_Desc = .{
         cull = .NONE,
-        color_targets = .[
-            .{format = .B8G8R8A8_UNORM}
-        ],
+        color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
     };
     scene_raster: Gpu_Raster_Desc = .{
         cull = .NONE,
         depth_format = .D32_SFLOAT,
-        color_targets = .[
-            .{format = .B8G8R8A8_UNORM}
-        ],
+        color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
     };
     edge_raster: Gpu_Raster_Desc = .{
         cull = .NONE,
         depth_format = .D32_SFLOAT,
-        color_targets = .[
-            .{format = .B8G8R8A8_UNORM}
-        ],
+        color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
     };
     composite_raster: Gpu_Raster_Desc = .{
         cull = .NONE,
-        color_targets = .[
-            .{format = .B8G8R8A8_UNORM}
-        ],
+        color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
     };
 
-    assert(SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *sky_pipeline, sky_source, sky_raster, .METAL, fullscreen_tri_vert, cel_sky_fragment_main));
-    assert(SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *scene_pipeline, scene_source, scene_raster, .METAL, cel_vertex_main, cel_fragment_main));
-    assert(SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *edge_pipeline, edge_source, edge_raster, .METAL, cel_vertex_main, cel_edge_fragment_main));
-    assert(SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *composite_pipeline, composite_source, composite_raster, .METAL, fullscreen_tri_vert, cel_composite_fragment_main));
+    SHR.gfx_pipeline(*sky_pipeline, sky_raster, fullscreen_tri_vert, cel_sky_fragment_main);
+    SHR.gfx_pipeline(*scene_pipeline, scene_raster, cel_vertex_main, cel_fragment_main);
+    SHR.gfx_pipeline(*edge_pipeline, edge_raster, cel_vertex_main, cel_edge_fragment_main);
+    SHR.gfx_pipeline(*composite_pipeline, composite_raster, fullscreen_tri_vert, cel_composite_fragment_main);
 
     build_scene_geometry();
     init_scene_objects();
@@ -613,4 +600,3 @@ draw_ui :: () {
 #import "Math";
 Input :: #import "Input";
 ImGui :: #import "ImGui";
-SHR :: #import,file "../shader_hot_reload.jai";

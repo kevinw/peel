@@ -89,9 +89,9 @@ on_dll_init :: () {
     compute_pipeline = gpu_create_compute_pipeline(compute_source);
     assert(compute_pipeline != 0, "Compute pipeline creation failed.");
 
-    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, rd_vertex_main, rd_fragment_main);
+    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*graphics_pipeline, graphics_source, raster_desc, .METAL, rd_vertex_main, rd_fragment_main);
     assert(graphics_ok, "Graphics pipeline creation failed.");
-    compute_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_pipeline, compute_source, .METAL, rd_step_compute);
+    compute_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*compute_pipeline, compute_source, .METAL, rd_step_compute);
     assert(compute_ok, "Compute pipeline creation failed.");
 
     gpu_arena = gpu_make_arena(1024 * 1024 * 8, label = "reaction diffusion arena");
@@ -197,5 +197,4 @@ tick :: () {
 #import "Math";
 #load "../SGPU_App_Common.jai";
 #import "Jai-Shader-Transpiler";
-SHR :: #import,file "../shader_hot_reload.jai";
 #load "shaders/reaction_diffusion_shader.jai";

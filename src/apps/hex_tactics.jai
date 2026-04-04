@@ -1,4 +1,3 @@
-
 Hex_Tile_Flags :: enum_flags u32 {
     GRASS;
 }
@@ -86,10 +85,6 @@ hex_tactics_ui :: () {
 }
 
 on_dll_init :: () {
-    graphics_source := cast([]u8) get_transpiled(.METAL, hex_tactics_mesh_vertex_main, hex_tactics_mesh_fragment_main);
-    grass_source    := cast([]u8) get_transpiled(.METAL, hex_tactics_grass_vertex_main, hex_tactics_grass_fragment_main);
-    sky_source      := cast([]u8) get_transpiled(.METAL, hex_tactics_sky_vertex_main, hex_tactics_sky_fragment_main);
-
     raster_desc: Gpu_Raster_Desc = .{
         cull = .CCW,
         depth_format = .D32_SFLOAT,
@@ -102,9 +97,9 @@ on_dll_init :: () {
     sky_raster := raster_desc;
     sky_raster.cull = .NONE;
 
-    SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, hex_tactics_mesh_vertex_main, hex_tactics_mesh_fragment_main);
-    SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *grass_pipeline, grass_source, grass_raster, .METAL, hex_tactics_grass_vertex_main, hex_tactics_grass_fragment_main);
-    SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *sky_pipeline, sky_source, sky_raster, .METAL, hex_tactics_sky_vertex_main, hex_tactics_sky_fragment_main);
+    SHR.gfx_pipeline(*graphics_pipeline, raster_desc, hex_tactics_mesh_vertex_main, hex_tactics_mesh_fragment_main);
+    SHR.gfx_pipeline(*grass_pipeline, grass_raster, hex_tactics_grass_vertex_main, hex_tactics_grass_fragment_main);
+    SHR.gfx_pipeline(*sky_pipeline, sky_raster, hex_tactics_sky_vertex_main, hex_tactics_sky_fragment_main);
 
     hex_tactics_model_init(*hex_tactics_model);
     hex_tactics_rebuild_render(*hex_tactics_model, *hex_tactics_render);
@@ -486,9 +481,8 @@ hash01_f :: (x: float) -> float {
 
 #load "../SGPU_App_Common.jai";
 #load "../editor_camera.jai";
+#load "shaders/hex_tactics_shader.jai";
 #import "Jai-Shader-Transpiler";
 ImGui :: #import "ImGui";
 Input :: #import "Input";
 #import "Math";
-#load "shaders/hex_tactics_shader.jai";
-SHR :: #import,file "../shader_hot_reload.jai";

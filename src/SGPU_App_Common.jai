@@ -251,8 +251,8 @@ app_update :: (update_ctx: *App_Update_Ctx) {
 
         // tick shader reload
         {
-            did_rebuild, swapped_all, rebuild_ok := SHR.shader_hot_reload_tick(*shader_reload_ctx, cast(s64)frame_count);
-            sgpu_set_debug_status(SHR.shader_hot_reload_status_line(*shader_reload_ctx));
+            did_rebuild, swapped_all, rebuild_ok := SHR.shader_hot_reload_tick(cast(s64)frame_count);
+            sgpu_set_debug_status(SHR.shader_hot_reload_status_line());
             if did_rebuild && !rebuild_ok {
                 log_error("SHADER_RELOAD build failed; keeping current runtime shaders.");
             } else if did_rebuild && !swapped_all {
@@ -463,7 +463,8 @@ host_init :: (init_ctx: Init_Ctx) -> bool {
         wait_for_initial_focus_before_dll_init();
     }
 
-    SHR.shader_hot_reload_init_auto(*shader_reload_ctx,
+    SHR.shader_reload_ctx = *shader_reload_ctx;
+    SHR.shader_hot_reload_init_auto(
         app_source_file = APP_NAME,
         poll_every_frames = 15,
         log_prefix = "SHADER_RELOAD",
@@ -477,7 +478,7 @@ host_init :: (init_ctx: Init_Ctx) -> bool {
 }
 
 dummy_on_resize :: () {  } @on_window_resize
-shader_reload_on_ui :: () { SHR.shader_hot_reload_imgui(*shader_reload_ctx, ui_get_monospace_font()); } @on_ui
+shader_reload_on_ui :: () { SHR.shader_hot_reload_imgui(ui_get_monospace_font()); } @on_ui
 
 input_down :: inline ($s: string) -> (down: bool, pressed: bool)
 #modify { return s.count == 1; }
@@ -639,6 +640,7 @@ perf_capture :: (cpu_frame_ms: float, gpu_frame_ms: float) {
 using,except(Viewport) _ :: #import "sgpu"()(SLANG_COMPILER=false);
 #load "App_Common.jai";
 #load "ui/ui.jai";
+SHR :: #import,file "./shader_hot_reload.jai";
 #scope_file
 #load "measure_fps.jai";
 #load "readback_stats.jai";
@@ -652,7 +654,6 @@ using,except(Viewport) _ :: #import "sgpu"()(SLANG_COMPILER=false);
     }
 }
 Env_Vars :: #import "Env_Vars";
-SHR :: #import,file "shader_hot_reload.jai";
 #load "GPU_Tools.jai";
 #load "inspiration_board.jai";
 #if !SINGLE_BINARY {

@@ -22,18 +22,12 @@ raytracer_camera: Editor_Camera = .{
 };
 
 on_dll_init :: () {
-    graphics_source := cast([]u8) get_transpiled(.METAL, fullscreen_tri_vert, raytracer_fragment_main);
-    assert(graphics_source.count > 0, "Transpilation failed for raytracer graphics shaders.");
     raster_desc: Gpu_Raster_Desc = .{
         cull = .CW,
-        color_targets = .[
-            .{format = .B8G8R8A8_UNORM}
-        ],
+        color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
     };
 
-    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, fullscreen_tri_vert, raytracer_fragment_main);
-    assert(graphics_ok, "Raytracer graphics pipeline creation failed.");
-
+    SHR.gfx_pipeline(*graphics_pipeline, raster_desc, fullscreen_tri_vert, raytracer_fragment_main);
     gpu_arena = gpu_make_arena(64 * 1024, label = "raytracer arena");
     raytracer_params = gpu_alloc_buffer(*gpu_arena, Raytracer_Params);
     raytracer_params.cpu.* = .{};
@@ -216,5 +210,4 @@ raytracer_sync_objects_to_params :: () {
 
 #load "../SGPU_App_Common.jai";
 #import "Jai-Shader-Transpiler";
-SHR :: #import,file "../shader_hot_reload.jai";
 #load "shaders/raytracer_shader.jai";

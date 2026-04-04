@@ -89,16 +89,12 @@ app: struct {
 on_dll_init :: () {
     using app;
 
-    graphics_source := cast([]u8) get_transpiled(.METAL, decal_painter_vertex_main, decal_painter_fragment_main);
     raster_desc: Gpu_Raster_Desc = .{
         cull = .NONE,
         depth_format = .D32_SFLOAT,
-        color_targets = .[
-            .{format = .B8G8R8A8_UNORM}
-        ],
+        color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
     };
-    ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, decal_painter_vertex_main, decal_painter_fragment_main);
-    assert(ok, "Decal painter pipeline creation failed.");
+    SHR.gfx_pipeline(*graphics_pipeline, raster_desc, decal_painter_vertex_main, decal_painter_fragment_main);
 
     draw_template.light_dir = normalize(Vector3.{-0.4, -1.0, -0.25});
     build_scene_geometry();
@@ -432,5 +428,4 @@ decal_painter_ray_intersect_plane :: (ray_origin: Vector3, ray_dir: Vector3, pla
 #import "Math";
 Input :: #import "Input";
 ImGui :: #import "ImGui";
-SHR :: #import,file "../shader_hot_reload.jai";
 #load "shaders/decal_painter_shader.jai";

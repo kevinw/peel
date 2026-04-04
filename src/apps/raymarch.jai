@@ -9,17 +9,12 @@ using app: struct {
 };
 
 on_dll_init :: () {
-    graphics_source := cast([]u8) get_transpiled(.METAL, fullscreen_tri_vert, raymarch_fragment_main);
     raster_desc: Gpu_Raster_Desc = {
         cull = .CW,
-        color_targets = .[
-            .{format = .B8G8R8A8_UNORM}
-        ],
+        color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
     };
 
-    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, fullscreen_tri_vert, raymarch_fragment_main);
-    assert(graphics_ok, "Raymarch graphics pipeline creation failed.");
-
+    SHR.gfx_pipeline(*graphics_pipeline, raster_desc, fullscreen_tri_vert, raymarch_fragment_main);
     gpu_arena = gpu_make_arena(64 * 1024, label = "raymarch arena");
     params = sgpu_make_frame_param_allocator(*gpu_arena, Raymarch_Params);
 
@@ -68,6 +63,5 @@ tick :: () {
 #import "Math";
 
 #import "Jai-Shader-Transpiler";
-SHR :: #import,file "../shader_hot_reload.jai";
 #load "shaders/raymarch_shader.jai";
 #load "../SGPU_App_Common.jai";

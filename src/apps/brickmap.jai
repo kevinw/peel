@@ -3,7 +3,6 @@
 #load "../upscaler.jai";
 
 #import "Jai-Shader-Transpiler";
-SHR :: #import,file "../shader_hot_reload.jai";
 #load "shaders/brickmap_shader.jai";
 #load "brickmap_graph.jai";
 
@@ -255,88 +254,33 @@ validation_first_mismatch_owner_bz: s32;
 on_dll_init :: () {
     using app;
     init(*brickmap_compute_graph);
-    graphics_source := cast([]u8) get_transpiled(.METAL, brickmap_vertex_main, brickmap_fragment_main);
-    temporal_graphics_source := cast([]u8) get_transpiled(.METAL, brickmap_vertex_main, brickmap_temporal_fragment_main);
-    blit_source := cast([]u8) get_transpiled(.METAL, brickmap_blit_vertex_main, brickmap_blit_fragment_main);
-    recenter_source := cast([]u8) get_transpiled(.METAL, brickmap_recenter_compute);
-    clear_slot_owners_source := cast([]u8) get_transpiled(.METAL, brickmap_clear_slot_owners_compute);
-    rebuild_slot_owners_source := cast([]u8) get_transpiled(.METAL, brickmap_rebuild_slot_owners_compute);
-    reset_queues_source := cast([]u8) get_transpiled(.METAL, brickmap_reset_queues_compute);
-    full_rebuild_source := cast([]u8) get_transpiled(.METAL, brickmap_full_rebuild_cells_compute);
-    prepare_source := cast([]u8) get_transpiled(.METAL, brickmap_prepare_dirty_compute);
-    classify_source := cast([]u8) get_transpiled(.METAL, brickmap_classify_dirty_compute);
-    prepare_dispatch_args_source := cast([]u8) get_transpiled(.METAL, brickmap_prepare_dispatch_args_compute);
-    compute_source  := cast([]u8) get_transpiled(.METAL, brickmap_bake_compute);
-    publish_source  := cast([]u8) get_transpiled(.METAL, brickmap_publish_compute);
 
     raster_desc: Gpu_Raster_Desc = .{
         cull = .CW,
-        color_targets = .[
-            .{format = .B8G8R8A8_UNORM}
-        ],
+        color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
     };
 
-    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, brickmap_vertex_main, brickmap_fragment_main);
-    assert(graphics_ok, "Brickmap graphics pipeline creation failed.");
+    SHR.gfx_pipeline(*graphics_pipeline, raster_desc, brickmap_vertex_main, brickmap_fragment_main);
     temporal_raster_desc := raster_desc;
     temporal_raster_desc.color_targets = .[
         .{format = .B8G8R8A8_UNORM},
         .{format = .R16G16_SFLOAT},
         .{format = .R16_SFLOAT},
     ];
-    temporal_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *temporal_graphics_pipeline, temporal_graphics_source, temporal_raster_desc, .METAL, brickmap_vertex_main, brickmap_temporal_fragment_main);
-    assert(temporal_ok, "Brickmap temporal graphics pipeline creation failed.");
-    blit_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *blit_pipeline, blit_source, raster_desc, .METAL, brickmap_blit_vertex_main, brickmap_blit_fragment_main);
-    assert(blit_ok, "Brickmap blit pipeline creation failed.");
 
-    compute_recenter_pipeline = gpu_create_compute_pipeline(recenter_source);
-    assert(compute_recenter_pipeline != 0, "Brickmap recenter compute pipeline creation failed.");
-    recenter_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_recenter_pipeline, recenter_source, .METAL, brickmap_recenter_compute);
-    assert(recenter_ok, "Brickmap recenter compute pipeline hot-reload registration failed.");
+    SHR.gfx_pipeline(*temporal_graphics_pipeline, temporal_raster_desc, brickmap_vertex_main, brickmap_temporal_fragment_main);
+    SHR.gfx_pipeline(*blit_pipeline, raster_desc, brickmap_blit_vertex_main, brickmap_blit_fragment_main);
 
-    compute_clear_slot_owners_pipeline = gpu_create_compute_pipeline(clear_slot_owners_source);
-    assert(compute_clear_slot_owners_pipeline != 0, "Brickmap clear slot owners compute pipeline creation failed.");
-    clear_slot_owners_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_clear_slot_owners_pipeline, clear_slot_owners_source, .METAL, brickmap_clear_slot_owners_compute);
-    assert(clear_slot_owners_ok, "Brickmap clear slot owners compute pipeline hot-reload registration failed.");
-
-    compute_rebuild_slot_owners_pipeline = gpu_create_compute_pipeline(rebuild_slot_owners_source);
-    assert(compute_rebuild_slot_owners_pipeline != 0, "Brickmap rebuild slot owners compute pipeline creation failed.");
-    rebuild_slot_owners_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_rebuild_slot_owners_pipeline, rebuild_slot_owners_source, .METAL, brickmap_rebuild_slot_owners_compute);
-    assert(rebuild_slot_owners_ok, "Brickmap rebuild slot owners compute pipeline hot-reload registration failed.");
-
-    compute_reset_queues_pipeline = gpu_create_compute_pipeline(reset_queues_source);
-    assert(compute_reset_queues_pipeline != 0, "Brickmap reset queues compute pipeline creation failed.");
-    reset_queues_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_reset_queues_pipeline, reset_queues_source, .METAL, brickmap_reset_queues_compute);
-    assert(reset_queues_ok, "Brickmap reset queues compute pipeline hot-reload registration failed.");
-
-    compute_full_rebuild_pipeline = gpu_create_compute_pipeline(full_rebuild_source);
-    assert(compute_full_rebuild_pipeline != 0, "Brickmap full rebuild compute pipeline creation failed.");
-    full_rebuild_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_full_rebuild_pipeline, full_rebuild_source, .METAL, brickmap_full_rebuild_cells_compute);
-    assert(full_rebuild_ok, "Brickmap full rebuild compute pipeline hot-reload registration failed.");
-
-    compute_prepare_pipeline = gpu_create_compute_pipeline(prepare_source);
-    assert(compute_prepare_pipeline != 0, "Brickmap prepare compute pipeline creation failed.");
-    prepare_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_prepare_pipeline, prepare_source, .METAL, brickmap_prepare_dirty_compute);
-    assert(prepare_ok, "Brickmap prepare compute pipeline hot-reload registration failed.");
-
-    compute_classify_pipeline = gpu_create_compute_pipeline(classify_source);
-    assert(compute_classify_pipeline != 0, "Brickmap classify compute pipeline creation failed.");
-    classify_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_classify_pipeline, classify_source, .METAL, brickmap_classify_dirty_compute);
-    assert(classify_ok, "Brickmap classify compute pipeline hot-reload registration failed.");
-
-    compute_prepare_dispatch_args_pipeline = gpu_create_compute_pipeline(prepare_dispatch_args_source);
-    assert(compute_prepare_dispatch_args_pipeline != 0, "Brickmap prepare dispatch args compute pipeline creation failed.");
-    prepare_dispatch_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_prepare_dispatch_args_pipeline, prepare_dispatch_args_source, .METAL, brickmap_prepare_dispatch_args_compute);
-    assert(prepare_dispatch_ok, "Brickmap prepare dispatch args compute pipeline hot-reload registration failed.");
-
-    compute_bake_pipeline = gpu_create_compute_pipeline(compute_source);
-    assert(compute_bake_pipeline != 0, "Brickmap bake compute pipeline creation failed.");
-    compute_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_bake_pipeline, compute_source, .METAL, brickmap_bake_compute);
-    assert(compute_ok, "Brickmap bake compute pipeline hot-reload registration failed.");
-    compute_publish_pipeline = gpu_create_compute_pipeline(publish_source);
-    assert(compute_publish_pipeline != 0, "Brickmap publish compute pipeline creation failed.");
-    publish_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_publish_pipeline, publish_source, .METAL, brickmap_publish_compute);
-    assert(publish_ok, "Brickmap publish compute pipeline hot-reload registration failed.");
+    SHR.compute_pipeline(*compute_recenter_pipeline, brickmap_recenter_compute);
+    SHR.compute_pipeline(*compute_clear_slot_owners_pipeline, brickmap_clear_slot_owners_compute);
+    SHR.compute_pipeline(*compute_rebuild_slot_owners_pipeline, brickmap_rebuild_slot_owners_compute);
+    SHR.compute_pipeline(*compute_reset_queues_pipeline, brickmap_reset_queues_compute);
+    SHR.compute_pipeline(*compute_full_rebuild_pipeline, brickmap_full_rebuild_cells_compute);
+    SHR.compute_pipeline(*compute_prepare_pipeline, brickmap_prepare_dirty_compute);
+    SHR.compute_pipeline(*compute_classify_pipeline, brickmap_classify_dirty_compute);
+    SHR.compute_pipeline(*compute_prepare_dispatch_args_pipeline, brickmap_prepare_dispatch_args_compute);
+    SHR.compute_pipeline(*compute_bake_pipeline, brickmap_bake_compute);
+    SHR.compute_pipeline(*compute_publish_pipeline, brickmap_publish_compute);
 
     arena_bytes := 256 * 1024 * 1024; // TODO: calculate this based on our
     gpu_arena = gpu_make_arena(arena_bytes, label = "brickmap arena");

@@ -45,7 +45,15 @@ Shader_Hot_Reload_Compute_Target :: struct {
     pipeline: *Gpu_Pipeline;
 }
 
-shader_hot_reload_init_auto :: (reload: *Shader_Hot_Reload, app_source_file: string, poll_every_frames: s64 = 15, log_prefix: string = "SHADER_RELOAD", enabled_by_default: bool = false, use_background_thread: bool = true) -> bool {
+shader_reload_ctx: *Shader_Hot_Reload;
+
+shader_hot_reload_current_ctx :: () -> *Shader_Hot_Reload {
+    assert(shader_reload_ctx != null, "shader_reload_ctx is null. Initialize SHR.shader_reload_ctx before using shader hot reload.");
+    return shader_reload_ctx;
+}
+
+shader_hot_reload_init_auto :: (app_source_file: string, poll_every_frames: s64 = 15, log_prefix: string = "SHADER_RELOAD", enabled_by_default: bool = false, use_background_thread: bool = true) -> bool {
+    reload := shader_hot_reload_current_ctx();
     reload.* = .{};
     reload.log_prefix = copy_string(log_prefix);
     reload.use_background_thread = use_background_thread;
@@ -60,7 +68,8 @@ shader_hot_reload_init_auto :: (reload: *Shader_Hot_Reload, app_source_file: str
     return reload.enabled;
 }
 
-shader_hot_reload_register_graphics_pipeline :: (reload: *Shader_Hot_Reload, entry_id: string, pipeline: *Gpu_Pipeline, raster_desc: Gpu_Raster_Desc) {
+shader_hot_reload_register_graphics_pipeline :: (entry_id: string, pipeline: *Gpu_Pipeline, raster_desc: Gpu_Raster_Desc) {
+    reload := shader_hot_reload_current_ctx();
     if entry_id.count == 0 || !pipeline return;
     array_add(*reload.graphics_targets, .{
         entry_id = copy_string(entry_id),
@@ -69,7 +78,8 @@ shader_hot_reload_register_graphics_pipeline :: (reload: *Shader_Hot_Reload, ent
     });
 }
 
-shader_hot_reload_create_and_register_graphics_pipeline_with_entry_id :: (reload: *Shader_Hot_Reload, entry_id: string, pipeline: *Gpu_Pipeline, source: []u8, raster_desc: Gpu_Raster_Desc) -> bool {
+shader_hot_reload_create_and_register_graphics_pipeline_with_entry_id :: (entry_id: string, pipeline: *Gpu_Pipeline, source: []u8, raster_desc: Gpu_Raster_Desc) -> bool {
+    reload := shader_hot_reload_current_ctx();
     if entry_id.count == 0 || !pipeline return false;
 
     new_pipeline := shader_hot_reload_create_graphics_pipeline_for_entry(reload, entry_id, raster_desc);
@@ -87,22 +97,46 @@ shader_hot_reload_create_and_register_graphics_pipeline_with_entry_id :: (reload
     pipeline.* = new_pipeline;
     if old_pipeline != 0 gpu_free_pipeline(old_pipeline);
 
-    shader_hot_reload_register_graphics_pipeline(reload, entry_id, pipeline, raster_desc);
+    shader_hot_reload_register_graphics_pipeline(entry_id, pipeline, raster_desc);
     return true;
 }
 
-gfx_pipeline :: shader_hot_reload_create_and_register_graphics_pipeline;
-
-shader_hot_reload_create_and_register_graphics_pipeline :: (reload: *Shader_Hot_Reload, pipeline: *Gpu_Pipeline, source: []u8, raster_desc: Gpu_Raster_Desc, target: JTS.Transpiled_Target, $vertex_shader: $VERTEX_SHADER, $fragment_shader: $FRAGMENT_SHADER, call: Code = #caller_code) -> bool #expand {
-    vertex_name   := #run shader_hot_reload_proc_name_from_caller_arg_compile_time(call, 5);
-    fragment_name := #run shader_hot_reload_proc_name_from_caller_arg_compile_time(call, 6);
+shader_hot_reload_create_and_register_graphics_pipeline :: (pipeline: *Gpu_Pipeline, source: []u8, raster_desc: Gpu_Raster_Desc, target: JTS.Transpiled_Target, $vertex_shader: $VERTEX_SHADER, $fragment_shader: $FRAGMENT_SHADER, call: Code = #caller_code) -> bool #expand {
+    vertex_name   := #run shader_hot_reload_proc_name_from_caller_arg_compile_time(call, 4);
+    fragment_name := #run shader_hot_reload_proc_name_from_caller_arg_compile_time(call, 5);
     target_name   := tprint("%", target);
     entry_id      := tprint("pair|%|%|%", target_name, vertex_name, fragment_name);
-    return shader_hot_reload_create_and_register_graphics_pipeline_with_entry_id(reload, entry_id, pipeline, source, raster_desc);
+    return shader_hot_reload_create_and_register_graphics_pipeline_with_entry_id(entry_id, pipeline, source, raster_desc);
+}
+
+gfx_pipeline :: (pipeline: *Gpu_Pipeline, source: []u8, raster_desc: Gpu_Raster_Desc, target: JTS.Transpiled_Target, $vertex_shader: $VERTEX_SHADER, $fragment_shader: $FRAGMENT_SHADER, call: Code = #caller_code) -> bool #expand {
+    return shader_hot_reload_create_and_register_graphics_pipeline(pipeline, source, raster_desc, target, vertex_shader, fragment_shader, call);
+}
+
+gfx_pipeline :: (pipeline: *Gpu_Pipeline, raster_desc: Gpu_Raster_Desc, $vertex_shader: $VERTEX_SHADER, $fragment_shader: $FRAGMENT_SHADER, call: Code = #caller_code, loc: Source_Code_Location = #caller_location) -> bool #expand {
+    #insert #run,stallable -> string {
+        vertex_name   := shader_hot_reload_proc_name_from_caller_arg_compile_time(call, 2);
+        fragment_name := shader_hot_reload_proc_name_from_caller_arg_compile_time(call, 3);
+        source_expr, meta_expr, ok := JTS.get_transpiled2_named_exprs(vertex_name, fragment_name, loc);
+        if !ok {
+            compiler_report("Shader hot reload graphics helper requires direct vertex/fragment procedure identifiers.", loc=loc);
+            return "return false;";
+        }
+
+        path_to_shader_module := JTS.compute_path_to_shader_bucket_module(get_current_workspace());
+        return tprint(#string END
+G :: #import,file "%";
+shader_source, shader_meta := %, %;
+assert(shader_source.count > 0, "Transpilation failed for graphics shaders '%', '%'.");
+assert(shader_meta.entry_id.count > 0, "Missing shader hot-reload entry id for graphics shaders '%', '%'.");
+return shader_hot_reload_create_and_register_graphics_pipeline_with_entry_id(shader_meta.entry_id, pipeline, cast([]u8) shader_source, raster_desc);
+END, path_to_shader_module, source_expr, meta_expr, vertex_name, fragment_name, vertex_name, fragment_name);
+    };
 }
 
 
-shader_hot_reload_register_compute_pipeline :: (reload: *Shader_Hot_Reload, entry_id: string, pipeline: *Gpu_Pipeline) {
+shader_hot_reload_register_compute_pipeline :: (entry_id: string, pipeline: *Gpu_Pipeline) {
+    reload := shader_hot_reload_current_ctx();
     if entry_id.count == 0 || !pipeline return;
     array_add(*reload.compute_targets, .{
         entry_id = copy_string(entry_id),
@@ -110,7 +144,8 @@ shader_hot_reload_register_compute_pipeline :: (reload: *Shader_Hot_Reload, entr
     });
 }
 
-shader_hot_reload_create_and_register_compute_pipeline_with_entry_id :: (reload: *Shader_Hot_Reload, entry_id: string, pipeline: *Gpu_Pipeline, source: []u8) -> bool {
+shader_hot_reload_create_and_register_compute_pipeline_with_entry_id :: (entry_id: string, pipeline: *Gpu_Pipeline, source: []u8) -> bool {
+    reload := shader_hot_reload_current_ctx();
     if entry_id.count == 0 || !pipeline return false;
 
     new_pipeline := shader_hot_reload_create_compute_pipeline_for_entry(reload, entry_id);
@@ -129,19 +164,43 @@ shader_hot_reload_create_and_register_compute_pipeline_with_entry_id :: (reload:
     pipeline.* = new_pipeline;
     if old_pipeline != 0 gpu_free_pipeline(old_pipeline);
 
-    shader_hot_reload_register_compute_pipeline(reload, entry_id, pipeline);
+    shader_hot_reload_register_compute_pipeline(entry_id, pipeline);
     return true;
 }
 
-compute_pipeline :: shader_hot_reload_create_and_register_compute_pipeline;
-shader_hot_reload_create_and_register_compute_pipeline :: (reload: *Shader_Hot_Reload, pipeline: *Gpu_Pipeline, source: []u8, target: JTS.Transpiled_Target, $compute_shader: $COMPUTE_SHADER, call: Code = #caller_code) -> bool #expand {
-    compute_name := #run shader_hot_reload_proc_name_from_caller_arg_compile_time(call, 4);
+shader_hot_reload_create_and_register_compute_pipeline :: (pipeline: *Gpu_Pipeline, source: []u8, target: JTS.Transpiled_Target, $compute_shader: $COMPUTE_SHADER, call: Code = #caller_code) -> bool #expand {
+    compute_name := #run shader_hot_reload_proc_name_from_caller_arg_compile_time(call, 3);
     target_name := tprint("%", target);
     entry_id := tprint("single|%|compute|%", target_name, compute_name);
-    return shader_hot_reload_create_and_register_compute_pipeline_with_entry_id(reload, entry_id, pipeline, source);
+    return shader_hot_reload_create_and_register_compute_pipeline_with_entry_id(entry_id, pipeline, source);
 }
 
-shader_hot_reload_tick :: (reload: *Shader_Hot_Reload, frame_num: s64) -> (did_rebuild: bool, swapped_all: bool, build_ok: bool) {
+compute_pipeline :: (pipeline: *Gpu_Pipeline, source: []u8, target: JTS.Transpiled_Target, $compute_shader: $COMPUTE_SHADER, call: Code = #caller_code) -> bool #expand {
+    return shader_hot_reload_create_and_register_compute_pipeline(pipeline, source, target, compute_shader, call);
+}
+
+compute_pipeline :: (pipeline: *Gpu_Pipeline, $compute_shader: $COMPUTE_SHADER, call: Code = #caller_code, loc: Source_Code_Location = #caller_location) -> bool #expand {
+    #insert #run,stallable -> string {
+        compute_name := shader_hot_reload_proc_name_from_caller_arg_compile_time(call, 1);
+        source_expr, meta_expr, ok := JTS.get_transpiled_compute_named_exprs(compute_name, loc);
+        if !ok {
+            compiler_report("Shader hot reload compute helper requires a direct compute procedure identifier.", loc=loc);
+            return "return false;";
+        }
+
+        path_to_shader_module := JTS.compute_path_to_shader_bucket_module(get_current_workspace());
+        return tprint(#string END
+G :: #import,file "%";
+shader_source, shader_meta := %, %;
+assert(shader_source.count > 0, "Transpilation failed for compute shader '%'.");
+assert(shader_meta.entry_id.count > 0, "Missing shader hot-reload entry id for compute shader '%'.");
+return shader_hot_reload_create_and_register_compute_pipeline_with_entry_id(shader_meta.entry_id, pipeline, cast([]u8) shader_source);
+END, path_to_shader_module, source_expr, meta_expr, compute_name, compute_name);
+    };
+}
+
+shader_hot_reload_tick :: (frame_num: s64) -> (did_rebuild: bool, swapped_all: bool, build_ok: bool) {
+    reload := shader_hot_reload_current_ctx();
     if !reload.enabled return false, true, true;
 
     if reload.worker_started {
@@ -203,7 +262,8 @@ shader_hot_reload_tick :: (reload: *Shader_Hot_Reload, frame_num: s64) -> (did_r
     return true, apply_ok, true;
 }
 
-shader_hot_reload_status_line :: (using reload: *Shader_Hot_Reload, max_ids_chars: s64 = 72) -> string {
+shader_hot_reload_status_line :: (max_ids_chars: s64 = 72) -> string {
+    using reload := shader_hot_reload_current_ctx();
     if !enabled return "";
 
     if last_result == .NONE return "";
@@ -285,7 +345,8 @@ shader_hot_reload_apply_registered_pipelines :: (using reload: *Shader_Hot_Reloa
     return ok;
 }
 
-shader_hot_reload_imgui :: (reload: *Shader_Hot_Reload, monospace_font: *ImGui.ImFont = null) {
+shader_hot_reload_imgui :: (monospace_font: *ImGui.ImFont = null) {
+    reload := shader_hot_reload_current_ctx();
     if !reload || !reload.show_error_window || reload.last_error_message.count == 0 return;
     io := ImGui.GetIO();
     overlay_height := clamp(io.DisplaySize.y * 0.45, 220.0, io.DisplaySize.y - 24.0);

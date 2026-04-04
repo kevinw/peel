@@ -2,7 +2,6 @@
 #load "../SGPU_App_Common.jai";
 #load "../editor_camera.jai";
 
-SHR :: #import,file "../shader_hot_reload.jai";
 #import "Jai-Shader-Transpiler/modules/ShaderLib";
 #import "Math";
 #import "ImGui";
@@ -46,9 +45,6 @@ texture3d_camera: Editor_Camera = .{
 };
 
 on_dll_init :: () {
-    compute_source := cast([]u8) get_transpiled(.METAL, texture3d_compute_main);
-    graphics_source := cast([]u8) get_transpiled(.METAL, fullscreen_tri_vert, texture3d_fragment_main);
-
     raster_desc: Gpu_Raster_Desc = .{
         cull = .NONE,
         color_targets = .[
@@ -56,10 +52,8 @@ on_dll_init :: () {
         ],
     };
 
-    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, fullscreen_tri_vert, texture3d_fragment_main);
-    assert(graphics_ok, "texture3d graphics pipeline creation failed.");
-    compute_ok := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_pipeline, compute_source, .METAL, texture3d_compute_main);
-    assert(compute_ok, "texture3d compute pipeline creation failed.");
+    SHR.gfx_pipeline(*graphics_pipeline, raster_desc, fullscreen_tri_vert, texture3d_fragment_main);
+    SHR.compute_pipeline(*compute_pipeline, texture3d_compute_main);
 
     texture_result, volume_texture= := gpu_create_texture(.{
         type = ._3D,

@@ -80,24 +80,16 @@ crowd_nav_ui :: () {
 }
 
 on_dll_init :: () {
-    graphics_source := cast([]u8) get_transpiled(.METAL, crowd_nav_vertex_main, crowd_nav_fragment_main);
-    floor_source    := cast([]u8) get_transpiled(.METAL, crowd_nav_floor_vertex_main, crowd_nav_floor_fragment_main);
-    compute_source  := cast([]u8) get_transpiled(.METAL, crowd_nav_step_compute);
-
     raster_desc: Gpu_Raster_Desc = .{
         cull = .CW,
-        color_targets = .[
-            .{format = .B8G8R8A8_UNORM},
-        ],
+        color_targets = .[ .{format = .B8G8R8A8_UNORM}, ],
     };
     floor_raster := raster_desc;
     floor_raster.cull = .NONE;
 
-    compute_pipeline = gpu_create_compute_pipeline(compute_source);
-
-    graphics_ok := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *graphics_pipeline, graphics_source, raster_desc, .METAL, crowd_nav_vertex_main, crowd_nav_fragment_main);
-    floor_ok    := SHR.shader_hot_reload_create_and_register_graphics_pipeline(*shader_reload_ctx, *floor_pipeline, floor_source, floor_raster, .METAL, crowd_nav_floor_vertex_main, crowd_nav_floor_fragment_main);
-    compute_ok  := SHR.shader_hot_reload_create_and_register_compute_pipeline(*shader_reload_ctx, *compute_pipeline, compute_source, .METAL, crowd_nav_step_compute);
+    SHR.gfx_pipeline(*graphics_pipeline, raster_desc, crowd_nav_vertex_main, crowd_nav_fragment_main);
+    SHR.gfx_pipeline(*floor_pipeline, floor_raster, crowd_nav_floor_vertex_main, crowd_nav_floor_fragment_main);
+    SHR.compute_pipeline(*compute_pipeline, crowd_nav_step_compute);
 
     gpu_arena = gpu_make_arena(1024 * 1024, label = "crowd nav arena");
     crowd_vertices = gpu_alloc_view(*gpu_arena, Crowd_Nav_Vertex, 18);
@@ -342,7 +334,6 @@ crowd_nav_orbit_update_camera :: (mouse_pos: Vector2) {
 #load "../editor_camera.jai";
 #import "Jai-Shader-Transpiler";
 #load "shaders/crowd_nav_shader.jai";
-SHR :: #import,file "../shader_hot_reload.jai";
 #import "ImGui";
 Input :: #import "Input";
 #import "Random";
