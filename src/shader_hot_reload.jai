@@ -7,6 +7,7 @@ Shader_Hot_Reload :: struct {
     watcher: SRM.Shader_Reload_Watcher;
     graphics_targets: [..] Shader_Hot_Reload_Graphics_Target;
     compute_targets: [..] Shader_Hot_Reload_Compute_Target;
+    mesh_targets: [..] Shader_Hot_Reload_Mesh_Target;
     last_event_frame: s64;
     last_result: Shader_Hot_Reload_Last_Result;
     worker_started: bool;
@@ -43,6 +44,20 @@ Shader_Hot_Reload_Graphics_Target :: struct {
 Shader_Hot_Reload_Compute_Target :: struct {
     entry_id: string;
     pipeline: *Gpu_Pipeline;
+}
+
+Shader_Hot_Reload_Mesh_Target :: struct {
+    entry_id: string;
+    pipeline: *Gpu_Pipeline;
+    desc: Shader_Hot_Reload_Mesh_Desc;
+}
+
+Shader_Hot_Reload_Mesh_Desc :: struct {
+    raster_desc: Gpu_Raster_Desc;
+    task_threads: [3]u32;
+    mesh_threads: [3]u32;
+    payload_memory_length: u32;
+    max_total_threadgroups_per_mesh_grid: u32;
 }
 
 shader_reload_ctx: *Shader_Hot_Reload;
@@ -144,6 +159,16 @@ shader_hot_reload_register_compute_pipeline :: (entry_id: string, pipeline: *Gpu
     });
 }
 
+shader_hot_reload_register_mesh_pipeline :: (entry_id: string, pipeline: *Gpu_Pipeline, desc: Shader_Hot_Reload_Mesh_Desc) {
+    reload := shader_hot_reload_current_ctx();
+    if entry_id.count == 0 || !pipeline return;
+    array_add(*reload.mesh_targets, .{
+        entry_id = copy_string(entry_id),
+        pipeline = pipeline,
+        desc = desc,
+    });
+}
+
 shader_hot_reload_create_and_register_compute_pipeline_with_entry_id :: (entry_id: string, pipeline: *Gpu_Pipeline, source: []u8) -> bool {
     reload := shader_hot_reload_current_ctx();
     if entry_id.count == 0 || !pipeline return false;
@@ -196,6 +221,108 @@ assert(shader_source.count > 0, "Transpilation failed for compute shader '%'.");
 assert(shader_meta.entry_id.count > 0, "Missing shader hot-reload entry id for compute shader '%'.");
 return shader_hot_reload_create_and_register_compute_pipeline_with_entry_id(shader_meta.entry_id, pipeline, cast([]u8) shader_source);
 END, path_to_shader_module, source_expr, meta_expr, compute_name, compute_name);
+    };
+}
+
+shader_hot_reload_mesh_desc_from_gpu_desc :: (desc: Gpu_Mesh_Pipeline_Desc) -> Shader_Hot_Reload_Mesh_Desc {
+    return .{
+        raster_desc = desc.raster_desc,
+        task_threads = desc.task_threads,
+        mesh_threads = desc.mesh_threads,
+        payload_memory_length = desc.payload_memory_length,
+        max_total_threadgroups_per_mesh_grid = desc.max_total_threadgroups_per_mesh_grid,
+    };
+}
+
+shader_hot_reload_create_and_register_mesh_pipeline_with_entry_id :: (entry_id: string, pipeline: *Gpu_Pipeline, shader: JTS.Transpiled_Mesh_Pipeline, desc: Gpu_Mesh_Pipeline_Desc) -> bool {
+    reload := shader_hot_reload_current_ctx();
+    if entry_id.count == 0 || !pipeline return false;
+
+    final_desc := desc;
+    final_desc.task_shader = cast([]u8) shader.task_source;
+    final_desc.mesh_shader = cast([]u8) shader.mesh_source;
+    final_desc.pixel_shader = cast([]u8) shader.pixel_source;
+    final_desc.payload_memory_length = cast(u32) shader.payload_memory_length;
+
+    new_pipeline := shader_hot_reload_create_mesh_pipeline_for_entry(reload, entry_id, shader_hot_reload_mesh_desc_from_gpu_desc(final_desc));
+    if new_pipeline == 0 && (final_desc.mesh_shader.count > 0 && final_desc.pixel_shader.count > 0) {
+        log_error("% falling back to source mesh compile for id=%", reload.log_prefix, entry_id);
+        new_pipeline = gpu_create_mesh_pipeline(final_desc);
+    }
+
+    assert(new_pipeline != 0, "Mesh pipeline creation failed.");
+    if new_pipeline == 0 return false;
+
+    old_pipeline := pipeline.*;
+    pipeline.* = new_pipeline;
+    if old_pipeline != 0 gpu_free_pipeline(old_pipeline);
+
+    shader_hot_reload_register_mesh_pipeline(entry_id, pipeline, shader_hot_reload_mesh_desc_from_gpu_desc(final_desc));
+    return true;
+}
+
+mesh_pipeline :: (pipeline: *Gpu_Pipeline, desc: Gpu_Mesh_Pipeline_Desc, shader: JTS.Transpiled_Mesh_Pipeline) -> bool {
+    assert(shader.meta.entry_id.count > 0, "Missing shader hot-reload entry id for mesh pipeline.");
+    return shader_hot_reload_create_and_register_mesh_pipeline_with_entry_id(shader.meta.entry_id, pipeline, shader, desc);
+}
+
+mesh_pipeline :: (pipeline: *Gpu_Pipeline, desc: Gpu_Mesh_Pipeline_Desc, shader_a: Code, shader_b: Code, shader_c: Code = null, loc: Source_Code_Location = #caller_location) -> bool #expand {
+    #insert #run,stallable -> string {
+        shader_a_name := shader_hot_reload_proc_name_from_code_compile_time(shader_a);
+        shader_b_name := shader_hot_reload_proc_name_from_code_compile_time(shader_b);
+        shader_c_name := shader_hot_reload_proc_name_from_code_compile_time(shader_c);
+        path_to_shader_module := JTS.compute_path_to_shader_bucket_module(get_current_workspace());
+
+        if shader_c_name.count != 0 {
+            task_name := shader_a_name;
+            mesh_name := shader_b_name;
+            fragment_name := shader_c_name;
+            bundle_expr, meta_expr, ok := JTS.get_transpiled_task_mesh_pipeline_named_exprs(task_name, mesh_name, fragment_name, loc);
+            if !ok {
+                compiler_report("Shader hot reload mesh helper requires direct task/mesh/fragment procedure identifiers.", loc=loc);
+                return "return false;";
+            }
+            return tprint(#string END
+G :: #import,file "%";
+lookup_bundle := %;
+shader_bundle := JTS.Transpiled_Mesh_Pipeline.{
+    task_source = lookup_bundle.task_source,
+    mesh_source = lookup_bundle.mesh_source,
+    pixel_source = lookup_bundle.pixel_source,
+    payload_size_bytes = lookup_bundle.payload_size_bytes,
+    payload_memory_length = lookup_bundle.payload_memory_length,
+    meta = %,
+};
+assert(shader_bundle.mesh_source.count > 0, "Transpilation failed for task+mesh pipeline shaders '%', '%', '%'.");
+assert(shader_bundle.pixel_source.count > 0, "Transpilation failed for task+mesh pipeline shaders '%', '%', '%'.");
+assert(shader_bundle.meta.entry_id.count > 0, "Missing shader hot-reload entry id for task+mesh pipeline shaders '%', '%', '%'.");
+return shader_hot_reload_create_and_register_mesh_pipeline_with_entry_id(shader_bundle.meta.entry_id, pipeline, shader_bundle, desc);
+END, path_to_shader_module, bundle_expr, meta_expr, task_name, mesh_name, fragment_name, task_name, mesh_name, fragment_name, task_name, mesh_name, fragment_name);
+        }
+
+        mesh_name := shader_a_name;
+        fragment_name := shader_b_name;
+        bundle_expr, meta_expr, ok := JTS.get_transpiled_mesh_pipeline_named_exprs(mesh_name, fragment_name, loc);
+        if !ok {
+            compiler_report("Shader hot reload mesh helper requires direct mesh/fragment procedure identifiers.", loc=loc);
+            return "return false;";
+        }
+        return tprint(#string END
+G :: #import,file "%";
+lookup_bundle := %;
+shader_bundle := JTS.Transpiled_Mesh_Pipeline.{
+    task_source = lookup_bundle.task_source,
+    mesh_source = lookup_bundle.mesh_source,
+    pixel_source = lookup_bundle.pixel_source,
+    payload_size_bytes = lookup_bundle.payload_size_bytes,
+    payload_memory_length = lookup_bundle.payload_memory_length,
+    meta = %,
+};
+assert(shader_bundle.mesh_source.count > 0, "Transpilation failed for mesh pipeline shaders '%', '%'.");
+assert(shader_bundle.pixel_source.count > 0, "Transpilation failed for mesh pipeline shaders '%', '%'.");
+assert(shader_bundle.meta.entry_id.count > 0, "Missing shader hot-reload entry id for mesh pipeline shaders '%', '%'.");
+return shader_hot_reload_create_and_register_mesh_pipeline_with_entry_id(shader_bundle.meta.entry_id, pipeline, shader_bundle, desc);
+END, path_to_shader_module, bundle_expr, meta_expr, mesh_name, fragment_name, mesh_name, fragment_name, mesh_name, fragment_name);
     };
 }
 
@@ -291,6 +418,12 @@ shader_hot_reload_proc_name_from_caller_arg_compile_time :: (call: Code, arg_ind
     return (cast(*Code_Ident) arg).name;
 }
 
+shader_hot_reload_proc_name_from_code_compile_time :: (code: Code) -> string {
+    root, _ := compiler_get_nodes(code);
+    if !root || root.kind != .IDENT return "";
+    return (cast(*Code_Ident) root).name;
+}
+
 shader_hot_reload_apply_registered_pipelines :: (using reload: *Shader_Hot_Reload) -> bool {
     ok := true;
     changed_ids_csv := watcher.last_changed_entry_ids_csv;
@@ -332,6 +465,20 @@ shader_hot_reload_apply_registered_pipelines :: (using reload: *Shader_Hot_Reloa
         new_pipeline := shader_hot_reload_create_compute_pipeline_for_manifest_entry(reload, entry);
         if new_pipeline == 0 {
             shader_hot_reload_set_error(reload, tprint("% compute pipeline recreation failed entry=%", log_prefix, it.entry_id));
+            ok = false;
+            continue;
+        }
+
+        old_pipeline := it.pipeline.*;
+        it.pipeline.* = new_pipeline;
+        if old_pipeline != 0 gpu_free_pipeline(old_pipeline);
+    }
+
+    for mesh_targets {
+        if changed_ids_csv.count != 0 && !shader_hot_reload_ids_csv_contains(changed_ids_csv, it.entry_id) continue;
+        new_pipeline := shader_hot_reload_create_mesh_pipeline_for_entry(reload, it.entry_id, it.desc);
+        if new_pipeline == 0 {
+            shader_hot_reload_set_error(reload, tprint("% mesh pipeline recreation failed entry=%", log_prefix, it.entry_id));
             ok = false;
             continue;
         }
@@ -635,6 +782,38 @@ shader_hot_reload_create_compute_pipeline_for_manifest_entry :: (reload: *Shader
     }
     use_root_pointer_struct := entry.metal_compute_binding_mode == "ROOT_POINTER_STRUCT";
     return gpu_create_compute_pipeline_from_metallib(metallib_path, entry.metal_compute_entry, use_root_pointer_struct);
+}
+
+shader_hot_reload_create_mesh_pipeline_for_entry :: (reload: *Shader_Hot_Reload, entry_id: string, desc: Shader_Hot_Reload_Mesh_Desc) -> Gpu_Pipeline {
+    if !reload return 0;
+    entry := SRM.shader_reload_manifest_find_entry(*reload.watcher.manifest, entry_id);
+    if !entry {
+        log_missing_entry_context(reload, entry_id, "mesh");
+        shader_hot_reload_set_error(reload, tprint("% missing mesh entry id=%", reload.log_prefix, entry_id));
+        return 0;
+    }
+    return shader_hot_reload_create_mesh_pipeline_for_manifest_entry(reload, entry, desc);
+}
+
+shader_hot_reload_create_mesh_pipeline_for_manifest_entry :: (reload: *Shader_Hot_Reload, entry: *SRM.Shader_Reload_Manifest_Entry, desc: Shader_Hot_Reload_Mesh_Desc) -> Gpu_Pipeline {
+    if !reload || !entry return 0;
+    metallib_path, found := SRM.shader_reload_manifest_find_entry_metallib_for_manifest(*reload.watcher.manifest, entry, *reload.watcher.paths);
+    if !found {
+        shader_hot_reload_set_error(reload, tprint("% missing metallib for mesh entry=% request=%", reload.log_prefix, entry.entry_id, entry.request_name));
+        return 0;
+    }
+    if entry.metal_mesh_entry.count == 0 || entry.metal_fragment_entry.count == 0 {
+        shader_hot_reload_set_error(reload, tprint("% missing metal mesh/fragment entry names for id=%", reload.log_prefix, entry.entry_id));
+        return 0;
+    }
+    mesh_desc := Gpu_Mesh_Pipeline_Desc.{
+        raster_desc = desc.raster_desc,
+        task_threads = desc.task_threads,
+        mesh_threads = desc.mesh_threads,
+        payload_memory_length = desc.payload_memory_length,
+        max_total_threadgroups_per_mesh_grid = desc.max_total_threadgroups_per_mesh_grid,
+    };
+    return gpu_create_mesh_pipeline_from_metallib(metallib_path, entry.metal_task_entry, entry.metal_mesh_entry, entry.metal_fragment_entry, mesh_desc);
 }
 
 shader_hot_reload_log_manifest_state :: (reload: *Shader_Hot_Reload, reason: string, ids_csv: string = "") {

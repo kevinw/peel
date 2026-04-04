@@ -31,14 +31,11 @@ hash01 :: (x: u32) -> float {
 
 hue2rgb :: (hue: float) -> Vector3 {
     h := fract(hue);
-    r := abs(h * 6.0 - 3.0) - 1.0;
-    g := 2.0 - abs(h * 6.0 - 2.0);
-    b := 2.0 - abs(h * 6.0 - 4.0);
-    return .{
-        clamp(r, 0.0, 1.0),
-        clamp(g, 0.0, 1.0),
-        clamp(b, 0.0, 1.0),
-    };
+    return clamp(Vector3.{
+        abs(h * 6.0 - 3.0) - 1.0,
+        2.0 - abs(h * 6.0 - 2.0),
+        2.0 - abs(h * 6.0 - 4.0),
+    }, 0.0, 1.0);
 }
 
 lod_debug_color :: (lod: u32) -> Vector3 {
@@ -149,7 +146,7 @@ mesh_main :: (
             }
             marker_bound := meshlet_bounds[marker_meshlet_index];
             marker_center4 := instance.world * Vector4.{marker_bound.x, marker_bound.y, marker_bound.z, 1.0};
-            marker_world := Vector3.{marker_center4.x, marker_center4.y, marker_center4.z};
+            marker_world := marker_center4.xyz;
             marker_color := hue2rgb(hash01(mesh_group_id_x()));
             marker_size := max(marker_bound.w * 0.20, 0.08);
             mesh_set_output_counts(3, 1);
@@ -350,7 +347,7 @@ task_main :: (
                         lod_local_center := lod_meshlet_mesh.bounds_center_radius.xyz;
                         lod_local_radius := max(lod_meshlet_mesh.bounds_center_radius.w, 0.001);
                         lod_world_center4 := instance.world * Vector4.{lod_local_center.x, lod_local_center.y, lod_local_center.z, 1.0};
-                        lod_world_center := Vector3.{lod_world_center4.x, lod_world_center4.y, lod_world_center4.z};
+                        lod_world_center := lod_world_center4.xyz;
                         if !sphere_visible(params, lod_world_center, lod_local_radius) {
                             emit_meshlet_count = 0;
                         }
@@ -375,12 +372,15 @@ fragment_main :: (
     using input: Fragment_In,
     params: *Meshlet_Grid_Params,
 ) -> Vector4 @SV_Target0 {
+    alpha := scene_material_alpha(params, uv);
+    if params.alpha_mode == SCENE_ALPHA_MODE_MASK && alpha < params.alpha_cutoff discard();
+    if params.lod_pass != 0 {
+        d := clamp(position.z, 0.0, 1.0);
+        return .{d, d, d, 1.0};
+    }
     if params.debug_mode != cast(u32) Meshlet_Grid_Debug_Mode.SHADED {
         return .{color.x, color.y, color.z, 1.0};
     }
-
-    alpha := scene_material_alpha(params, uv);
-    if params.alpha_mode == SCENE_ALPHA_MODE_MASK && alpha < params.alpha_cutoff discard();
 
     albedo := params.base_color_factor;
     if params.base_color_texture_index != SCENE_INVALID_TEXTURE_INDEX {
@@ -399,11 +399,7 @@ fragment_main :: (
         T := normalize(tangent.xyz);
         B := normalize(cross(N, T)) * tangent.w;
         n_sample := sample_2d(params.normal_texture_index, params.sampler_index, uv);
-        n_ts := Vector3.{
-            n_sample.x * 2.0 - 1.0,
-            n_sample.y * 2.0 - 1.0,
-            n_sample.z * 2.0 - 1.0,
-        };
+        n_ts := n_sample * 2.0 - 1.0;
         N = normalize(T * n_ts.x + B * n_ts.y + N * n_ts.z);
     }
 
@@ -423,12 +419,38 @@ fragment_main :: (
     ndl_raw := dot(N, L);
     wrapped_ndl := clamp((ndl_raw + 0.24) / 1.24, 0.0, 1.0);
     ndh := max(dot(N, H), 0.0);
-    ambient := base_rgb * mix(0.18, 0.32, ao);
-    diffuse := base_rgb * wrapped_ndl * 0.74;
+    tex_idx := cast(u32) params.shadow_meta.x;
+    samp_idx := cast(u32) params.shadow_meta.y;
+    shadow := 1.0;
+    if tex_idx != SCENE_INVALID_TEXTURE_INDEX {
+        light_clip := params.shadow_view_proj * Vector4.{world_pos.x, world_pos.y, world_pos.z, 1.0};
+        if abs(light_clip.w) >= 0.000001 {
+            shadow_uvz := Vector3.{
+                light_clip.x / light_clip.w * 0.5 + 0.5,
+                light_clip.y / light_clip.w * 0.5 + 0.5,
+                light_clip.z / light_clip.w,
+            };
+            u := shadow_uvz.x;
+            v := 1.0 - shadow_uvz.y;
+            z := shadow_uvz.z;
+            if u >= 0.0 && u <= 1.0 && v >= 0.0 && v <= 1.0 {
+                bias := params.shadow_meta.z;
+                texel := params.shadow_meta.w;
+                shadow = 0.0;
+                shadow += ifx sample_2d(tex_idx, samp_idx, .{u - texel, v - texel}).x + bias < z then 0.0 else 1.0;
+                shadow += ifx sample_2d(tex_idx, samp_idx, .{u + texel, v - texel}).x + bias < z then 0.0 else 1.0;
+                shadow += ifx sample_2d(tex_idx, samp_idx, .{u - texel, v + texel}).x + bias < z then 0.0 else 1.0;
+                shadow += ifx sample_2d(tex_idx, samp_idx, .{u + texel, v + texel}).x + bias < z then 0.0 else 1.0;
+                shadow *= 0.25;
+            }
+        }
+    }
+    ambient := base_rgb * mix(0.18, 0.32, ao) * mix(0.76, 1.0, shadow);
+    diffuse := base_rgb * wrapped_ndl * 0.74 * shadow;
     spec_power := mix(48.0, 5.0, clamp(roughness, 0.0, 1.0));
     spec_strength := mix(0.18, 0.035, clamp(roughness, 0.0, 1.0));
     sun_col := mix(Vector3.{1.0, 0.96, 0.9}, Vector3.{1.16, 0.62, 0.32}, 1.0 - clamp(abs(sun_dir.y) * 2.2, 0.0, 1.0));
-    specular := sun_col * (pow(ndh, spec_power) * spec_strength);
+    specular := sun_col * (pow(ndh, spec_power) * spec_strength) * shadow;
     shaded := ambient + diffuse + specular;
 
     return .{
@@ -437,4 +459,45 @@ fragment_main :: (
         shaded.z,
         alpha,
     };
+} @fragment_shader
+
+Debug_Shadow_Vertex_In :: struct {
+    vertex_id: u32; @SV_VertexID
+    instance_id: u32; @SV_InstanceID
+}
+
+Shadow_Debug_Vertex_Out :: struct {
+    gl_Position: Vector4; @position
+    uv: Vector2;
+}
+
+debug_shadow_vertex_main :: (using in: Debug_Shadow_Vertex_In, params: *Shadow_Debug_Payload) -> Shadow_Debug_Vertex_Out {
+    using out: Shadow_Debug_Vertex_Out;
+    _ = params;
+
+    x0 := 0.56;
+    x1 := 0.98;
+    y0 := -0.98;
+    y1 := -0.56;
+
+    if vertex_id == 0      { gl_Position = .{x0, y0, 0.0, 1.0}; uv = .{0.0, 0.0}; }
+    else if vertex_id == 1 { gl_Position = .{x1, y0, 0.0, 1.0}; uv = .{1.0, 0.0}; }
+    else if vertex_id == 2 { gl_Position = .{x1, y1, 0.0, 1.0}; uv = .{1.0, 1.0}; }
+    else if vertex_id == 3 { gl_Position = .{x0, y0, 0.0, 1.0}; uv = .{0.0, 0.0}; }
+    else if vertex_id == 4 { gl_Position = .{x1, y1, 0.0, 1.0}; uv = .{1.0, 1.0}; }
+    else { gl_Position = .{x0, y1, 0.0, 1.0}; uv = .{0.0, 1.0}; }
+    return out;
+} @vertex_shader
+
+Shadow_Debug_Payload :: struct {
+    shadow_tex_sampler_bias_texel: Vector4;
+}
+
+debug_shadow_fragment_main :: (using in: struct { uv: Vector2; }, params: *Shadow_Debug_Payload) -> struct { out_color: Vector4; } {
+    p8 := params.shadow_tex_sampler_bias_texel;
+    tex_idx  := cast(u32) p8.x;
+    samp_idx := cast(u32) p8.y;
+    s := sample_2d(tex_idx, samp_idx, .{uv.x, 1.0 - uv.y});
+    d := clamp(s.x, 0.0, 1.0);
+    return { out_color = {d, d, d, 1.0} };
 } @fragment_shader

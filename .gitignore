@@ -95,3 +95,4 @@ dist/decal_painter.dylib
 __pycache__
 dist/blender_scene
 dist/blender_scene.dylib
+*.blend1

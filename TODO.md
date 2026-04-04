@@ -1,5 +1,5 @@
 # TODO
-
+-  these shader function names are OUT OF CONTROL: transpiled_pair_metal_debug_shadow_vertex_main_debug_shadow_fragment_main_FragmentMain - maybe we can do something smarter.
 - a memory leak test which does export PEEL_MAX_FRAMES=10; ./flux && ./boids && ./inspiration_test && ...
 - pressing fullscreen on raytracer.jai causes a crash.
 - see if we can use #initializer_of for cpu memory in alloc view

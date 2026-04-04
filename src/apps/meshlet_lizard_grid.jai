@@ -29,6 +29,8 @@ Meshlet_Grid_Debug_Mode :: enum u32 {
 
 Meshlet_Grid_Params :: struct {
     camera_vp: Matrix4;
+    shadow_view_proj: Matrix4;
+    shadow_meta: Vector4;
     frustum_planes: [6]Vector4;
     eye_position: Vector3;
     debug_mode: u32;
@@ -569,4 +571,4 @@ Input :: #import "Input";
 #import "String";
 #import "Math";
 using,only(try_parse_env_int) _ :: #import "Env_Vars";
-#load "shaders/meshlet_lizard_grid_shader.jai";
+#load "shaders/meshlet_shader.jai";

@@ -132,3 +132,5 @@ In Jai shaders, prefer:
 
 When writing shader math, prefer swizzles and whole-vector operators over split scalar lane updates.
 Prefer `color.xyz += sun_color.xyz * sun_mix` and `return vec4(color.xyz, 1.0)` over separate `color_r/color_g/color_b` or `x/y/z` component code when the operation is naturally vector-shaped.
+
+Prefer `sprint("%.foo", bar)` over `copy_string(tprint("%.foo", bar))`
