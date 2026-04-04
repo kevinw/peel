@@ -1,5 +1,9 @@
 [
   {
+    "label": "blender_scene",
+    "command": "jai ~/src/peel/build.jai - src/apps/blender_scene.jai -run -dll"
+  },
+  {
     "label": "boids",
     "command": "jai ~/src/peel/build.jai - src/apps/boids.jai -run -dll"
   },

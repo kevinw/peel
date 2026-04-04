@@ -1,13 +1,15 @@
 EXPORT_LOG_PATH :: "/tmp/peel_blender_exporter.log";
+PEEL_BLEND_SCENE_MAGIC :: "PEBLEND1";
+PEEL_BLEND_SCENE_VERSION : u32 : 1;
 
 #program_export
-peel_export_from_blender :: (context_ptr: *void, reports_ptr: *void, filepath: *u8, bridge_api: *PeelBridgeAPI) -> bool #c_call {
+peel_export_from_blender :: (snapshot: *PeelExportSnapshot, filepath: *u8) -> bool #c_call {
     push_context,defer_pop;
-    _ = reports_ptr;
     reset_export_log();
     log_export("peel_export_from_blender: begin");
-    if context_ptr == null {
-        log_export("context_ptr was null");
+
+    if snapshot == null {
+        log_export("snapshot was null");
         return false;
     }
     if filepath == null {
@@ -17,81 +19,26 @@ peel_export_from_blender :: (context_ptr: *void, reports_ptr: *void, filepath: *
 
     output_path := to_string(filepath);
     log_export("output path: %", output_path);
+    log_export("snapshot counts: materials=% meshes=% nodes=% refs=% vertices=% indices=%",
+        snapshot.material_count,
+        snapshot.mesh_count,
+        snapshot.node_count,
+        snapshot.node_mesh_ref_count,
+        snapshot.vertex_count,
+        snapshot.index_count);
 
-    if bridge_api == null {
-        log_export("bridge_api was null");
+    data: [..]u8;
+    data.allocator = context.allocator;
+    serialize_snapshot(*data, snapshot);
+    log_export("serialized output bytes=%", data.count);
+
+    temp_path := tprint("%.tmp", output_path);
+    if !File.write_entire_file(temp_path, data.data, data.count) {
+        log_export("write failed: %", temp_path);
         return false;
     }
-
-    using bridge_api;
-
-    if scene_object_count == null {
-        log_export("bridge_api.scene_object_count was null");
-        return false;
-    }
-    if scene_objects_fill == null {
-        log_export("bridge_api.scene_objects_fill was null");
-        return false;
-    }
-    log_export("bridge API received");
-
-    object_count := scene_object_count(context_ptr);
-    log_export("object_count=%", object_count);
-    if object_count < 0 {
-        log_export("object_count was negative");
-        return false;
-    }
-
-    objects := NewArray(cast(int)object_count, PeelObjectInfo);
-    log_export("allocated object array for % entries", object_count);
-    filled_count := scene_objects_fill(context_ptr, objects.data, object_count);
-    log_export("filled_count=%", filled_count);
-    if filled_count < 0 {
-        log_export("filled_count was negative");
-        return false;
-    }
-    if filled_count > object_count {
-        log_export("filled_count > object_count");
-        return false;
-    }
-    filled_count_int := cast(int) filled_count;
-
-    builder: String_Builder;
-    defer free_buffers(*builder);
-
-    print_to_builder(*builder, "minimal peel export\nversion=2\nobject_count=%\n", filled_count);
-    for 0..filled_count_int-1 {
-        object := objects[it];
-        object_name := "";
-        if object.name != null {
-            object_name = to_string(object.name);
-        }
-        print_to_builder(*builder,
-            "[object %]\nname=%\ntype=%\nparent_index=%\nworld=% % % % % % % % % % % % % % % %\n",
-            it,
-            object_name,
-            object.type,
-            object.parent_index,
-            object.world[0],  object.world[1],  object.world[2],  object.world[3],
-            object.world[4],  object.world[5],  object.world[6],  object.world[7],
-            object.world[8],  object.world[9],  object.world[10], object.world[11],
-            object.world[12], object.world[13], object.world[14], object.world[15]);
-    }
-
-    output := builder_to_string(*builder);
-    log_export("built output text, % bytes", output.count);
-
-    fd := POSIX.creat(filepath, 420);
-    if fd < 0 {
-        log_export("creat failed, errno=%", POSIX.errno());
-        return false;
-    }
-    defer POSIX.close(fd);
-
-    written := POSIX.write(fd, output.data, cast(u64) output.count);
-    log_export("write returned %", written);
-    if written != output.count {
-        log_export("short write, expected % bytes", output.count);
+    if !File.file_move(temp_path, output_path) {
+        log_export("rename failed: % -> %", temp_path, output_path);
         return false;
     }
 
@@ -102,8 +49,95 @@ peel_export_from_blender :: (context_ptr: *void, reports_ptr: *void, filepath: *
 #scope_file
 
 #import "Basic";
+File :: #import "File";
 POSIX :: #import "POSIX";
 #load "peel_bridge_bindings.jai";
+
+serialize_snapshot :: (builder: *[..]u8, snapshot: *PeelExportSnapshot) {
+    append_bytes(builder, cast([]u8) PEEL_BLEND_SCENE_MAGIC);
+    cache_put(builder, PEEL_BLEND_SCENE_VERSION);
+    cache_put(builder, snapshot.material_count);
+    cache_put(builder, snapshot.mesh_count);
+    cache_put(builder, snapshot.node_count);
+    cache_put(builder, snapshot.node_mesh_ref_count);
+    cache_put(builder, snapshot.vertex_count);
+    cache_put(builder, snapshot.index_count);
+    cache_put_c_string(builder, snapshot.model_name);
+
+    for i: 0..cast(s64) snapshot.material_count-1 {
+        material := snapshot.materials[i];
+        cache_put_c_string(builder, material.name);
+        for material.base_color cache_put(builder, it);
+    }
+
+    for i: 0..cast(s64) snapshot.mesh_count-1 {
+        mesh := snapshot.meshes[i];
+        cache_put(builder, mesh.base_vertex);
+        cache_put(builder, mesh.vertex_count);
+        cache_put(builder, mesh.first_index);
+        cache_put(builder, mesh.index_count);
+        cache_put(builder, mesh.material_index);
+    }
+
+    for i: 0..cast(s64) snapshot.node_count-1 {
+        node := snapshot.nodes[i];
+        cache_put_c_string(builder, node.name);
+        cache_put(builder, node.parent_index);
+        cache_put(builder, node.first_child_index);
+        cache_put(builder, node.next_sibling_index);
+        cache_put(builder, cast(s32) 0);
+        cache_put(builder, node.first_mesh_ref);
+        cache_put(builder, node.mesh_ref_count);
+        cache_put(builder, cast(u32) 0);
+        cache_put(builder, cast(u32) 0);
+        for node.translation cache_put(builder, it);
+        for node.rotation cache_put(builder, it);
+        for node.scale cache_put(builder, it);
+    }
+
+    for i: 0..cast(s64) snapshot.node_mesh_ref_count-1 {
+        cache_put(builder, snapshot.node_mesh_refs[i]);
+    }
+
+    for i: 0..cast(s64) snapshot.vertex_count-1 {
+        vertex := snapshot.vertices[i];
+        for vertex.position cache_put(builder, it);
+        cache_put(builder, cast(float) 1.0);
+        for vertex.normal cache_put(builder, it);
+        cache_put(builder, cast(float) 0.0);
+        cache_put(builder, cast(float) 1.0);
+        cache_put(builder, cast(float) 0.0);
+        cache_put(builder, cast(float) 0.0);
+        cache_put(builder, cast(float) 1.0);
+        for vertex.uv cache_put(builder, it);
+    }
+
+    for i: 0..cast(s64) snapshot.index_count-1 {
+        cache_put(builder, snapshot.indices[i]);
+    }
+}
+
+cache_put :: (builder: *[..]u8, x: $T) {
+    value := x;
+    offset := builder.count;
+    array_resize(builder, offset + size_of(T));
+    memcpy(builder.data + offset, *value, size_of(T));
+}
+
+cache_put_string :: (builder: *[..]u8, value: string) {
+    count := cast(u32) value.count;
+    cache_put(builder, count);
+    if count == 0 return;
+    append_bytes(builder, cast([]u8) value);
+}
+
+cache_put_c_string :: (builder: *[..]u8, value: *u8) {
+    if value == null {
+        cache_put_string(builder, "");
+        return;
+    }
+    cache_put_string(builder, to_string(value));
+}
 
 reset_export_log :: () {
     fd := POSIX.creat(EXPORT_LOG_PATH, 420);
@@ -127,4 +161,11 @@ log_export :: (message: string, args: ..Any) {
     defer POSIX.close(fd);
 
     _ = POSIX.write(fd, line.data, cast(u64) line.count);
+}
+
+append_bytes :: (builder: *[..]u8, data: []u8) {
+    if data.count == 0 return;
+    offset := builder.count;
+    array_resize(builder, offset + data.count);
+    memcpy(builder.data + offset, data.data, data.count);
 }

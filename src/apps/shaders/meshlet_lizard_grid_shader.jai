@@ -12,6 +12,8 @@ MESHLET_DEBUG_FORCE_FIRST_MESHLET  : u32 : 2;
 MESHLET_DEBUG_SYNTHETIC_TRIANGLE   : u32 : 4;
 MESHLET_DEBUG_FORCE_ALL_MESHLETS   : u32 : 8;
 MESHLET_DEBUG_SIMPLE_SELECTION    : u32 : 16;
+MESHLET_DEBUG_DISABLE_LODS        : u32 : 32;
+MESHLET_DEBUG_TASK_MARKERS        : u32 : 64;
 
 Fragment_In :: struct {
     position: Vector4; @SV_Position
@@ -53,6 +55,8 @@ Task_Payload :: struct {
     instance_index: u32;
     mesh_index: u32;
     meshlet_start: u32;
+    meshlet_count: u32;
+    chunk_index: u32;
 }
 
 lod_from_mesh_index :: (meshes: *Scene_Mesh, base_mesh_index: u32, selected_mesh_index: u32) -> u32 {
@@ -139,6 +143,50 @@ mesh_main :: (
         payload_instance_index := mesh_payload_ptr(Task_Payload).instance_index;
         instance := instances[payload_instance_index];
         payload_mesh_index := mesh_payload_ptr(Task_Payload).mesh_index;
+        payload_meshlet_count := mesh_payload_ptr(Task_Payload).meshlet_count;
+        if (params.debug_flags & MESHLET_DEBUG_TASK_MARKERS) != 0 {
+            marker_meshlet_index := mesh_payload_ptr(Task_Payload).meshlet_start + mesh_group_id_x();
+            if mesh_group_id_x() >= payload_meshlet_count {
+                mesh_set_output_counts(0, 0);
+                return;
+            }
+            marker_bound := meshlet_bounds[marker_meshlet_index];
+            marker_center4 := instance.world * Vector4.{marker_bound.x, marker_bound.y, marker_bound.z, 1.0};
+            marker_world := Vector3.{marker_center4.x, marker_center4.y, marker_center4.z};
+            marker_color := hue2rgb(hash01(mesh_group_id_x()));
+            marker_size := max(marker_bound.w * 0.20, 0.08);
+            mesh_set_output_counts(3, 1);
+            mesh_set_vertex(0, Fragment_In.{
+                position = params.camera_vp * Vector4.{marker_world.x - marker_size, marker_world.y - marker_size, marker_world.z, 1.0},
+                color = marker_color,
+                uv = .{0.0, 0.0},
+                world_pos = marker_world,
+                normal = .{0.0, 1.0, 0.0},
+                tangent = .{1.0, 0.0, 0.0, 1.0},
+            });
+            mesh_set_vertex(1, Fragment_In.{
+                position = params.camera_vp * Vector4.{marker_world.x, marker_world.y + marker_size, marker_world.z, 1.0},
+                color = marker_color,
+                uv = .{1.0, 0.0},
+                world_pos = marker_world,
+                normal = .{0.0, 1.0, 0.0},
+                tangent = .{1.0, 0.0, 0.0, 1.0},
+            });
+            mesh_set_vertex(2, Fragment_In.{
+                position = params.camera_vp * Vector4.{marker_world.x + marker_size, marker_world.y - marker_size, marker_world.z, 1.0},
+                color = marker_color,
+                uv = .{0.0, 1.0},
+                world_pos = marker_world,
+                normal = .{0.0, 1.0, 0.0},
+                tangent = .{1.0, 0.0, 0.0, 1.0},
+            });
+            mesh_set_triangle(0, 0, 1, 2);
+            return;
+        }
+        if mesh_group_id_x() >= payload_meshlet_count {
+            mesh_set_output_counts(0, 0);
+            return;
+        }
         meshlet_index := mesh_payload_ptr(Task_Payload).meshlet_start + mesh_group_id_x();
         meshlet := meshlets[meshlet_index];
         meshlet_bound := meshlet_bounds[meshlet_index];
@@ -167,6 +215,9 @@ mesh_main :: (
                 color := Vector3.{1.0, 1.0, 1.0};
                 if params.debug_mode == cast(u32) Meshlet_Grid_Debug_Mode.LODS {
                     color = lod_debug_color(lod_from_mesh_index(meshes, params.batch_mesh_index, payload_mesh_index));
+                } else if params.debug_mode == cast(u32) Meshlet_Grid_Debug_Mode.CHUNKS {
+                    chunk_hue := hash01(mesh_payload_ptr(Task_Payload).chunk_index);
+                    color = hue2rgb(chunk_hue);
                 } else if params.debug_mode == cast(u32) Meshlet_Grid_Debug_Mode.MESHLETS {
                     color = meshlet_tint;
                 }
@@ -222,6 +273,8 @@ task_main :: (
         task_payload_ptr(Task_Payload).instance_index = 0;
         task_payload_ptr(Task_Payload).mesh_index = params.batch_mesh_index;
         task_payload_ptr(Task_Payload).meshlet_start = 0;
+        task_payload_ptr(Task_Payload).meshlet_count = 1;
+        task_payload_ptr(Task_Payload).chunk_index = 0;
         task_set_mesh_groups(1, 1, 1);
     } else if (params.debug_flags & MESHLET_DEBUG_FORCE_ALL_MESHLETS) != 0 {
         selected_instance_index = params.batch_first_instance;
@@ -231,6 +284,8 @@ task_main :: (
         task_payload_ptr(Task_Payload).instance_index = selected_instance_index;
         task_payload_ptr(Task_Payload).mesh_index = selected_mesh_index;
         task_payload_ptr(Task_Payload).meshlet_start = selected_meshlet_start;
+        task_payload_ptr(Task_Payload).meshlet_count = emit_meshlet_count;
+        task_payload_ptr(Task_Payload).chunk_index = 0;
         task_set_mesh_groups(emit_meshlet_count, 1, 1);
     } else if (params.debug_flags & MESHLET_DEBUG_FORCE_FIRST_MESHLET) != 0 {
         selected_instance_index = params.batch_first_instance;
@@ -240,10 +295,13 @@ task_main :: (
         task_payload_ptr(Task_Payload).instance_index = selected_instance_index;
         task_payload_ptr(Task_Payload).mesh_index = selected_mesh_index;
         task_payload_ptr(Task_Payload).meshlet_start = selected_meshlet_start;
+        task_payload_ptr(Task_Payload).meshlet_count = emit_meshlet_count;
+        task_payload_ptr(Task_Payload).chunk_index = 0;
         task_set_mesh_groups(emit_meshlet_count, 1, 1);
     } else if (params.debug_flags & MESHLET_DEBUG_SIMPLE_SELECTION) != 0 {
+        object_group_index: u32;
         if meshlet_chunk_count > 0 {
-            object_group_index := params.batch_object_group_start + task_id;
+            object_group_index = params.batch_object_group_start + task_id;
             instance_local := object_group_index / meshlet_chunk_count;
             chunk_local := object_group_index % meshlet_chunk_count;
             if instance_local < params.batch_instance_count {
@@ -261,16 +319,23 @@ task_main :: (
         task_payload_ptr(Task_Payload).instance_index = selected_instance_index;
         task_payload_ptr(Task_Payload).mesh_index = selected_mesh_index;
         task_payload_ptr(Task_Payload).meshlet_start = selected_meshlet_start;
+        task_payload_ptr(Task_Payload).meshlet_count = emit_meshlet_count;
+        task_payload_ptr(Task_Payload).chunk_index = object_group_index;
+        if (params.debug_flags & MESHLET_DEBUG_TASK_MARKERS) != 0 && emit_meshlet_count > 0 {
+            emit_meshlet_count = 1;
+        }
         task_set_mesh_groups(emit_meshlet_count, 1, 1);
     } else {
+        object_group_index: u32;
         if meshlet_chunk_count > 0 {
-            object_group_index := params.batch_object_group_start + task_id;
+            object_group_index = params.batch_object_group_start + task_id;
             instance_local := object_group_index / meshlet_chunk_count;
             chunk_local := object_group_index % meshlet_chunk_count;
             if instance_local < params.batch_instance_count {
                 selected_instance_index = params.batch_first_instance + instance_local;
                 selected_lod_mesh_index := params.batch_mesh_index;
-                if meshes[params.batch_mesh_index].lod_mesh_count > 0 {
+                if (params.debug_flags & MESHLET_DEBUG_DISABLE_LODS) == 0 &&
+                    meshes[params.batch_mesh_index].lod_mesh_count > 0 {
                     lod_count := meshes[params.batch_mesh_index].lod_mesh_count;
                     lod_slot := min(selected_lods[selected_instance_index], lod_count);
                     if lod_slot > 0 {
@@ -303,6 +368,11 @@ task_main :: (
         task_payload_ptr(Task_Payload).instance_index = selected_instance_index;
         task_payload_ptr(Task_Payload).mesh_index = selected_mesh_index;
         task_payload_ptr(Task_Payload).meshlet_start = selected_meshlet_start;
+        task_payload_ptr(Task_Payload).meshlet_count = emit_meshlet_count;
+        task_payload_ptr(Task_Payload).chunk_index = object_group_index;
+        if (params.debug_flags & MESHLET_DEBUG_TASK_MARKERS) != 0 && emit_meshlet_count > 0 {
+            emit_meshlet_count = 1;
+        }
         task_set_mesh_groups(emit_meshlet_count, 1, 1);
     }
 } @task_shader

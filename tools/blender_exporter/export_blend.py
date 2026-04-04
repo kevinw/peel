@@ -1,13 +1,8 @@
 import os
 import pathlib
 import sys
-import traceback
 
-THIS_DIR = pathlib.Path(__file__).resolve().parent
-if str(THIS_DIR) not in sys.path:
-    sys.path.insert(0, str(THIS_DIR))
-
-from peel_blend_export import export_scene_or_raise
+import bpy
 
 
 def fail(message: str) -> None:
@@ -24,12 +19,11 @@ def main() -> None:
     if output.exists():
         output.unlink()
 
-    try:
-        export_scene_or_raise(str(output))
-        print(f"PEEL EXPORT: wrote {output}", flush=True)
-    except Exception:
-        traceback.print_exc()
-        os._exit(1)
+    result = bpy.ops.wm.peel_export_headless(filepath=str(output))
+    if "FINISHED" not in result:
+        fail(f"operator returned {result}")
+
+    print(f"PEEL EXPORT: wrote {output}", flush=True)
 
 
 main()

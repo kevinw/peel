@@ -17,6 +17,7 @@ Scene_Instance :: struct {
 Meshlet_Grid_Debug_Mode :: enum u32 {
     SHADED;
     LODS;
+    CHUNKS;
     MESHLETS;
 }
 
@@ -95,6 +96,7 @@ using app: struct {
     param_slot_count: s64 = 1;
     source_path: string;
     export_path: string;
+    debug_batch_filter: s32 = -1;
     watched_export_modtime: Apollo_Time;
     watched_export_size: s64;
     reload_count: u32;
@@ -109,6 +111,7 @@ on_dll_init :: () {
     assert(OS == .MACOS, "blender_scene is currently Metal mesh-shader only.");
     source_path = resolve_blend_source_path();
     export_path = copy_string(tprint("%.peelscene", source_path));
+    apply_debug_env_overrides();
 
     init_blender_scene_pipeline();
     load_blender_scene();
@@ -140,10 +143,9 @@ tick :: () {
     ensure_depth_target(cast(u32) win_w, cast(u32) win_h);
 
     allow_look := (Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_RIGHT] & .DOWN) != 0;
-    _ = editor_camera_update(*camera, editor_dt, mx, my, mouse_ok,
+    editor_camera_update(*camera, editor_dt, mx, my, mouse_ok,
         allow_move = true,
-        allow_look = allow_look,
-        allow_zoom = true);
+        allow_look = allow_look);
 
     if auto_orbit {
         orbit_time += editor_dt;
@@ -207,6 +209,7 @@ tick :: () {
         lod_transition_alphas.gpu,
     ];
     for batches {
+        if debug_batch_filter >= 0 && cast(s32) it_index != debug_batch_filter continue;
         total_task_slots := it.max_meshlet_count;
         draw_first_instance := it.first_instance;
         draw_instance_total := it.instance_count;
@@ -263,6 +266,7 @@ show_ui :: () {
     Text("Export: %", export_path);
     Text("Reloads: %", reload_count);
     Text("Batches: %  Instances: %", batches.count, instances.cpu.count);
+    Text("Batch Filter: %", debug_batch_filter);
     Text("Max Meshlets / Mesh: %", geo.max_meshlet_count);
     Text("RMB look, WASD move, Shift boost");
     Checkbox("Auto Orbit", *auto_orbit);
@@ -286,6 +290,16 @@ show_ui :: () {
         if simple_selection draw.debug_flags |= MESHLET_DEBUG_SIMPLE_SELECTION;
         else                draw.debug_flags &= ~MESHLET_DEBUG_SIMPLE_SELECTION;
     }
+    disable_lods := (draw.debug_flags & MESHLET_DEBUG_DISABLE_LODS) != 0;
+    if Checkbox("Disable LODs", *disable_lods) {
+        if disable_lods draw.debug_flags |= MESHLET_DEBUG_DISABLE_LODS;
+        else            draw.debug_flags &= ~MESHLET_DEBUG_DISABLE_LODS;
+    }
+    task_markers := (draw.debug_flags & MESHLET_DEBUG_TASK_MARKERS) != 0;
+    if Checkbox("Task Markers", *task_markers) {
+        if task_markers draw.debug_flags |= MESHLET_DEBUG_TASK_MARKERS;
+        else            draw.debug_flags &= ~MESHLET_DEBUG_TASK_MARKERS;
+    }
     synthetic_triangle := (draw.debug_flags & MESHLET_DEBUG_SYNTHETIC_TRIANGLE) != 0;
     if Checkbox("Synthetic Triangle", *synthetic_triangle) {
         if synthetic_triangle draw.debug_flags |= MESHLET_DEBUG_SYNTHETIC_TRIANGLE;
@@ -297,9 +311,18 @@ show_ui :: () {
     SameLine();
     if RadioButton("LODs", debug_mode_value == cast(u32) Meshlet_Grid_Debug_Mode.LODS) draw.debug_mode = cast(u32) Meshlet_Grid_Debug_Mode.LODS;
     SameLine();
+    if RadioButton("Chunks", debug_mode_value == cast(u32) Meshlet_Grid_Debug_Mode.CHUNKS) draw.debug_mode = cast(u32) Meshlet_Grid_Debug_Mode.CHUNKS;
+    SameLine();
     if RadioButton("Meshlets", debug_mode_value == cast(u32) Meshlet_Grid_Debug_Mode.MESHLETS) draw.debug_mode = cast(u32) Meshlet_Grid_Debug_Mode.MESHLETS;
     SliderFloat("LOD Screen Radius", *lod_screen_radius, 8.0, 1024.0);
     SliderFloat("LOD Power", *lod_distance_power, 0.5, 2.0);
+    for batches {
+        selected_mesh_index := batch_selected_mesh_index(it);
+        selected_meshlet_count := meshlet_meshes.cpu[selected_mesh_index].meshlet_count;
+        selected_lod_slot := selected_lods.cpu[it.first_instance];
+        Text("Batch %: base=% selected=% lod=% meshlets=%",
+            it_index, it.mesh_index, selected_mesh_index, selected_lod_slot, selected_meshlet_count);
+    }
 
     if Button("Reload Now") {
         load_blender_scene();
@@ -322,6 +345,29 @@ getenv_string :: (name: string) -> string {
     value_c := POSIX_Getenv.getenv(temp_c_string(name));
     if !value_c return "";
     return to_string(value_c, c_style_strlen(value_c));
+}
+
+apply_debug_env_overrides :: () {
+    debug_flags_text := getenv_string("PEEL_MESHLET_DEBUG_FLAGS");
+    if debug_flags_text.count != 0 {
+        debug_flags_value, ok := string_to_int(debug_flags_text);
+        assert(ok, "PEEL_MESHLET_DEBUG_FLAGS must be an integer, got '%'.", debug_flags_text);
+        draw.debug_flags = cast(u32) debug_flags_value;
+    }
+
+    debug_mode_text := getenv_string("PEEL_MESHLET_DEBUG_MODE");
+    if debug_mode_text.count != 0 {
+        debug_mode_value, ok := string_to_int(debug_mode_text);
+        assert(ok, "PEEL_MESHLET_DEBUG_MODE must be an integer, got '%'.", debug_mode_text);
+        draw.debug_mode = cast(u32) debug_mode_value;
+    }
+
+    debug_batch_text := getenv_string("PEEL_MESHLET_BATCH");
+    if debug_batch_text.count != 0 {
+        debug_batch_value, ok := string_to_int(debug_batch_text);
+        assert(ok, "PEEL_MESHLET_BATCH must be an integer, got '%'.", debug_batch_text);
+        debug_batch_filter = cast(s32) debug_batch_value;
+    }
 }
 
 find_workspace_root :: () -> string {
@@ -367,6 +413,9 @@ init_blender_scene_pipeline :: () {
 }
 
 load_blender_scene :: () {
+    if arena.cpu != null || geo.arena.cpu != null {
+        gpu_wait_idle();
+    }
     if arena.cpu != null {
         gpu_free_arena(arena);
         arena = .{};
@@ -405,6 +454,9 @@ rebuild_blender_scene_runtime :: () {
     temp_batches: [..]Draw_Batch;
     temp_batches.allocator = temp;
     scene_geo_append_model_instances(*temp_batches, *temp_instances, *geo, model_index, root_transforms);
+    for *temp_batches {
+        it.max_meshlet_count = mesh_max_meshlet_count(it.mesh_index);
+    }
 
     param_slot_count = 0;
     for temp_batches {
@@ -418,19 +470,19 @@ rebuild_blender_scene_runtime :: () {
 
     total_bytes :=
         1024 +
-        param_slot_count * SGPU_FRAMES_IN_FLIGHT * size_of(Meshlet_Grid_Params) +
-        geo.vertices.cpu.count * size_of(Scene_Vertex) +
-        geo.materials.cpu.count * size_of(Scene_Material) +
-        geo.meshes.count * size_of(Scene_Mesh) +
-        geo.meshlet_meshes.cpu.count * size_of(Scene_Meshlet_Mesh) +
-        geo.meshlets.cpu.count * size_of(Scene_Meshlet) +
-        geo.meshlet_vertices.cpu.count * size_of(u32) +
-        geo.meshlet_triangles.cpu.count * size_of(u32) +
-        geo.meshlet_bounds.cpu.count * size_of(Vector4) +
-        max(cast(s64) 1, temp_instances.count) * size_of(Meshlet_Grid_Instance) +
-        max(cast(s64) 1, temp_instances.count) * size_of(u32) +
-        max(cast(s64) 1, temp_instances.count) * size_of(u32) +
-        max(cast(s64) 1, temp_instances.count) * size_of(float);
+        gpu_arena_required_view_size(Meshlet_Grid_Params, param_slot_count * SGPU_FRAMES_IN_FLIGHT) +
+        gpu_arena_required_view_size(Scene_Vertex, geo.vertices.cpu.count) +
+        gpu_arena_required_view_size(Scene_Material, geo.materials.cpu.count) +
+        gpu_arena_required_view_size(Scene_Mesh, geo.meshes.count) +
+        gpu_arena_required_view_size(Scene_Meshlet_Mesh, geo.meshlet_meshes.cpu.count) +
+        gpu_arena_required_view_size(Scene_Meshlet, geo.meshlets.cpu.count) +
+        gpu_arena_required_view_size(u32, geo.meshlet_vertices.cpu.count) +
+        gpu_arena_required_view_size(u32, geo.meshlet_triangles.cpu.count) +
+        gpu_arena_required_view_size(Vector4, geo.meshlet_bounds.cpu.count) +
+        gpu_arena_required_view_size(Meshlet_Grid_Instance, max(temp_instances.count, 1)) +
+        gpu_arena_required_view_size(u32, max(temp_instances.count, 1)) +
+        gpu_arena_required_view_size(u32, max(temp_instances.count, 1)) +
+        gpu_arena_required_view_size(float, max(temp_instances.count, 1));
 
     arena = gpu_make_arena(total_bytes, label = "blender scene arena");
     assert(arena.cpu != null, "Failed to allocate blender scene arena.");
@@ -547,6 +599,17 @@ update_selected_lods :: (viewport_height: float) {
             lod_transition_alphas.cpu[instance_index] = 0.0;
         }
     }
+}
+
+batch_selected_mesh_index :: (batch: Draw_Batch) -> u32 {
+    selected_mesh_index := batch.mesh_index;
+    if batch.instance_count == 0 return selected_mesh_index;
+    selected_lod := selected_lods.cpu[batch.first_instance];
+    max_lod := meshes.cpu[batch.mesh_index].lod_mesh_count;
+    if selected_lod > 0 && selected_lod <= max_lod {
+        selected_mesh_index = meshes.cpu[batch.mesh_index].lod_mesh_start + (selected_lod - 1);
+    }
+    return selected_mesh_index;
 }
 
 normalize_plane4 :: (p: Vector4) -> Vector4 {

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT=/Users/kev/src/peel
-OUTPUT_PATH="${1:-/tmp/peel_e2e_default_cube.peel}"
+OUTPUT_PATH="${1:-/tmp/peel_e2e_default_cube.peelscene}"
 
 rm -f "$OUTPUT_PATH"
 

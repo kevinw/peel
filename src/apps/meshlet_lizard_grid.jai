@@ -358,19 +358,19 @@ rebuild_meshlet_lizard_scene :: () {
 
     total_bytes :=
         1024 +
-        param_slot_count * SGPU_FRAMES_IN_FLIGHT * size_of(Meshlet_Grid_Params) +
-        geo.vertices.cpu.count * size_of(Scene_Vertex) +
-        geo.materials.cpu.count * size_of(Scene_Material) +
-        geo.meshes.count * size_of(Scene_Mesh) +
-        geo.meshlet_meshes.cpu.count * size_of(Scene_Meshlet_Mesh) +
-        geo.meshlets.cpu.count * size_of(Scene_Meshlet) +
-        geo.meshlet_vertices.cpu.count * size_of(u32) +
-        geo.meshlet_triangles.cpu.count * size_of(u32) +
-        geo.meshlet_bounds.cpu.count * size_of(Vector4) +
-        total_instance_count * size_of(Meshlet_Grid_Instance) +
-        total_instance_count * size_of(u32) +
-        total_instance_count * size_of(u32) +
-        total_instance_count * size_of(float);
+        gpu_arena_required_view_size(Meshlet_Grid_Params, param_slot_count * SGPU_FRAMES_IN_FLIGHT) +
+        gpu_arena_required_view_size(Scene_Vertex, geo.vertices.cpu.count) +
+        gpu_arena_required_view_size(Scene_Material, geo.materials.cpu.count) +
+        gpu_arena_required_view_size(Scene_Mesh, geo.meshes.count) +
+        gpu_arena_required_view_size(Scene_Meshlet_Mesh, geo.meshlet_meshes.cpu.count) +
+        gpu_arena_required_view_size(Scene_Meshlet, geo.meshlets.cpu.count) +
+        gpu_arena_required_view_size(u32, geo.meshlet_vertices.cpu.count) +
+        gpu_arena_required_view_size(u32, geo.meshlet_triangles.cpu.count) +
+        gpu_arena_required_view_size(Vector4, geo.meshlet_bounds.cpu.count) +
+        gpu_arena_required_view_size(Meshlet_Grid_Instance, total_instance_count) +
+        gpu_arena_required_view_size(u32, total_instance_count) +
+        gpu_arena_required_view_size(u32, total_instance_count) +
+        gpu_arena_required_view_size(float, total_instance_count);
 
     arena = gpu_make_arena(total_bytes, label = "meshlet lizard arena");
     assert(arena.cpu != null, "Failed to allocate meshlet lizard arena.");

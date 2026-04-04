@@ -81,7 +81,7 @@ editor_camera_update :: (
 ) -> Editor_Camera_Update_Result {
     result: Editor_Camera_Update_Result;
 
-    if allow_zoom && mouse_valid {
+    if allow_zoom && mouse_valid && !ImGui.GetIO().WantCaptureMouse {
         wheel := ImGui.GetIO().MouseWheel;
         if wheel != 0.0 {
             fov_y -= wheel * mouse_wheel_fov_sensitivity;
