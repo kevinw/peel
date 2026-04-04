@@ -29,8 +29,6 @@ Meshlet_Grid_Debug_Mode :: enum u32 {
 
 Meshlet_Grid_Params :: struct {
     camera_vp: Matrix4;
-    shadow_view_proj: Matrix4;
-    shadow_meta: Vector4;
     frustum_planes: [6]Vector4;
     eye_position: Vector3;
     debug_mode: u32;
@@ -51,7 +49,6 @@ Meshlet_Grid_Params :: struct {
     batch_meshlet_chunk_count: u32;
     batch_object_group_start: u32;
     debug_flags: u32;
-    lod_pass: u32;
 }
 
 MESHLET_LIZARD_MODEL_PATH :: "models/nerdy+lizard+3d+model.glb";
@@ -241,7 +238,6 @@ tick :: () {
                 primary_params.cpu.batch_max_meshlet_count = it.max_meshlet_count;
                 primary_params.cpu.batch_meshlet_chunk_count = meshlet_chunk_count;
                 primary_params.cpu.batch_object_group_start = object_group_start - draw_instance_start * meshlet_chunk_count;
-                primary_params.cpu.lod_pass = 0;
 
                 draw_result := gpu_draw_meshlets(cmd_buff, primary_params.gpu, meshlet_draw_bindings, .[draw_object_group_count, 1, 1]);
                 assert(draw_result == .SUCCESS, "gpu_draw_meshlets failed: %", draw_result);

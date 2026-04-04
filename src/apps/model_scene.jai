@@ -932,8 +932,8 @@ init_scene_geo_from_palette :: () {
     model_paths: [..]string;
     model_paths.allocator = temp;
     for scene_palette_models array_add(*model_paths, it);
-    append_unique_model_path(*model_paths, "/Users/kev/src/three-mediapipe-rig/public/sample.glb");
-    append_unique_model_path(*model_paths, "/Users/kev/src/three-mediapipe-rig/public/mediapipe-canonical-face.glb");
+    append_unique_model_path(*model_paths, "models/sample.glb");
+    append_unique_model_path(*model_paths, "models/mediapipe-canonical-face.glb");
     scene_geo_init(*scene_geo, model_paths);
 }
 

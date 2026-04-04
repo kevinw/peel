@@ -318,7 +318,7 @@ ui_wants_keyboard :: () -> bool {
 create_window_and_init_sgpu :: () {
     #if OS == .MACOS {
         #if SINGLE_BINARY {
-            window = create_metal_window(2500, 2000, "", window_delegate_hack_callback=single_binary_macos_window_delegate_init);
+            window = create_metal_window(1920, 1080, "", window_delegate_hack_callback=single_binary_macos_window_delegate_init);
             ensure_macos_window_frontmost(window);
         } else {
             assert(window != null, "host_init: expected host-owned macOS window.");
@@ -326,7 +326,7 @@ create_window_and_init_sgpu :: () {
             ensure_macos_window_frontmost(cast(*NSWindow) window);
         }
     } else {
-        window = create_window(2500, 2000, "hello peel");
+        window = create_window(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT, "hello peel");
     }
     result := gpu_init();
     assert(result == .SUCCESS);

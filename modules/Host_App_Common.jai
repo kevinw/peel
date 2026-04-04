@@ -1,5 +1,8 @@
 #import "Reload_Common";
 
+DEFAULT_WINDOW_WIDTH :: 1920 * 2;
+DEFAULT_WINDOW_HEIGHT :: 1080 * 2;
+
 Host_Message_Type :: enum {
   Unload;
   Reload;

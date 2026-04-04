@@ -22,15 +22,9 @@ Meshlet_Grid_Debug_Mode :: enum u32 {
 }
 
 last_frustum_planes: [6]Vector4;
-shadowmap_enabled := true;
-debug_shadow_pipeline: Gpu_Pipeline;
-show_shadow_debug := true;
-debug_shadow_params: Gpu_View(Shadow_Debug_Payload); //empty
 
 Meshlet_Grid_Params :: struct {
     camera_vp: Matrix4;
-    shadow_view_proj: Matrix4;
-    shadow_meta: Vector4;
     frustum_planes: [6]Vector4;
     eye_position: Vector3;
     debug_mode: u32;
@@ -51,7 +45,6 @@ Meshlet_Grid_Params :: struct {
     batch_meshlet_chunk_count: u32;
     batch_object_group_start: u32;
     debug_flags: u32;
-    lod_pass: u32;
 }
 
 BLENDER_SCENE_DEFAULT_BLEND_PATH :: "tools/blender_exporter/default_cube.blend";
@@ -65,7 +58,6 @@ using app: struct {
     depth_view: Gpu_Texture_View;
     depth_w: u32;
     depth_h: u32;
-    shadow_map: Shadow_Map;
     geo: Scene_Geo;
     arena: Gpu_Arena;
     params: Gpu_Frame_Param_Allocator(Meshlet_Grid_Params);
@@ -127,17 +119,7 @@ on_dll_init :: () {
     export_path = sprint("%.peelscene", source_path);
     apply_debug_env_overrides();
 
-    main_raster: Gpu_Raster_Desc = {
-        cull = .NONE,
-        depth_format = .D32_SFLOAT,
-        color_targets = .[
-            .{format = .B8G8R8A8_UNORM}
-        ],
-    };
-    SHR.gfx_pipeline(*debug_shadow_pipeline, main_raster, debug_shadow_vertex_main, debug_shadow_fragment_main);
-
     init_blender_scene_pipeline();
-    shadow_map_init(*shadow_map);
     load_blender_scene(first_load=true);
     gpu_commit_residency();
 } @on_dll_init
@@ -147,7 +129,6 @@ on_unload :: () {
     free(export_path);
     if mesh_source.count != 0 free(mesh_source);
     if depth_texture != 0 gpu_free(depth_texture);
-    shadow_map_deinit(*shadow_map);
     if pipeline != 0 gpu_delete(*pipeline);
     if arena.cpu != null gpu_free_arena(arena);
     array_free(batches);
@@ -199,16 +180,6 @@ tick :: () {
     last_frustum_planes = draw.frustum_planes;
     draw.eye_position = camera.position;
     draw.light_dir = normalize(Vector3.{-0.45, -1.0, -0.25});
-    shadow_map.light_dir = normalize(-draw.light_dir);
-    shadow_map_update_view_proj(*shadow_map);
-    draw.shadow_view_proj = shadow_map.view_proj;
-    if !shadowmap_enabled {
-        draw.shadow_view_proj._14 = 0;
-        draw.shadow_view_proj._24 = 0;
-        draw.shadow_view_proj._34 = 0;
-        draw.shadow_view_proj._44 = 0;
-    }
-    draw.shadow_meta = shadow_map_binding(*shadow_map);
     base_params := draw;
     update_selected_lods(cast(float) win_h);
 
@@ -230,72 +201,6 @@ tick :: () {
         target_lods.gpu,
         lod_transition_alphas.gpu,
     ];
-
-    {
-        gpu_begin_scoped_render_pass(cmd_buff, .{
-            depth_target = .{
-                view = shadow_map.depth_view,
-                load_op = .CLEAR,
-                store_op = .STORE,
-                clear_value = .{ depth = 1.0, stencil = 0, },
-            },
-            color_targets = .[
-                .{
-                    view = shadow_map.map_view,
-                    load_op = .CLEAR,
-                    store_op = .STORE,
-                    clear_color._float = .[1.0, 1.0, 1.0, 1.0],
-                }
-            ]
-        });
-        gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .LESS, depth_mode = .READ | .WRITE});
-        gpu_set_pipeline(cmd_buff, pipeline);
-
-        for batches {
-            if debug_batch_filter >= 0 && cast(s32) it_index != debug_batch_filter continue;
-            total_task_slots := it.max_meshlet_count;
-            draw_first_instance := it.first_instance;
-            draw_instance_total := it.instance_count;
-            meshlet_chunk_count := max(cast(u32) 1, (total_task_slots + MESHLET_TASK_EMIT_MESHLET_COUNT - 1) / MESHLET_TASK_EMIT_MESHLET_COUNT);
-            max_object_groups_per_draw := max(cast(u32) 1, mesh_grid_limit / MESHLET_TASK_EMIT_MESHLET_COUNT);
-
-            total_object_groups := draw_instance_total * meshlet_chunk_count;
-            object_group_start: u32;
-            while object_group_start < total_object_groups {
-                draw_object_group_count := min(max_object_groups_per_draw, total_object_groups - object_group_start);
-
-                draw_instance_start := object_group_start / meshlet_chunk_count;
-                draw_group_end := object_group_start + draw_object_group_count;
-                draw_instance_end := min(draw_instance_total, (draw_group_end + meshlet_chunk_count - 1) / meshlet_chunk_count);
-                draw_instance_count := draw_instance_end - draw_instance_start;
-                if draw_instance_count > 0 {
-                    batch_material := materials.cpu[meshes.cpu[it.mesh_index].material_index];
-                    shadow_params := sgpu_frame_param_alloc(*params, base_params);
-                    shadow_params.cpu.camera_vp = shadow_map.view_proj;
-                    shadow_params.cpu.base_color_factor = batch_material.base_color_factor;
-                    shadow_params.cpu.batch_mesh_index = it.mesh_index;
-                    shadow_params.cpu.base_color_texture_index = batch_material.base_color_texture_index;
-                    shadow_params.cpu.opacity_texture_index = batch_material.opacity_texture_index;
-                    shadow_params.cpu.normal_texture_index = batch_material.normal_texture_index;
-                    shadow_params.cpu.roughness_texture_index = batch_material.roughness_texture_index;
-                    shadow_params.cpu.ao_texture_index = batch_material.ao_texture_index;
-                    shadow_params.cpu.alpha_mode = batch_material.alpha_mode;
-                    shadow_params.cpu.alpha_cutoff = batch_material.alpha_cutoff;
-                    shadow_params.cpu.sampler_index = batch_material.sampler_index;
-                    shadow_params.cpu.batch_first_instance = draw_first_instance + draw_instance_start;
-                    shadow_params.cpu.batch_instance_count = draw_instance_count;
-                    shadow_params.cpu.batch_max_meshlet_count = it.max_meshlet_count;
-                    shadow_params.cpu.batch_meshlet_chunk_count = meshlet_chunk_count;
-                    shadow_params.cpu.batch_object_group_start = object_group_start - draw_instance_start * meshlet_chunk_count;
-                    shadow_params.cpu.lod_pass = 1;
-
-                    draw_result := gpu_draw_meshlets(cmd_buff, shadow_params.gpu, meshlet_draw_bindings, .[draw_object_group_count, 1, 1]);
-                    assert(draw_result == .SUCCESS, "gpu_draw_meshlets failed: %", draw_result);
-                }
-                object_group_start += draw_object_group_count;
-            }
-        }
-    }
 
     gpu_begin_scoped_render_pass(cmd_buff, .{
         depth_target = .{
@@ -354,22 +259,12 @@ tick :: () {
                 primary_params.cpu.batch_max_meshlet_count = it.max_meshlet_count;
                 primary_params.cpu.batch_meshlet_chunk_count = meshlet_chunk_count;
                 primary_params.cpu.batch_object_group_start = object_group_start - draw_instance_start * meshlet_chunk_count;
-                primary_params.cpu.lod_pass = 0;
-
                 draw_result := gpu_draw_meshlets(cmd_buff, primary_params.gpu, meshlet_draw_bindings, .[draw_object_group_count, 1, 1]);
                 assert(draw_result == .SUCCESS, "gpu_draw_meshlets failed: %", draw_result);
             }
             object_group_start += draw_object_group_count;
         }
         }
-
-    if show_shadow_debug {
-        gpu_set_depth_stencil_state(cmd_buff, { depth_test = .ALWAYS, depth_mode = .NONE });
-        gpu_set_pipeline(cmd_buff, debug_shadow_pipeline);
-        debug_shadow_params.cpu[0].shadow_tex_sampler_bias_texel = shadow_map_binding(*shadow_map);
-        assert(debug_shadow_params.gpu != 0);
-        gpu_draw_instanced_direct(cmd_buff, debug_shadow_params.gpu, 6, 1);
-    }
 
     submit_and_present_with_ui(cmd_buff);
 } @on_tick
@@ -438,8 +333,6 @@ show_ui :: () {
     }
 
     inspect("last_frustum_planes", *last_frustum_planes);
-    inspect("shadowmap_enabled", *shadowmap_enabled);
-
     debug_mode_value := draw.debug_mode;
     if RadioButton("Shaded", debug_mode_value == cast(u32) Meshlet_Grid_Debug_Mode.SHADED) draw.debug_mode = cast(u32) Meshlet_Grid_Debug_Mode.SHADED;
     SameLine();
@@ -591,10 +484,6 @@ rebuild_blender_scene_runtime :: (first_load := false) {
     scene_extent := model_bounds.max - model_bounds.min;
     scene_radius = max(max(scene_extent.x, scene_extent.z), max(scene_extent.y, 1.0)) * 0.7;
     scene_radius = max(scene_radius, 1.5);
-    shadow_map.center = scene_center;
-    shadow_map.extent = max(scene_radius * 1.35, 4.0);
-    shadow_map.distance = max(scene_radius * 2.4, 8.0);
-    shadow_map.far_plane = max(shadow_map.distance + shadow_map.extent * 2.0, 24.0);
 
     if first_load {
         camera.position = scene_center + .{0.0, max(scene_extent.y, 1.0) * 0.65, max(scene_radius * 1.5, 3.0)};
@@ -653,7 +542,6 @@ rebuild_blender_scene_runtime :: (first_load := false) {
     selected_lods = gpu_alloc_view(*arena, u32, max(temp_instances.count, 1));
     target_lods = gpu_alloc_view(*arena, u32, max(temp_instances.count, 1));
     lod_transition_alphas = gpu_alloc_view(*arena, float, max(temp_instances.count, 1));
-    debug_shadow_params = gpu_alloc_view(*arena, Shadow_Debug_Payload, 1);
 
     memcpy(vertices.cpu.data, geo.vertices.cpu.data, geo.vertices.cpu.count * size_of(Scene_Vertex));
     memcpy(materials.cpu.data, geo.materials.cpu.data, geo.materials.cpu.count * size_of(Scene_Material));
@@ -811,7 +699,6 @@ ensure_depth_target :: (width: u32, height: u32) {
 #load "../SGPU_App_Common.jai";
 #load "../editor_camera.jai";
 #load "../scene_geo.jai";
-#load "../shadowmap.jai";
 #import "Jai-Shader-Transpiler";
 ImGui :: #import "ImGui";
 Input :: #import "Input";

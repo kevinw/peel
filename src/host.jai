@@ -138,7 +138,7 @@ main :: () {
     host_max_frames = max_frames;
     }
     #if OS == .MACOS && !SINGLE_BINARY {
-        host_runtime = host_macos_runtime_init(2500, 2000, "");
+        host_runtime = host_macos_runtime_init(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT, "");
         init_ctx.runtime = host_runtime;
     }
 
