@@ -1,3 +1,5 @@
+BLENDER_SCENE_DEFAULT_BLEND_PATH :: "tools/blender_exporter/monkeys.blend";
+
 Meshlet_Grid_Instance :: struct {
     world: Matrix4;
 }
@@ -27,6 +29,9 @@ Meshlet_Grid_Params :: struct {
     camera_vp: Matrix4;
     frustum_planes: [6]Vector4;
     eye_position: Vector3;
+    lod_projection_scale: float;
+    lod_radius_threshold: float;
+    lod_metric_power: float;
     debug_mode: u32;
     light_dir: Vector3;
     base_color_factor: Vector4;
@@ -47,7 +52,6 @@ Meshlet_Grid_Params :: struct {
     debug_flags: u32;
 }
 
-BLENDER_SCENE_DEFAULT_BLEND_PATH :: "tools/blender_exporter/default_cube.blend";
 BLENDER_SCENE_POLL_SECONDS :: 0.20;
 MESHLET_TASK_EMIT_MESHLET_COUNT : u32 : 64;
 BLENDER_SCENE_MAX_MESH_GROUPS_PER_DRAW : u32 : 1024;
@@ -70,9 +74,6 @@ using app: struct {
     meshlet_triangles: Gpu_View(u32);
     meshlet_bounds: Gpu_View(Vector4);
     instances: Gpu_View(Meshlet_Grid_Instance);
-    selected_lods: Gpu_View(u32);
-    target_lods: Gpu_View(u32);
-    lod_transition_alphas: Gpu_View(float);
     batches: [..]Draw_Batch;
     model_index: s32 = -1;
     camera: Editor_Camera = {
@@ -179,9 +180,11 @@ tick :: () {
     }
     last_frustum_planes = draw.frustum_planes;
     draw.eye_position = camera.position;
+    draw.lod_projection_scale = cast(float) win_h / max(2.0 * max(tan(camera.fov_y * 0.5), 0.0001), 0.0001);
+    draw.lod_radius_threshold = lod_screen_radius;
+    draw.lod_metric_power = lod_distance_power;
     draw.light_dir = normalize(Vector3.{-0.45, -1.0, -0.25});
     base_params := draw;
-    update_selected_lods(cast(float) win_h);
 
     main_queue := gpu_get_queue(.MAIN, 0);
     result=, cmd_buff := gpu_start_command_recording(main_queue);
@@ -197,9 +200,6 @@ tick :: () {
         meshlet_triangles.gpu,
         meshlet_bounds.gpu,
         instances.gpu,
-        selected_lods.gpu,
-        target_lods.gpu,
-        lod_transition_alphas.gpu,
     ];
 
     gpu_begin_scoped_render_pass(cmd_buff, .{
@@ -343,13 +343,6 @@ show_ui :: () {
     if RadioButton("Meshlets", debug_mode_value == cast(u32) Meshlet_Grid_Debug_Mode.MESHLETS) draw.debug_mode = cast(u32) Meshlet_Grid_Debug_Mode.MESHLETS;
     SliderFloat("LOD Screen Radius", *lod_screen_radius, 8.0, 1024.0);
     SliderFloat("LOD Power", *lod_distance_power, 0.5, 2.0);
-    for batches {
-        selected_mesh_index := batch_selected_mesh_index(it);
-        selected_meshlet_count := meshlet_meshes.cpu[selected_mesh_index].meshlet_count;
-        selected_lod_slot := selected_lods.cpu[it.first_instance];
-        Text("Batch %: base=% selected=% lod=% meshlets=%",
-            it_index, it.mesh_index, selected_mesh_index, selected_lod_slot, selected_meshlet_count);
-    }
 } @on_ui
 
 #scope_file
@@ -521,10 +514,7 @@ rebuild_blender_scene_runtime :: (first_load := false) {
         gpu_arena_required_view_size(u32, geo.meshlet_vertices.cpu.count) +
         gpu_arena_required_view_size(u32, geo.meshlet_triangles.cpu.count) +
         gpu_arena_required_view_size(Vector4, geo.meshlet_bounds.cpu.count) +
-        gpu_arena_required_view_size(Meshlet_Grid_Instance, max(temp_instances.count, 1)) +
-        gpu_arena_required_view_size(u32, max(temp_instances.count, 1)) +
-        gpu_arena_required_view_size(u32, max(temp_instances.count, 1)) +
-        gpu_arena_required_view_size(float, max(temp_instances.count, 1));
+        gpu_arena_required_view_size(Meshlet_Grid_Instance, max(temp_instances.count, 1));
 
     arena = gpu_make_arena(total_bytes, label = "blender scene arena");
     assert(arena.cpu != null, "Failed to allocate blender scene arena.");
@@ -539,9 +529,6 @@ rebuild_blender_scene_runtime :: (first_load := false) {
     meshlet_triangles = gpu_alloc_view(*arena, u32, geo.meshlet_triangles.cpu.count);
     meshlet_bounds = gpu_alloc_view(*arena, Vector4, geo.meshlet_bounds.cpu.count);
     instances = gpu_alloc_view(*arena, Meshlet_Grid_Instance, max(temp_instances.count, 1));
-    selected_lods = gpu_alloc_view(*arena, u32, max(temp_instances.count, 1));
-    target_lods = gpu_alloc_view(*arena, u32, max(temp_instances.count, 1));
-    lod_transition_alphas = gpu_alloc_view(*arena, float, max(temp_instances.count, 1));
 
     memcpy(vertices.cpu.data, geo.vertices.cpu.data, geo.vertices.cpu.count * size_of(Scene_Vertex));
     memcpy(materials.cpu.data, geo.materials.cpu.data, geo.materials.cpu.count * size_of(Scene_Material));
@@ -555,9 +542,6 @@ rebuild_blender_scene_runtime :: (first_load := false) {
     array_copy(*batches, temp_batches);
     for temp_instances {
         instances.cpu[it_index] = .{world = it.world};
-        selected_lods.cpu[it_index] = 0;
-        target_lods.cpu[it_index] = 0;
-        lod_transition_alphas.cpu[it_index] = 0.0;
     }
     for batches {
         mesh := geo.meshes[it.mesh_index];
@@ -594,64 +578,6 @@ mesh_max_meshlet_count :: (mesh_index: u32) -> u32 {
         }
     }
     return max(result, 1);
-}
-
-mesh_world_max_scale :: (world: Matrix4) -> float {
-    axis_x4 := world * Vector4.{1.0, 0.0, 0.0, 0.0};
-    axis_y4 := world * Vector4.{0.0, 1.0, 0.0, 0.0};
-    axis_z4 := world * Vector4.{0.0, 0.0, 1.0, 0.0};
-    axis_x := Vector3.{axis_x4.x, axis_x4.y, axis_x4.z};
-    axis_y := Vector3.{axis_y4.x, axis_y4.y, axis_y4.z};
-    axis_z := Vector3.{axis_z4.x, axis_z4.y, axis_z4.z};
-    return max(length(axis_x), max(length(axis_y), length(axis_z)));
-}
-
-lod_metric_for_instance :: (base_mesh_index: u32, world: Matrix4, viewport_height: float) -> float {
-    meshlet_mesh := geo.meshlet_meshes.cpu[base_mesh_index];
-    local_center := meshlet_mesh.bounds_center_radius.xyz;
-    local_radius := max(meshlet_mesh.bounds_center_radius.w, 0.001);
-    world_center4 := world * Vector4.{local_center.x, local_center.y, local_center.z, 1.0};
-    world_center := Vector3.{world_center4.x, world_center4.y, world_center4.z};
-    world_radius := max(local_radius * mesh_world_max_scale(world), 0.001);
-    distance_to_eye := max(distance(camera.position, world_center), 0.001);
-    tan_half_fov := max(tan(camera.fov_y * 0.5), 0.0001);
-    projected_radius_px := world_radius * viewport_height / max(2.0 * distance_to_eye * tan_half_fov, 0.0001);
-    return pow(lod_screen_radius / max(projected_radius_px, 0.0001), lod_distance_power);
-}
-
-lod_slot_for_metric :: (metric: float, max_lod: u32) -> u32 {
-    lod_slot: u32;
-    while lod_slot < max_lod {
-        threshold := cast(float) (lod_slot + 1);
-        if metric < threshold break;
-        lod_slot += 1;
-    }
-    return lod_slot;
-}
-
-update_selected_lods :: (viewport_height: float) {
-    for batches {
-        max_lod := meshes.cpu[it.mesh_index].lod_mesh_count;
-        for instance_offset: 0..it.instance_count-1 {
-            instance_index := it.first_instance + instance_offset;
-            metric := lod_metric_for_instance(it.mesh_index, instances.cpu[instance_index].world, viewport_height);
-            selected_lod := lod_slot_for_metric(metric, max_lod);
-            selected_lods.cpu[instance_index] = selected_lod;
-            target_lods.cpu[instance_index] = selected_lod;
-            lod_transition_alphas.cpu[instance_index] = 0.0;
-        }
-    }
-}
-
-batch_selected_mesh_index :: (batch: Draw_Batch) -> u32 {
-    selected_mesh_index := batch.mesh_index;
-    if batch.instance_count == 0 return selected_mesh_index;
-    selected_lod := selected_lods.cpu[batch.first_instance];
-    max_lod := meshes.cpu[batch.mesh_index].lod_mesh_count;
-    if selected_lod > 0 && selected_lod <= max_lod {
-        selected_mesh_index = meshes.cpu[batch.mesh_index].lod_mesh_start + (selected_lod - 1);
-    }
-    return selected_mesh_index;
 }
 
 normalize_plane4 :: (p: Vector4) -> Vector4 {

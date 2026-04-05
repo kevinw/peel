@@ -31,6 +31,9 @@ Meshlet_Grid_Params :: struct {
     camera_vp: Matrix4;
     frustum_planes: [6]Vector4;
     eye_position: Vector3;
+    lod_projection_scale: float;
+    lod_radius_threshold: float;
+    lod_metric_power: float;
     debug_mode: u32;
     light_dir: Vector3;
     base_color_factor: Vector4;
@@ -76,9 +79,6 @@ using app: struct {
     meshlet_triangles: Gpu_View(u32);
     meshlet_bounds: Gpu_View(Vector4);
     instances: Gpu_View(Meshlet_Grid_Instance);
-    selected_lods: Gpu_View(u32);
-    target_lods: Gpu_View(u32);
-    lod_transition_alphas: Gpu_View(float);
     batches: [..]Meshlet_Grid_Draw_Batch;
     model_index: s32 = -1;
     camera: Editor_Camera = {
@@ -157,9 +157,11 @@ tick :: () {
     draw.camera_vp = proj * view;
     draw.frustum_planes = extract_frustum_planes(draw.camera_vp);
     draw.eye_position = camera.position;
+    draw.lod_projection_scale = cast(float) win_h / max(2.0 * max(tan(camera.fov_y * 0.5), 0.0001), 0.0001);
+    draw.lod_radius_threshold = lod_screen_radius;
+    draw.lod_metric_power = lod_distance_power;
     draw.light_dir = normalize(Vector3.{-0.45, -1.0, -0.25});
     base_params := draw;
-    update_selected_lods(cast(float) win_h);
 
     main_queue := gpu_get_queue(.MAIN, 0);
     result=, cmd_buff := gpu_start_command_recording(main_queue);
@@ -197,9 +199,6 @@ tick :: () {
         meshlet_triangles.gpu,
         meshlet_bounds.gpu,
         instances.gpu,
-        selected_lods.gpu,
-        target_lods.gpu,
-        lod_transition_alphas.gpu,
     ];
     for batches {
         total_task_slots := it.max_meshlet_count;
@@ -365,10 +364,7 @@ rebuild_meshlet_lizard_scene :: () {
         gpu_arena_required_view_size(u32, geo.meshlet_vertices.cpu.count) +
         gpu_arena_required_view_size(u32, geo.meshlet_triangles.cpu.count) +
         gpu_arena_required_view_size(Vector4, geo.meshlet_bounds.cpu.count) +
-        gpu_arena_required_view_size(Meshlet_Grid_Instance, total_instance_count) +
-        gpu_arena_required_view_size(u32, total_instance_count) +
-        gpu_arena_required_view_size(u32, total_instance_count) +
-        gpu_arena_required_view_size(float, total_instance_count);
+        gpu_arena_required_view_size(Meshlet_Grid_Instance, total_instance_count);
 
     arena = gpu_make_arena(total_bytes, label = "meshlet lizard arena");
     assert(arena.cpu != null, "Failed to allocate meshlet lizard arena.");
@@ -383,9 +379,6 @@ rebuild_meshlet_lizard_scene :: () {
     meshlet_triangles = gpu_alloc_view(*arena, u32, geo.meshlet_triangles.cpu.count);
     meshlet_bounds = gpu_alloc_view(*arena, Vector4, geo.meshlet_bounds.cpu.count);
     instances = gpu_alloc_view(*arena, Meshlet_Grid_Instance, total_instance_count);
-    selected_lods = gpu_alloc_view(*arena, u32, total_instance_count);
-    target_lods = gpu_alloc_view(*arena, u32, total_instance_count);
-    lod_transition_alphas = gpu_alloc_view(*arena, float, total_instance_count);
 
     memcpy(vertices.cpu.data, geo.vertices.cpu.data, geo.vertices.cpu.count * size_of(Scene_Vertex));
     memcpy(materials.cpu.data, geo.materials.cpu.data, geo.materials.cpu.count * size_of(Scene_Material));
@@ -395,11 +388,6 @@ rebuild_meshlet_lizard_scene :: () {
     memcpy(meshlet_vertices.cpu.data, geo.meshlet_vertices.cpu.data, geo.meshlet_vertices.cpu.count * size_of(u32));
     memcpy(meshlet_triangles.cpu.data, geo.meshlet_triangles.cpu.data, geo.meshlet_triangles.cpu.count * size_of(u32));
     memcpy(meshlet_bounds.cpu.data, geo.meshlet_bounds.cpu.data, geo.meshlet_bounds.cpu.count * size_of(Vector4));
-    for i: 0..total_instance_count-1 {
-        selected_lods.cpu[i] = 0;
-        target_lods.cpu[i] = 0;
-        lod_transition_alphas.cpu[i] = 0.0;
-    }
 
     instance_cursor: u32;
     for node_index: model.node_start .. model.node_start + model.node_count - 1 {
@@ -467,53 +455,6 @@ model_mesh_ref_count :: (model: Scene_Model) -> s64 {
         total += geo.nodes[node_index].mesh_ref_count;
     }
     return total;
-}
-
-mesh_world_max_scale :: (world: Matrix4) -> float {
-    axis_x4 := world * Vector4.{1.0, 0.0, 0.0, 0.0};
-    axis_y4 := world * Vector4.{0.0, 1.0, 0.0, 0.0};
-    axis_z4 := world * Vector4.{0.0, 0.0, 1.0, 0.0};
-    axis_x := Vector3.{axis_x4.x, axis_x4.y, axis_x4.z};
-    axis_y := Vector3.{axis_y4.x, axis_y4.y, axis_y4.z};
-    axis_z := Vector3.{axis_z4.x, axis_z4.y, axis_z4.z};
-    return max(length(axis_x), max(length(axis_y), length(axis_z)));
-}
-
-lod_metric_for_instance :: (base_mesh_index: u32, world: Matrix4, viewport_height: float) -> float {
-    meshlet_mesh := geo.meshlet_meshes.cpu[base_mesh_index];
-    local_center := meshlet_mesh.bounds_center_radius.xyz;
-    local_radius := max(meshlet_mesh.bounds_center_radius.w, 0.001);
-    world_center4 := world * Vector4.{local_center.x, local_center.y, local_center.z, 1.0};
-    world_center := Vector3.{world_center4.x, world_center4.y, world_center4.z};
-    world_radius := max(local_radius * mesh_world_max_scale(world), 0.001);
-    distance_to_eye := max(distance(camera.position, world_center), 0.001);
-    tan_half_fov := max(tan(camera.fov_y * 0.5), 0.0001);
-    projected_radius_px := world_radius * viewport_height / max(2.0 * distance_to_eye * tan_half_fov, 0.0001);
-    return pow(lod_screen_radius / max(projected_radius_px, 0.0001), lod_distance_power);
-}
-
-lod_slot_for_metric :: (metric: float, max_lod: u32) -> u32 {
-    lod_slot: u32;
-    while lod_slot < max_lod {
-        threshold := cast(float) (lod_slot + 1);
-        if metric < threshold break;
-        lod_slot += 1;
-    }
-    return lod_slot;
-}
-
-update_selected_lods :: (viewport_height: float) {
-    for batches {
-        max_lod := meshes.cpu[it.mesh_index].lod_mesh_count;
-        for instance_offset: 0..it.instance_count-1 {
-            instance_index := it.first_instance + instance_offset;
-            metric := lod_metric_for_instance(it.mesh_index, instances.cpu[instance_index].world, viewport_height);
-            selected_lod := lod_slot_for_metric(metric, max_lod);
-            selected_lods.cpu[instance_index] = selected_lod;
-            target_lods.cpu[instance_index] = selected_lod;
-            lod_transition_alphas.cpu[instance_index] = 0.0;
-        }
-    }
 }
 
 normalize_plane4 :: (plane: Vector4) -> Vector4 {
