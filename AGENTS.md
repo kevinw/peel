@@ -115,7 +115,16 @@ Prefer `print_to_builder(*string_builder, "my message: %", my_val)` over `append
 Logging functions from the Basic module:
 
 ```
-log("here's my var: %", var);
+log("here's my var: %", var); // 'var' can be any type
+```
+
+If you want to log a struct with more detail...there is a long form where field names and type name are included:
+    
+```
+Baz :: struct { meep: string; }
+baz := Baz.{ meep = "hello" };
+log("baz: %", FormatStruct.{value = baz, use_long_form_if_more_than_this_many_members = 0});
+// outputs "baz: {meep = "hello"; }"
 ```
 
 or for errors:

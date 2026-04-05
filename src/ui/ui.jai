@@ -9,7 +9,7 @@ fonts: struct {
     mono: *ImGui.ImFont;
     #overlay(mono) monospace: *ImGui.ImFont;
 
-    MAIN_SIZE :: 15.0;
+    MAIN_SIZE :: 16.0;
     LARGE_SIZE :: 35.0;
 }
 

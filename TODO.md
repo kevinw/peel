@@ -1,11 +1,14 @@
 # TODO
--  these shader function names are OUT OF CONTROL: transpiled_pair_metal_debug_shadow_vertex_main_debug_shadow_fragment_main_FragmentMain - maybe we can do something smarter.
+- deferred deletion for pipelines, textures, etc. maybe a simple version is just "3 frames later"
+- shorten #import "Jai-Shader-Transpiler/modules/ShaderFuncs";
+- these shader function names are OUT OF CONTROL: transpiled_pair_metal_debug_shadow_vertex_main_debug_shadow_fragment_main_FragmentMain - maybe we can do something smarter.
 - a memory leak test which does export PEEL_MAX_FRAMES=10; ./flux && ./boids && ./inspiration_test && ...
 - pressing fullscreen on raytracer.jai causes a crash.
 - see if we can use #initializer_of for cpu memory in alloc view
 - make build.jai - -dll build the host only once.
 - fix Bindings_Generator for MTL4, consider making functions #no_context
 - sgpu Metal debug: track residency dirty state and assert/bark on resource use without `gpu_commit_residency()`, using `MTLResidencySet.containsAllocation(...)` checks on bound allocations
+  - or/and: have codex suggest a way to do "residency tracking light"? or not at at all? should we make it implicit?
 - fix jai build.jai - -dll (parallel builds need to build only dylibs)
 - make built binaries go in bin/
 - imgui docking branch

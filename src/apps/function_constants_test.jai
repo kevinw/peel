@@ -1,34 +1,31 @@
-
-#load "../SGPU_App_Common.jai";
-#import "Jai-Shader-Transpiler";
-#import "Jai-Shader-Transpiler/modules/ShaderFuncs";
-#import "Math";
-#import "Objective_C";
-
-Function_Constants_Test_Params :: struct {
+Test_Params :: struct {
     viewport_width: float;
     test_color: Vector3;
+    time: float;
 }
 
 Function_Constants_Test_VS_Out :: struct {
     position: Vector4; @SV_Position
 }
 
-use_alternate_color: bool = false; @function_constant
-alt_color: enum u8 {
-    BLUE;
-    MAGENTA;
-    WHITE;
-} = .MAGENTA; @function_constant
+Constant_Params :: struct {
+    use_alternate_color: bool = false;
+    alt_color: enum u8 { BLUE; MAGENTA; WHITE; } = .MAGENTA;
+} @function_constants
 
-vert :: (using in: struct { vertex_id: u32; @Vertex_ID }) -> Function_Constants_Test_VS_Out @vertex_shader {
-    positions : [3] Vector2 : .[ .{-1.0, -1.0}, .{ 3.0, -1.0}, .{-1.0,  3.0} ];
-    p := positions[vertex_id];
-    return .{ position = .{p.x, p.y, 0.0, 1.0} };
-} @vertex_shader
+gpu_arena: Gpu_Arena;
 
-frag :: (using input: Function_Constants_Test_VS_Out, using params: *Function_Constants_Test_Params) -> Vector4 @SV_Target {
+left_constants: Constant_Params;
+right_constants: Constant_Params = { use_alternate_color = true };
+pipelines: [2]Gpu_Pipeline; // left and right
+params_ring: Gpu_Frame_Ring(Test_Params);
+color: Vector4 = .{1, 0, 0, 1};
+
+frag :: (using input: struct { position: Vector4; @SV_Position uv: Vector2; }, using params: *Test_Params, using constants: Constant_Params) -> Vector4 @SV_Target {
     split_x := viewport_width * 0.5;
+
+    // make it wavey
+    split_x += sin((time * 2.2 + position.y / 40.0)) * 40 * (sin(time * 5 + 4 * position.y * 0.003));
 
     if use_alternate_color {
         if input.position.x < split_x discard();
@@ -40,19 +37,11 @@ frag :: (using input: Function_Constants_Test_VS_Out, using params: *Function_Co
         }
 
         return .{0.12, 0.82, 0.24, 1.0};
+    } else {
+        if input.position.x >= split_x discard();
+        return .{test_color.x, test_color.y, test_color.z, 1.0};
     }
-
-    if input.position.x >= split_x discard();
-    return .{test_color.x, test_color.y, test_color.z, 1.0};
 } @fragment_shader
-
-graphics_pipeline_default: Gpu_Pipeline;
-graphics_pipeline_alternate: Gpu_Pipeline;
-gpu_arena: Gpu_Arena;
-params_ring: Gpu_Frame_Ring(Function_Constants_Test_Params);
-params: Gpu_Buffer(Function_Constants_Test_Params);
-
-color: Vector4 = .{1, 0, 0, 1};
 
 gpu_create_graphics_pipeline_with_function_constants :: (metal: []u8,
                                                          raster_desc: Gpu_Raster_Desc,
@@ -70,53 +59,53 @@ gpu_create_graphics_pipeline_with_function_constants :: (metal: []u8,
 do_ui :: () {
     using ImGui;
     base_flags: ColorEditFlags = .None;
+
+    defer End();
+    if !Begin("Function Constants Test") { return; }
+
+    {
+        PushPopFont(fonts.main, 15);
+        TextWrapped("A simple fragment shader uses function constants to know which color to draw.");
+    }
+
+    Separator();
+
     Text("Uniform Color: "); SameLine();
     if ColorEdit4("Color##1", xx *color, .NoInputs | .NoLabel | base_flags) {
-        log("Color changed: %", color);
+        // log("Color changed: %", color);
     }
 
     Text("Function Constant Enum:");
-    if inspect("alt color", *alt_color) {
-        log("alt color changed: %", alt_color);
+    if inspect("alt color", *right_constants.alt_color) {
+        log("alt color changed: %", right_constants.alt_color);
         rebuild_pipelines();
     }
 } @on_ui
 
-shader :: #run get_transpiled_shader(.METAL, vert, frag);
+shader :: #run get_transpiled_shader(.METAL, fullscreen_tri_vert, frag);
 raster_desc : Gpu_Raster_Desc : .{
     cull = .NONE,
-    color_targets = .[
-        .{format = .B8G8R8A8_UNORM},
-    ],
+    color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
 };
 
 on_dll_init :: () {
-    log("SHADER META:\n%\n", FormatStruct.{value=shader.meta});
-
     gpu_arena = gpu_make_arena(64 * 1024, label = "function constants test arena");
-    params_ring = sgpu_make_frame_ring(*gpu_arena, Function_Constants_Test_Params);
-    params = sgpu_frame_ring_slot(*params_ring);
-    params.cpu.* = .{};
-
+    params_ring = sgpu_make_frame_ring(*gpu_arena, Test_Params);
     rebuild_pipelines();
 } @on_dll_init
 
 rebuild_pipelines :: () {
-    default_constants :: #insert #run make_constants_code_string(shader.meta);
-    alternate_constants := default_constants;
-    alternate_constants.use_alternate_color = true;
-    alternate_constants.alt_color = alt_color;
+    // default_constants :: #insert #run make_constants_code_string(shader.meta);
 
-    default_values   := scoped_function_constant_values(*default_constants);
-    alternate_values := scoped_function_constant_values(*alternate_constants);
-    log("ALT VALUES: %", FormatStruct.{value = alternate_values});
+    gpu_queue_wait_idle(gpu_get_queue(.MAIN, 0)); // once we have deferred deletion, we can remove this
 
-    gpu_queue_wait_idle(gpu_get_queue(.MAIN, 0));
-    gpu_delete(*graphics_pipeline_default);
-    gpu_delete(*graphics_pipeline_alternate);
+    gpu_delete(*pipelines[0]);
+    gpu_delete(*pipelines[1]);
 
-    graphics_pipeline_default   = gpu_create_graphics_pipeline_with_function_constants(cast([]u8)shader.source, raster_desc, shader.meta, null, default_values);
-    graphics_pipeline_alternate = gpu_create_graphics_pipeline_with_function_constants(cast([]u8)shader.source, raster_desc, shader.meta, null, alternate_values);
+    left_vals   := scoped_function_constant_values(*left_constants);
+    right_vals  := scoped_function_constant_values(*right_constants);
+    pipelines[0] = gpu_create_graphics_pipeline_with_function_constants(cast([]u8)shader.source, raster_desc, shader.meta, null, left_vals);
+    pipelines[1] = gpu_create_graphics_pipeline_with_function_constants(cast([]u8)shader.source, raster_desc, shader.meta, null, right_vals);
 
     gpu_commit_residency();
 }
@@ -126,10 +115,17 @@ tick :: () {
     if !swapchain_image return;
 
     _, _, win_w, _, dims_ok := get_dimensions(cast(Window_Type) window, true);
-    if dims_ok && win_w > 0 {
-        params = sgpu_frame_ring_slot(*params_ring);
-        params.cpu.viewport_width = cast(float) win_w;
-        params.cpu.test_color = .{color.x, color.y, color.z};
+    if !dims_ok || win_w == 0 return;
+
+    params := sgpu_frame_ring_slot(*params_ring);
+    params.cpu.* = .{
+        viewport_width = cast(float) win_w,
+        test_color = color.xyz,
+        time = cast(float)time,
+    };
+
+    if !ImGui.GetIO().WantCaptureMouse && input_pressed(.MOUSE_BUTTON_LEFT) {
+        cycle_alt_color();
     }
 
     main_queue := gpu_get_queue(.MAIN, 0);
@@ -145,13 +141,13 @@ tick :: () {
             }
         ],
     });
+
     gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
 
-    gpu_set_pipeline(cmd_buff, graphics_pipeline_default);
-    gpu_draw_instanced(cmd_buff, 0, params.gpu, 3, 1);
-
-    gpu_set_pipeline(cmd_buff, graphics_pipeline_alternate);
-    gpu_draw_instanced(cmd_buff, 0, params.gpu, 3, 1);
+    for pipelines {
+        gpu_set_pipeline(cmd_buff, it);
+        gpu_draw_instanced(cmd_buff, 0, params.gpu, 3, 1);
+    }
 
     submit_and_present_with_ui(cmd_buff);
 } @on_tick
@@ -227,4 +223,24 @@ to_mtl_data_type :: (member_ti: *Type_Info) -> MTLDataType {
 
     assert(false);
     return .Int;
+}
+
+#load "../SGPU_App_Common.jai";
+#import "Jai-Shader-Transpiler";
+#import "Jai-Shader-Transpiler/modules/ShaderFuncs";
+#import "Jai-Shader-Transpiler/modules/ShaderLib";
+#import "Math";
+#if OS == .MACOS {
+#import "Objective_C";
+}
+Input :: #import "Input";
+
+cycle_alt_color :: () {
+    using right_constants;
+    if alt_color == .WHITE {
+        alt_color = .BLUE;
+    } else {
+        alt_color += 1;
+    }
+    rebuild_pipelines();
 }
