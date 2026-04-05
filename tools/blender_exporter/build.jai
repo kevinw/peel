@@ -4,6 +4,7 @@
     w := compiler_create_workspace();
     options := get_build_options(w);
     copy_commonly_propagated_fields(get_build_options(), *options);
+    set_optimization(*options, .OPTIMIZED);
     options.output_executable_name = "peel_blender_exporter";
     options.output_type = .DYNAMIC_LIBRARY;
     options.output_path = tprint("%/.build", #filepath);
