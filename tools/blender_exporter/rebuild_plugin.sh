@@ -2,9 +2,9 @@
 
 set -euo pipefail
 
+# Regenerate importer bindings for the shared .peelscene file-format header, then
+# rebuild the Blender app that contains the native exporter.
 cd ~/src/peel
 jai -quiet ~/src/peel/tools/blender_exporter/generate.jai
-jai -quiet ~/src/peel/tools/blender_exporter/build.jai
 
-# cd ~/src/blender && make debug developer ninja
 cd ~/src/blender && make release ninja

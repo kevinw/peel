@@ -8,6 +8,7 @@
 - sgpu Metal debug: track residency dirty state and assert/bark on resource use without `gpu_commit_residency()`, using `MTLResidencySet.containsAllocation(...)` checks on bound allocations
 - fix jai build.jai - -dll (parallel builds need to build only dylibs)
 - make built binaries go in bin/
+- imgui docking branch
 
 ## compute shaders to try
 
@@ -78,3 +79,4 @@ Sebastian Aaltonen
 - https://github.com/myemural/VulkanCppExamples/tree/master
 - cascade receiver culling https://x.com/SebAaltonen/status/2036768312667902463?s=20
 - https://github.com/RandyGaul/nudge/blob/main/src/split_store.h
+- sparse virtual shadowmaps https://ktstephano.github.io/rendering/stratusgfx/svsm

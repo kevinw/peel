@@ -15,6 +15,11 @@ Function_Constants_Test_VS_Out :: struct {
 }
 
 use_alternate_color: bool = false; @function_constant
+alt_color: enum u8 {
+    BLUE;
+    MAGENTA;
+    WHITE;
+} = .MAGENTA; @function_constant
 
 vert :: (using in: struct { vertex_id: u32; @Vertex_ID }) -> Function_Constants_Test_VS_Out @vertex_shader {
     positions : [3] Vector2 : .[ .{-1.0, -1.0}, .{ 3.0, -1.0}, .{-1.0,  3.0} ];
@@ -27,6 +32,13 @@ frag :: (using input: Function_Constants_Test_VS_Out, using params: *Function_Co
 
     if use_alternate_color {
         if input.position.x < split_x discard();
+
+        if alt_color == {
+        case .MAGENTA; return {1, 0, 1, 1};
+        case .WHITE;   return {1, 1, 1, 1};
+        case .BLUE;    return {0, 0, 1, 1};
+        }
+
         return .{0.12, 0.82, 0.24, 1.0};
     }
 
@@ -58,42 +70,59 @@ gpu_create_graphics_pipeline_with_function_constants :: (metal: []u8,
 do_ui :: () {
     using ImGui;
     base_flags: ColorEditFlags = .None;
+    Text("Uniform Color: "); SameLine();
     if ColorEdit4("Color##1", xx *color, .NoInputs | .NoLabel | base_flags) {
         log("Color changed: %", color);
     }
+
+    Text("Function Constant Enum:");
+    if inspect("alt color", *alt_color) {
+        log("alt color changed: %", alt_color);
+        rebuild_pipelines();
+    }
 } @on_ui
 
+shader :: #run get_transpiled_shader(.METAL, vert, frag);
+raster_desc : Gpu_Raster_Desc : .{
+    cull = .NONE,
+    color_targets = .[
+        .{format = .B8G8R8A8_UNORM},
+    ],
+};
+
 on_dll_init :: () {
-    shader :: #run get_transpiled_shader(.METAL, vert, frag);
     log("SHADER META:\n%\n", FormatStruct.{value=shader.meta});
-    raster_desc: Gpu_Raster_Desc = .{
-        cull = .NONE,
-        color_targets = .[
-            .{format = .B8G8R8A8_UNORM},
-        ],
-    };
 
     gpu_arena = gpu_make_arena(64 * 1024, label = "function constants test arena");
     params_ring = sgpu_make_frame_ring(*gpu_arena, Function_Constants_Test_Params);
     params = sgpu_frame_ring_slot(*params_ring);
     params.cpu.* = .{};
 
+    rebuild_pipelines();
+} @on_dll_init
+
+rebuild_pipelines :: () {
     default_constants :: #insert #run make_constants_code_string(shader.meta);
     alternate_constants := default_constants;
     alternate_constants.use_alternate_color = true;
+    alternate_constants.alt_color = alt_color;
 
-    default_values := scoped_function_constant_values(*default_constants);
+    default_values   := scoped_function_constant_values(*default_constants);
     alternate_values := scoped_function_constant_values(*alternate_constants);
+    log("ALT VALUES: %", FormatStruct.{value = alternate_values});
+
+    gpu_queue_wait_idle(gpu_get_queue(.MAIN, 0));
+    gpu_delete(*graphics_pipeline_default);
+    gpu_delete(*graphics_pipeline_alternate);
 
     graphics_pipeline_default   = gpu_create_graphics_pipeline_with_function_constants(cast([]u8)shader.source, raster_desc, shader.meta, null, default_values);
     graphics_pipeline_alternate = gpu_create_graphics_pipeline_with_function_constants(cast([]u8)shader.source, raster_desc, shader.meta, null, alternate_values);
 
     gpu_commit_residency();
-} @on_dll_init
+}
 
 tick :: () {
     result, swapchain_image := app_swapchain_acquire();
-    assert(result == .SUCCESS);
     if !swapchain_image return;
 
     _, _, win_w, _, dims_ok := get_dimensions(cast(Window_Type) window, true);
@@ -104,8 +133,7 @@ tick :: () {
     }
 
     main_queue := gpu_get_queue(.MAIN, 0);
-    result=, cmd_buff := gpu_start_command_recording(main_queue);
-    assert(result == .SUCCESS);
+    _, cmd_buff := gpu_start_command_recording(main_queue);
 
     gpu_begin_scoped_render_pass(cmd_buff, .{
         color_targets = .[
@@ -120,17 +148,17 @@ tick :: () {
     gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
 
     gpu_set_pipeline(cmd_buff, graphics_pipeline_default);
-    draw_result := gpu_draw_instanced(cmd_buff, 0, params.gpu, 3, 1);
-    assert(draw_result == .SUCCESS, tprint("Default function-constants draw failed: %", draw_result));
+    gpu_draw_instanced(cmd_buff, 0, params.gpu, 3, 1);
 
     gpu_set_pipeline(cmd_buff, graphics_pipeline_alternate);
-    draw_result = gpu_draw_instanced(cmd_buff, 0, params.gpu, 3, 1);
-    assert(draw_result == .SUCCESS, tprint("Alternate function-constants draw failed: %", draw_result));
+    gpu_draw_instanced(cmd_buff, 0, params.gpu, 3, 1);
 
     submit_and_present_with_ui(cmd_buff);
 } @on_tick
 
 #scope_file
+
+// TODO: this metal specific stuff should go into GPU_Tools, or be subsumed by sgpu? not sure
 
 scoped_function_constant_values :: (constants: *$T) -> *MTLFunctionConstantValues #expand {
     vals := build_function_constant_values(constants);
@@ -149,33 +177,54 @@ build_function_constant_values :: (constants: *$T) -> *MTLFunctionConstantValues
             log_error("build_function_constant_values: member '%s' has negative offset_in_bytes: %", it.name, offset_in_bytes);
             continue;
         }
-        member_ti := member.type;
-
-        log("member.name: % %", member.name, offset_in_bytes);
-        metal_data_type: MTLDataType;
-
-        if member_ti.type == {
-            case .BOOL;
-                metal_data_type = .Bool;
-            case .STRUCT;
-                struct_name := member_ti.(*Type_Info_Struct).name; // TODO: don't string match for Vector types
-                if struct_name == {
-                case "Vector2"; metal_data_type = .Float2;
-                case "Vector3"; metal_data_type = .Float3;
-                case "Vector4"; metal_data_type = .Float4;
-                case;
-                    log_error("TODO: implement more general build_function_constant_values for struct '%'", struct_name);
-                }
-            case;
-                log_error("TODO: implement build_function_constant_values for type %", member_ti.type);
-                continue;
-        }
-
-        log("MTLFunctionConstantValues set member '%', byte offset %, index %", it.name, offset_in_bytes, it_index);
-
+        metal_data_type := to_mtl_data_type(member.type);
         field_ptr := (cast(*void)constants) + offset_in_bytes;
         MTLFunctionConstantValues.setConstantValue(values, cast(*void) field_ptr, metal_data_type, cast(NSUInteger)it_index);
     }
 
     return values;
+}
+
+to_mtl_data_type :: (member_ti: *Type_Info) -> MTLDataType {
+    if member_ti.type == {
+        case .BOOL;
+            return .Bool;
+        case .STRUCT;
+            struct_name := member_ti.(*Type_Info_Struct).name; // TODO: don't string match for Vector types
+            if struct_name == {
+            case "Vector2"; return .Float2;
+            case "Vector3"; return .Float3;
+            case "Vector4"; return .Float4;
+            case;
+                assert(false, "TODO: implement more general build_function_constant_values for struct '%'", struct_name);
+            }
+        case .ENUM;
+            // map enums to integer types; the transpiler's SPIRV path doesn't actually emit textual enums.
+            return to_mtl_data_type(member_ti.(*Type_Info_Enum).internal_type);
+        case .INTEGER;
+            signed := member_ti.(*Type_Info_Integer).signed;
+            if signed {
+                if member_ti.runtime_size == {
+                case 1; return .Char;
+                case 2; return .Short;
+                case 4; return .Int;
+                case 8; return .Long;
+                case; assert(false, "TODO: implement build_function_constant_values for signed integer size %", member_ti.runtime_size);
+                }
+            } else {
+                if member_ti.runtime_size == {
+                case 1; return .UChar;
+                case 2; return .UShort;
+                case 4; return .UInt;
+                case 8; return .ULong;
+                case; assert(false, "TODO: implement build_function_constant_values for unsigned integer size %", member_ti.runtime_size);
+                }
+            }
+
+        case;
+            assert(false,"TODO: implement build_function_constant_values for type %", member_ti.type);
+    }
+
+    assert(false);
+    return .Int;
 }

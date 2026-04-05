@@ -5,7 +5,6 @@ set -euo pipefail
 ROOT=/Users/kev/src/peel
 BLENDER_BIN="${BLENDER_BIN:-$HOME/src/build_darwin_release/bin/Blender.app/Contents/MacOS/Blender}"
 PY_DRIVER="$ROOT/tools/blender_exporter/export_blend.py"
-EXPORTER_DYLIB="${PEEL_BLENDER_EXPORTER_LIB:-$ROOT/tools/blender_exporter/.build/peel_blender_exporter.dylib}"
 
 usage() {
     echo "Usage: $0 <input.blend|--factory-startup> <output.peelscene>" >&2
@@ -25,7 +24,6 @@ if [[ ! -x "$BLENDER_BIN" ]]; then
 fi
 
 export PEEL_EXPORT_OUTPUT="$OUTPUT_PATH"
-export PEEL_BLENDER_EXPORTER_LIB="$EXPORTER_DYLIB"
 
 BLENDER_ARGS=(
     --background

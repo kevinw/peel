@@ -200,13 +200,13 @@ insp :: ($c: Code) {
     #insert,scope(c) #run tprint("UI.inspect(\"%\", *%);", name, name);
 }
 
-inspect :: (name: *u8, val: *$T, opts: Inspect_Opts = .{}) {
-    inspect(name, val, type_info(T), opts);
+inspect :: (name: *u8, val: *$T, opts: Inspect_Opts = .{}) -> bool {
+    return inspect(name, val, type_info(T), opts);
 }
 
-inspect :: (name: *u8, data: *void, info:*Type_Info, opts: Inspect_Opts = .{}) {
+inspect :: (name: *u8, data: *void, info:*Type_Info, opts: Inspect_Opts = .{}) -> bool {
+    change := false;
     default_size: ImVec2;
-
     label: *u8;
 
     name_str: string;
@@ -236,15 +236,15 @@ inspect :: (name: *u8, data: *void, info:*Type_Info, opts: Inspect_Opts = .{}) {
 
         case .FLOAT;
             if info.runtime_size == {
-                case 4; DragFloat(label, data, 0.01, 1.0);
-                case 8; InputDouble(label, data, 0.01, 1.0);
+                case 4; change = DragFloat(label, data, 0.01, 1.0);
+                case 8; change = InputDouble(label, data, 0.01, 1.0);
             }
         case .BOOL;
-            Checkbox(label, data);
+            change = Checkbox(label, data);
         case .STRING;
             s := data.(*string);
-            if s.count InputText(label, s.data, xx s.count, .ReadOnly);    // @@ We could allow editing of strings too.
-            else       InputText(label, "(null)", 6,        .ReadOnly);
+            if s.count change = InputText(label, s.data, xx s.count, .ReadOnly);    // @@ We could allow editing of strings too.
+            else       change = InputText(label, "(null)", 6,        .ReadOnly);
         case .POINTER;
             info_pointer := info.(*Type_Info_Pointer);
             next_data := (cast(**void)data).*;
@@ -257,7 +257,7 @@ inspect :: (name: *u8, data: *void, info:*Type_Info, opts: Inspect_Opts = .{}) {
             } else {
                 opts_copy := opts;
                 opts_copy.is_pointer = true;
-                inspect(label, next_data, info_pointer.pointer_to, opts_copy);
+                change = inspect(label, next_data, info_pointer.pointer_to, opts_copy);
             }
         case .PROCEDURE;
             Text("procedure");
@@ -294,15 +294,15 @@ inspect :: (name: *u8, data: *void, info:*Type_Info, opts: Inspect_Opts = .{}) {
 
                 Math :: #import "Math";
                 if info_struct == cast(*Type_Info_Struct)Math.Vector3 {
-                    DragFloat3(label, data);
+                    change = DragFloat3(label, data);
                 } else if info_struct == cast(*Type_Info_Struct)Math.Vector4 || info_struct == cast(*Type_Info_Struct)Math.Quaternion {
-                    DragFloat4(label, data);
+                    change = DragFloat4(label, data);
                 } else if info_struct == cast(*Type_Info_Struct)Math.Matrix4 {
                     for * data.(*Math.Matrix4).v
-                        DragFloat4(tprint("##%.%\0", *it.component, name_str, it_index).data, *it.component);
+                        change |= DragFloat4(tprint("##%.%\0", *it.component, name_str, it_index).data, *it.component);
                 } else if info_struct == cast(*Type_Info_Struct)Math.Matrix3 {
                     for * data.(*Math.Matrix3).v
-                        DragFloat3(tprint("##%.%\0", *it.component, name_str, it_index).data, *it.component);
+                        change |= DragFloat3(tprint("##%.%\0", *it.component, name_str, it_index).data, *it.component);
                 } else if TreeNode(label, name_str) {
                     AddSameLineStructName();
 
@@ -313,7 +313,7 @@ inspect :: (name: *u8, data: *void, info:*Type_Info, opts: Inspect_Opts = .{}) {
                         highest_offset = member.offset_in_bytes;
 
                         if opts.in_table struct_table_row(member.name);
-                        inspect(temp_c_string(member.name), data + member.offset_in_bytes, member.type, opts);
+                        change |= inspect(temp_c_string(member.name), data + member.offset_in_bytes, member.type, opts);
                     }
                     TreePop();
                 } else {
@@ -357,7 +357,7 @@ inspect :: (name: *u8, data: *void, info:*Type_Info, opts: Inspect_Opts = .{}) {
                 PopFont();
                 for 0..count-1 {
                     item_name := temp_c_string(tprint("%[%]", name_str, it));
-                    inspect(item_name, array_data + it * element_size, info_array.element_type, opts);
+                    change |= inspect(item_name, array_data + it * element_size, info_array.element_type, opts);
                 }
                 TreePop();
             } else {
@@ -365,7 +365,7 @@ inspect :: (name: *u8, data: *void, info:*Type_Info, opts: Inspect_Opts = .{}) {
             }
         case .ANY;
             any := data.(*Any);
-            inspect(label, any.value_pointer, any.type, opts);
+            change |= inspect(label, any.value_pointer, any.type, opts);
         case .ENUM;
             info_enum := cast(*Type_Info_Enum) info;
             if info_enum.enum_type_flags & .FLAGS {
@@ -378,14 +378,14 @@ inspect :: (name: *u8, data: *void, info:*Type_Info, opts: Inspect_Opts = .{}) {
                         if it == 0 continue;
                         label := temp_c_string(info_enum.names[it_index]);
                         if label == "all" continue;
-                        CheckboxFlags64(label, data, cast(u64)it);
+                        change |= CheckboxFlags64(label, data, cast(u64)it);
                     }
                 } else {
                     for info_enum.values {
                         if it == 0 continue;
                         if info_enum.names[it_index] == "all" continue;
                         label := tprint(" %\0", info_enum.names[it_index]).data;
-                        CheckboxFlags(label, data, cast(u32)it);
+                        change |= CheckboxFlags(label, data, cast(u32)it);
                     }
                 }
             } else {
@@ -403,6 +403,7 @@ inspect :: (name: *u8, data: *void, info:*Type_Info, opts: Inspect_Opts = .{}) {
                             if opts.change_callback {
                                 opts.change_callback();
                             }
+                            change = true;
                         }
                         if is_selected ImGui.SetItemDefaultFocus();
                     }
@@ -423,13 +424,14 @@ inspect :: (name: *u8, data: *void, info:*Type_Info, opts: Inspect_Opts = .{}) {
             // @@
         case .VARIANT;
             // @Incomplete: Can do something better here.
-            inspect(label, data, info.(*Type_Info_Variant).variant_of, opts);
+            change |= inspect(label, data, info.(*Type_Info_Variant).variant_of, opts);
         case .UNTYPED_LITERAL;
             Text("(untyped literal)");
         case .UNTYPED_ENUM;
             Text("(untyped enum)");
     }
 
+    return change;
 }
 
 #scope_file

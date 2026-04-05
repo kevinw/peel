@@ -6,6 +6,8 @@ import traceback
 import bpy
 from bpy.app.handlers import persistent
 
+# Live reload wrapper around the native Blender-side exporter. This only schedules
+# exports; the file format itself is emitted by Blender C++.
 DEBOUNCE_SECONDS = float(os.environ.get("PEEL_LIVE_DEBOUNCE", "0.175"))
 STATE = {
     "dirty": True,

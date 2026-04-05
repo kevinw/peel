@@ -4,6 +4,8 @@ import sys
 
 import bpy
 
+# Thin Python entrypoint for the native Blender-side exporter. The actual .peelscene
+# binary is written by Blender C++ in source/blender/io/peel.
 
 def fail(message: str) -> None:
     print(f"PEEL EXPORT FAILED: {message}", flush=True)

@@ -588,10 +588,9 @@ compute_model_bounds_from_geo :: (geo: *Scene_Geo, model_index: s32) -> Scene_Bo
 
 Hash_Table :: #import "Hash_Table";
 using,only(Table, table_find, table_reset, table_set) _ :: Hash_Table;
+#load "../tools/blender_exporter/peel_scene_format_bindings.jai";
 IMPORTED_SCENE_CACHE_VERSION : u32 : 20;
 IMPORTED_SCENE_CACHE_MAGIC : u32 : 0x53474d44; // SGMD
-PEEL_BLEND_SCENE_MAGIC :: "PEBLEND1";
-PEEL_BLEND_SCENE_VERSION : u32 : 1;
 
 STATIC_MESH_LOD_TARGET_RATIOS :: float.[0.18, 0.02, 0.002];
 STATIC_MESH_LOD_TARGET_TRIANGLE_CAPS :: u32.[50000, 5000, 500];
@@ -657,7 +656,7 @@ imported_scene_recipe_hash :: () -> u64 {
     for STATIC_MESH_LOD_ATTRIBUTE_WEIGHTS append(*builder, tprint("%|", it));
     append(*builder, tprint("simplify_options=%|", STATIC_MESH_LOD_SIMPLIFY_OPTIONS));
     append(*builder, tprint("meshlets=%|%|", SCENE_GEO_MESHLET_MAX_VERTICES, SCENE_GEO_MESHLET_MAX_TRIANGLES));
-    append(*builder, tprint("blend_scene=%|", PEEL_BLEND_SCENE_VERSION));
+    append(*builder, tprint("blend_scene=%|", PEEL_SCENE_FILE_VERSION));
     key := builder_to_string(*builder,, temp);
     return fnv1a_hash(key.data, key.count);
 }
@@ -974,6 +973,24 @@ ensure_blend_scene_sidecar :: (blend_path: string) -> string {
     output_modtime, _, output_exists := file_modtime_and_size(output_path);
     assert(blend_exists, "Blend source file does not exist: %", blend_path);
 
+    if output_exists {
+        sidecar_data, ok := File.read_entire_file(output_path);
+        if ok {
+            sidecar_source := sidecar_data;
+            defer free(sidecar_data);
+            header: PeelSceneFileHeader;
+            if sidecar_source.count < size_of(PeelSceneFileHeader) ||
+               !cache_get(*sidecar_source, *header) ||
+               !header_magic_matches(header.magic, PEEL_SCENE_FILE_MAGIC) ||
+               header.version != PEEL_SCENE_FILE_VERSION {
+                output_exists = false;
+            }
+        }
+        else {
+            output_exists = false;
+        }
+    }
+
     if !output_exists || output_modtime < blend_modtime {
         workspace_root := find_workspace_root_for_cache();
         export_script := tprint("%/tools/blender_exporter/export_blend.sh", workspace_root);
@@ -1002,34 +1019,27 @@ blend_scene_remap_node_index :: (raw_index: s32, node_base: u32) -> s32 {
     return cast(s32) node_base + raw_index;
 }
 
+header_magic_matches :: (magic: []u8, expected: string) -> bool {
+    if magic.count != expected.count return false;
+    for expected {
+        if magic[it_index] != cast(u8) it return false;
+    }
+    return true;
+}
+
 load_peel_blender_scene_into_imported_scene :: (imported: *Imported_Scene, path: string) {
+    report("Loading PEEL Blender scene: %", path);
+
     data, ok := File.read_entire_file(path);
     assert(ok, "Failed to read PEEL Blender scene: %", path);
     defer free(data);
 
     source := data;
-    assert(source.count >= PEEL_BLEND_SCENE_MAGIC.count, "PEEL Blender scene too small: %", path);
-    magic := string.{count = PEEL_BLEND_SCENE_MAGIC.count, data = source.data};
-    assert(magic == PEEL_BLEND_SCENE_MAGIC, "PEEL Blender scene magic mismatch: %", path);
-    source.data += PEEL_BLEND_SCENE_MAGIC.count;
-    source.count -= PEEL_BLEND_SCENE_MAGIC.count;
-
-    version: u32;
-    assert(cache_get(*source, *version) && version == PEEL_BLEND_SCENE_VERSION,
-        "PEEL Blender scene version mismatch for %: %", path, version);
-
-    material_count: u32;
-    mesh_count: u32;
-    node_count: u32;
-    node_mesh_ref_count: u32;
-    vertex_count: u32;
-    index_count: u32;
-    assert(cache_get(*source, *material_count));
-    assert(cache_get(*source, *mesh_count));
-    assert(cache_get(*source, *node_count));
-    assert(cache_get(*source, *node_mesh_ref_count));
-    assert(cache_get(*source, *vertex_count));
-    assert(cache_get(*source, *index_count));
+    header: PeelSceneFileHeader;
+    assert(cache_get(*source, *header), "PEEL Blender scene too small: %", path);
+    assert(header_magic_matches(header.magic, PEEL_SCENE_FILE_MAGIC), "PEEL Blender scene magic mismatch: %", path);
+    assert(header.version == PEEL_SCENE_FILE_VERSION,
+        "PEEL Blender scene version mismatch for %: %", path, header.version);
 
     model_name: string;
     assert(cache_get_string(*source, *model_name), "Failed to read model name from %", path);
@@ -1043,14 +1053,19 @@ load_peel_blender_scene_into_imported_scene :: (imported: *Imported_Scene, path:
 
     repeat_address_mode := cast(u32) Gpu_Sampler_Desc.Address_Mode.REPEAT;
 
-    for 0..cast(s64) material_count-1 {
+    for 0..cast(s64) header.material_count-1 {
         material_name: string;
         assert(cache_get_string(*source, *material_name), "Failed to read material name from %", path);
-        base_color_factor: Vector4;
-        assert(cache_get(*source, *base_color_factor), "Failed to read material color from %", path);
+        material: PeelSceneFileMaterial;
+        assert(cache_get(*source, *material), "Failed to read material color from %", path);
         if material_name.count != 0 free(material_name);
         array_add(*imported.materials, .{
-            base_color_factor = base_color_factor,
+            base_color_factor = .{
+                material.base_color[0],
+                material.base_color[1],
+                material.base_color[2],
+                material.base_color[3],
+            },
             base_color_texture_index = 0,
             opacity_texture_index = SCENE_INVALID_TEXTURE_INDEX,
             normal_texture_index = SCENE_INVALID_TEXTURE_INDEX,
@@ -1063,23 +1078,16 @@ load_peel_blender_scene_into_imported_scene :: (imported: *Imported_Scene, path:
         });
     }
 
-    for 0..cast(s64) mesh_count-1 {
-        base_vertex: u32;
-        vertex_count_for_mesh: u32;
-        first_index: u32;
-        index_count_for_mesh: u32;
-        material_index: u32;
-        assert(cache_get(*source, *base_vertex));
-        assert(cache_get(*source, *vertex_count_for_mesh));
-        assert(cache_get(*source, *first_index));
-        assert(cache_get(*source, *index_count_for_mesh));
-        assert(cache_get(*source, *material_index));
+    array_reserve(*imported.meshes, cast(s64) header.mesh_count);
+    for 0..cast(s64) header.mesh_count-1 {
+        mesh: PeelSceneFileMesh;
+        assert(cache_get(*source, *mesh));
         array_add(*imported.meshes, .{
-            base_vertex = vertex_base + base_vertex,
-            vertex_count = vertex_count_for_mesh,
-            first_index = index_base + first_index,
-            index_count = index_count_for_mesh,
-            material_index = material_base + material_index,
+            base_vertex = vertex_base + mesh.base_vertex,
+            vertex_count = mesh.vertex_count,
+            first_index = index_base + mesh.first_index,
+            index_count = mesh.index_count,
+            material_index = material_base + mesh.material_index,
             skin_bone_start = 0,
             skin_bone_count = 0,
             morph_target_start = 0,
@@ -1089,45 +1097,23 @@ load_peel_blender_scene_into_imported_scene :: (imported: *Imported_Scene, path:
         });
     }
 
-    for 0..cast(s64) node_count-1 {
+    for 0..cast(s64) header.node_count-1 {
         node_name: string;
         assert(cache_get_string(*source, *node_name), "Failed to read node name from %", path);
 
-        parent_index: s32;
-        first_child_index: s32;
-        next_sibling_index: s32;
-        pad_i: s32;
-        assert(cache_get(*source, *parent_index));
-        assert(cache_get(*source, *first_child_index));
-        assert(cache_get(*source, *next_sibling_index));
-        assert(cache_get(*source, *pad_i));
-        _ = pad_i;
-
-        first_mesh_ref: u32;
-        mesh_ref_count: u32;
-        pad_u0: u32;
-        pad_u1: u32;
-        assert(cache_get(*source, *first_mesh_ref));
-        assert(cache_get(*source, *mesh_ref_count));
-        assert(cache_get(*source, *pad_u0));
-        assert(cache_get(*source, *pad_u1));
-        _ = pad_u0;
-        _ = pad_u1;
-
-        translation: Vector3;
-        rotation: Quaternion;
-        scale: Vector3;
-        assert(cache_get(*source, *translation));
-        assert(cache_get(*source, *rotation));
-        assert(cache_get(*source, *scale));
+        node: PeelSceneFileNode;
+        assert(cache_get(*source, *node));
+        translation := Vector3.{node.translation[0], node.translation[1], node.translation[2]};
+        rotation := Quaternion.{node.rotation[0], node.rotation[1], node.rotation[2], node.rotation[3]};
+        scale := Vector3.{node.scale[0], node.scale[1], node.scale[2]};
         normalize_or_identity(*rotation);
 
         array_add(*imported.nodes, .{
-            parent_index = blend_scene_remap_node_index(parent_index, node_base),
-            first_child_index = blend_scene_remap_node_index(first_child_index, node_base),
-            next_sibling_index = blend_scene_remap_node_index(next_sibling_index, node_base),
-            first_mesh_ref = node_mesh_ref_base + first_mesh_ref,
-            mesh_ref_count = mesh_ref_count,
+            parent_index = blend_scene_remap_node_index(node.parent_index, node_base),
+            first_child_index = blend_scene_remap_node_index(node.first_child_index, node_base),
+            next_sibling_index = blend_scene_remap_node_index(node.next_sibling_index, node_base),
+            first_mesh_ref = node_mesh_ref_base + node.first_mesh_ref,
+            mesh_ref_count = node.mesh_ref_count,
             local = make_trs_matrix(translation, rotation, scale),
             world = Matrix4_Identity,
         });
@@ -1139,22 +1125,26 @@ load_peel_blender_scene_into_imported_scene :: (imported: *Imported_Scene, path:
         });
     }
 
-    for 0..cast(s64) node_mesh_ref_count-1 {
+    for 0..cast(s64) header.node_mesh_ref_count-1 {
         mesh_ref: u32;
         assert(cache_get(*source, *mesh_ref));
         array_add(*imported.node_mesh_refs, mesh_base + mesh_ref);
     }
 
-    for 0..cast(s64) vertex_count-1 {
-        vertex: Scene_Vertex;
-        assert(cache_get(*source, *vertex.position));
-        assert(cache_get(*source, *vertex.normal));
-        assert(cache_get(*source, *vertex.tangent));
-        assert(cache_get(*source, *vertex.uv));
-        array_add(*imported.vertices, vertex);
+    array_reserve(*imported.vertices, cast(s64) header.vertex_count);
+    for 0..cast(s64) header.vertex_count-1 {
+        using file_vertex: PeelSceneFileVertex;
+        assert(cache_get(*source, *file_vertex));
+        array_add(*imported.vertices, .{
+            position = { position[0], position[1], position[2], position[3] },
+            normal = .{ normal[0], normal[1], normal[2], normal[3] },
+            tangent = .{ tangent[0], tangent[1], tangent[2], tangent[3] },
+            uv = .{ uv[0], uv[1] },
+        });
     }
 
-    for 0..cast(s64) index_count-1 {
+    array_reserve(*imported.indices, cast(s64) header.index_count);
+    for 0..cast(s64) header.index_count-1 {
         index: u32;
         assert(cache_get(*source, *index));
         array_add(*imported.indices, vertex_base + index);
@@ -1162,8 +1152,8 @@ load_peel_blender_scene_into_imported_scene :: (imported: *Imported_Scene, path:
 
     assert(source.count == 0, "Unexpected trailing bytes in %", path);
 
-    compute_world_matrices(imported.nodes, node_base, node_count);
-    for local_mesh_index: 0..cast(s64) mesh_count-1 {
+    compute_world_matrices(imported.nodes, node_base, header.node_count);
+    for local_mesh_index: 0..cast(s64) header.mesh_count-1 {
         build_static_mesh_lods(imported, cast(s32) mesh_base + cast(s32) local_mesh_index);
     }
 
@@ -1171,9 +1161,9 @@ load_peel_blender_scene_into_imported_scene :: (imported: *Imported_Scene, path:
         name = model_name,
         root_node_index = cast(s32) node_base,
         node_start = node_base,
-        node_count = node_count,
+        node_count = header.node_count,
         mesh_start = mesh_base,
-        mesh_count = mesh_count,
+        mesh_count = header.mesh_count,
         anim_clip_start = cast(u32) imported.anim_clips.count,
         anim_clip_count = 0,
     });

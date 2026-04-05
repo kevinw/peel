@@ -96,3 +96,4 @@ __pycache__
 dist/blender_scene
 dist/blender_scene.dylib
 *.blend1
+*.peelscene
