@@ -1,5 +1,8 @@
 using app: struct {
-    graphics_pipeline: Gpu_Pipeline;
+    shader: Shader(fullscreen_tri_vert, raymarch_fragment_main, {
+        cull = .CW,
+        color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
+    });
     gpu_arena: Gpu_Arena;
     params: Gpu_Frame_Param_Allocator(Raymarch_Params);
     using draw: Raymarch_Params = .{
@@ -9,12 +12,7 @@ using app: struct {
 };
 
 on_dll_init :: () {
-    raster_desc: Gpu_Raster_Desc = {
-        cull = .CW,
-        color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
-    };
-
-    SHR.gfx_pipeline(*graphics_pipeline, raster_desc, fullscreen_tri_vert, raymarch_fragment_main);
+    SHR.init(*shader);
     gpu_arena = gpu_make_arena(64 * 1024, label = "raymarch arena");
     params = sgpu_make_frame_param_allocator(*gpu_arena, Raymarch_Params);
 
@@ -53,7 +51,7 @@ tick :: () {
         ]
     });
     gpu_set_depth_stencil_state(cmd_buff, {depth_test = .ALWAYS, depth_mode = .NONE,});
-    gpu_set_pipeline(cmd_buff, graphics_pipeline);
+    gpu_set_pipeline(cmd_buff, shader.pipeline);
     draw_params := sgpu_frame_param_alloc(*app.params, draw);
     gpu_draw_instanced(cmd_buff, 0, draw_params.gpu, 3, 1);
     submit_and_present_with_ui(cmd_buff);

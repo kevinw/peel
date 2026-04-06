@@ -641,6 +641,8 @@ using,except(Viewport) _ :: #import "sgpu"()(SLANG_COMPILER=false);
 #load "App_Common.jai";
 #load "ui/ui.jai";
 SHR :: #import,file "./shader_hot_reload.jai";
+using,only(Shader, Compute_Shader, Mesh_Shader) _ :: SHR;
+
 #scope_file
 #load "measure_fps.jai";
 #load "readback_stats.jai";

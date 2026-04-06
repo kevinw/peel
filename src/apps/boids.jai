@@ -16,8 +16,11 @@ Draw_Data :: struct {
 }
 
 using app: struct {
-    graphics_pipeline: Gpu_Pipeline;
-    compute_pipeline: Gpu_Pipeline;
+    shader: Shader(boids_vertex_main, boids_frag_main, {
+        cull = .NONE,
+        color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
+    });
+    compute: Compute_Shader(boids_step_compute);
     gpu_arena: Gpu_Arena;
     draw_data: Draw_Data;
 
@@ -53,13 +56,8 @@ build_ui :: () {
 }
 
 on_dll_init :: () {
-    raster_desc: Gpu_Raster_Desc = {
-        cull = .NONE,
-        color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
-    };
-
-    SHR.gfx_pipeline    (*graphics_pipeline, raster_desc, boids_vertex_main, boids_frag_main);
-    SHR.compute_pipeline(*compute_pipeline, boids_step_compute);
+    SHR.init(*shader);
+    SHR.init(*compute);
 
     gpu_arena = gpu_make_arena(1024 * 1024, label = "boids arena");
 
@@ -136,7 +134,7 @@ tick :: () {
     control_slot.cpu.* = app.control;
 
     _, cmd_buff := gpu_start_command_recording(gpu_get_queue(.MAIN, 0));
-    gpu_set_pipeline(cmd_buff, compute_pipeline);
+    gpu_set_pipeline(cmd_buff, compute.pipeline);
     control_slot.cpu.use_b_as_src = ifx boid_state.src_is_a then cast(u32) 0 else cast(u32) 1;
     gpu_dispatch_buffers(cmd_buff, .[boid_state_storage.gpu, control_slot.gpu], .[(BOIDS_COUNT + 63) / 64, 1, 1]);
 
@@ -154,7 +152,7 @@ tick :: () {
         ]
     });
     gpu_set_depth_stencil_state(cmd_buff, { depth_test = .ALWAYS, depth_mode = .NONE, });
-    gpu_set_pipeline(cmd_buff, graphics_pipeline);
+    gpu_set_pipeline(cmd_buff, shader.pipeline);
 
     using draw_data;
     gpu_draw_instanced_direct(cmd_buff, vertex_params_gpu, num_vertices, num_instances);

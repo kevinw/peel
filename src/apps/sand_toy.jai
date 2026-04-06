@@ -1,4 +1,3 @@
-
 Draw_Data :: struct {
     vertex_params_gpu: Gpu_Ptr;
     pixel_gpu: Gpu_Ptr;
@@ -7,9 +6,12 @@ Draw_Data :: struct {
     num_instances: u32;
 }
 
-graphics_pipeline: Gpu_Pipeline;
-compute_pipeline_plan: Gpu_Pipeline;
-compute_pipeline_resolve: Gpu_Pipeline;
+shader: Shader(sand_vertex_main, sand_fragment_main, {
+    cull = .CW,
+    color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
+});
+plan: Compute_Shader(sand_plan_moves_compute);
+resolve: Compute_Shader(sand_resolve_compute);
 gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
 
@@ -137,9 +139,9 @@ on_dll_init :: () {
         color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
     };
 
-    SHR.gfx_pipeline(*graphics_pipeline, raster_desc, sand_vertex_main, sand_fragment_main);
-    SHR.compute_pipeline(*compute_pipeline_plan, sand_plan_moves_compute);
-    SHR.compute_pipeline(*compute_pipeline_resolve, sand_resolve_compute);
+    SHR.init(*shader);
+    SHR.init(*plan);
+    SHR.init(*resolve);
 
     gpu_arena = gpu_make_arena(1024 * 1024 * 18, label = "sand toy arena");
 
@@ -246,14 +248,12 @@ tick :: () {
 
     move_targets := sand_move_targets_slot();
 
-    result = gpu_set_pipeline(cmd_buff, compute_pipeline_plan);
-    assert(result == .SUCCESS, tprint("Sand compute(plan) set pipeline failed: %", result));
+    gpu_set_pipeline(cmd_buff, plan.pipeline);
     gpu_dispatch_buffers(cmd_buff, .[sand_state_storage.gpu, move_targets.gpu, control.gpu], .[(SAND_CELL_COUNT + 63) / 64, 1, 1]);
 
     gpu_barrier(cmd_buff, .COMPUTE_SHADER, .COMPUTE_SHADER);
 
-    result = gpu_set_pipeline(cmd_buff, compute_pipeline_resolve);
-    assert(result == .SUCCESS, tprint("Sand compute(resolve) set pipeline failed: %", result));
+    gpu_set_pipeline(cmd_buff, resolve.pipeline);
     gpu_dispatch_buffers(cmd_buff, .[sand_state_storage.gpu, move_targets.gpu, control.gpu], .[(SAND_CELL_COUNT + 63) / 64, 1, 1]);
 
     ab_buffer_advance(*sand_state);
@@ -271,7 +271,7 @@ tick :: () {
     });
 
     gpu_set_depth_stencil_state(cmd_buff, {depth_test = .ALWAYS, depth_mode = .NONE,});
-    gpu_set_pipeline(cmd_buff, graphics_pipeline);
+    gpu_set_pipeline(cmd_buff, shader.pipeline);
 
     using draw_data;
     draw_result := gpu_draw_instanced_direct(cmd_buff, vertex_params_gpu, num_vertices, num_instances);

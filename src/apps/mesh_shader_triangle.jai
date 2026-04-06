@@ -17,7 +17,7 @@ task_main :: () {
     task_payload_ptr(Payload).triangle_index = task_group_id_x();
     task_payload_ptr(Payload).color_bias = cast(float) task_group_id_x() * 0.15;
     task_set_mesh_groups(1, 1, 1);
-} @task_shader
+} @task
 
 mesh_main :: () {
     payload := mesh_payload_ptr(Payload);
@@ -41,11 +41,11 @@ mesh_main :: () {
     mesh_set_vertex(1, v1);
     mesh_set_vertex(2, v2);
     mesh_set_triangle(0, 0, 1, 2);
-} @mesh_shader
+} @mesh
 
 fragment_main :: (using input: Triangle_Fragment_In) -> Vector4 @SV_Target0 {
     return .{color.x, color.y, color.z, 1.0};
-} @fragment_shader
+} @fragment
 
 on_dll_init :: () {
     shader :: #run get_transpiled_task_mesh_pipeline(.METAL, task_main, mesh_main, fragment_main);

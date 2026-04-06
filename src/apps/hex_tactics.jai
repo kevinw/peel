@@ -37,9 +37,30 @@ Hex_Tactics_Sky_Params_CPU :: struct {
     light_dir_sun_strength: Vector4;
 }
 
-graphics_pipeline: Gpu_Pipeline;
-grass_pipeline: Gpu_Pipeline;
-sky_pipeline: Gpu_Pipeline;
+terrain_shader: Shader(hex_tactics_mesh_vertex_main, hex_tactics_mesh_fragment_main, {
+    cull = .CCW,
+    depth_format = .D32_SFLOAT,
+    color_targets = .[
+        .{format = .B8G8R8A8_UNORM},
+    ],
+});
+
+grass_shader: Shader(hex_tactics_grass_vertex_main, hex_tactics_grass_fragment_main, {
+    cull = .NONE,
+    depth_format = .D32_SFLOAT,
+    color_targets = .[
+        .{format = .B8G8R8A8_UNORM},
+    ],
+});
+
+sky_shader: Shader(hex_tactics_sky_vertex_main, hex_tactics_sky_fragment_main, {
+    cull = .NONE,
+    depth_format = .D32_SFLOAT,
+    color_targets = .[
+        .{format = .B8G8R8A8_UNORM},
+    ],
+});
+
 gpu_arena: Gpu_Arena;
 hex_tactics_depth_texture: Gpu_Texture;
 hex_tactics_depth_view: Gpu_Texture_View;
@@ -85,21 +106,9 @@ hex_tactics_ui :: () {
 }
 
 on_dll_init :: () {
-    raster_desc: Gpu_Raster_Desc = .{
-        cull = .CCW,
-        depth_format = .D32_SFLOAT,
-        color_targets = .[
-            .{format = .B8G8R8A8_UNORM},
-        ],
-    };
-    grass_raster := raster_desc;
-    grass_raster.cull = .NONE;
-    sky_raster := raster_desc;
-    sky_raster.cull = .NONE;
-
-    SHR.gfx_pipeline(*graphics_pipeline, raster_desc, hex_tactics_mesh_vertex_main, hex_tactics_mesh_fragment_main);
-    SHR.gfx_pipeline(*grass_pipeline, grass_raster, hex_tactics_grass_vertex_main, hex_tactics_grass_fragment_main);
-    SHR.gfx_pipeline(*sky_pipeline, sky_raster, hex_tactics_sky_vertex_main, hex_tactics_sky_fragment_main);
+    SHR.init(*terrain_shader);
+    SHR.init(*grass_shader);
+    SHR.init(*sky_shader);
 
     hex_tactics_model_init(*hex_tactics_model);
     hex_tactics_rebuild_render(*hex_tactics_model, *hex_tactics_render);
@@ -110,7 +119,7 @@ on_dll_init :: () {
     }
 
     editor_camera_set_look_at(*hex_tactics_camera, hex_tactics_orbit_target);
-    hex_tactics_camera.position = hex_tactics_orbit_target - hex_tactics_camera_forward(hex_tactics_camera) * hex_tactics_orbit_distance;
+    hex_tactics_camera.position = hex_tactics_orbit_target - editor_camera_forward(hex_tactics_camera) * hex_tactics_orbit_distance;
 
     gpu_commit_residency();
 } @on_dll_init
@@ -120,9 +129,9 @@ on_unload :: () {
     hex_tactics_render_deinit(*hex_tactics_render);
     if hex_tactics_depth_view != 0 gpu_free_texture_view(hex_tactics_depth_view);
     if hex_tactics_depth_texture != 0 gpu_free(hex_tactics_depth_texture);
-    gpu_delete(*sky_pipeline);
-    gpu_delete(*grass_pipeline);
-    gpu_delete(*graphics_pipeline);
+    gpu_delete(*sky_shader.pipeline);
+    gpu_delete(*grass_shader.pipeline);
+    gpu_delete(*terrain_shader.pipeline);
 } @on_unload
 
 tick :: () {
@@ -164,7 +173,7 @@ tick :: () {
         allow_zoom = !io.WantCaptureMouse && !hex_tactics_orbit_drag_active);
 
     cam_forward, cam_right, cam_up: Vector3;
-    editor_camera_basis(*hex_tactics_camera, *cam_forward, *cam_right, *cam_up);
+    editor_camera_basis(hex_tactics_camera, *cam_forward, *cam_right, *cam_up);
     view := editor_camera_make_view(*hex_tactics_camera);
     aspect := ifx dims_ok && win_h > 0 then cast(float) win_w / cast(float) win_h else 1.0;
     proj := editor_camera_make_projection(*hex_tactics_camera, aspect, 0.05, 120.0);
@@ -220,15 +229,15 @@ tick :: () {
     });
 
     gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
-    gpu_set_pipeline(cmd_buff, sky_pipeline);
+    gpu_set_pipeline(cmd_buff, sky_shader.pipeline);
     gpu_draw_instanced_direct(cmd_buff, hex_tactics_render.sky_params.gpu, 6, 1);
 
     gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .LESS, depth_mode = .READ | .WRITE});
-    gpu_set_pipeline(cmd_buff, graphics_pipeline);
+    gpu_set_pipeline(cmd_buff, terrain_shader.pipeline);
     gpu_draw_instanced_direct(cmd_buff, hex_tactics_render.mesh_params.gpu, hex_tactics_render.index_count, 1);
 
     if hex_tactics_render.grass_count > 0 {
-        gpu_set_pipeline(cmd_buff, grass_pipeline);
+        gpu_set_pipeline(cmd_buff, grass_shader.pipeline);
         gpu_draw_instanced_direct(cmd_buff, hex_tactics_render.grass_params.gpu, 6, hex_tactics_render.grass_count);
     }
 
@@ -433,12 +442,6 @@ hex_tactics_safe_normalize :: (v: Vector3, fallback: Vector3) -> Vector3 {
     return v * (1.0 / sqrt(len2));
 }
 
-hex_tactics_camera_forward :: (camera: Editor_Camera) -> Vector3 {
-    cam := camera;
-    forward, right, up: Vector3;
-    editor_camera_basis(*cam, *forward, *right, *up);
-    return forward;
-}
 
 hex_tactics_orbit_update_camera :: (mouse_pos: Vector2) {
     if !hex_tactics_orbit_have_prev_mouse {
@@ -456,7 +459,7 @@ hex_tactics_orbit_update_camera :: (mouse_pos: Vector2) {
     hex_tactics_camera.pitch = clamp(hex_tactics_camera.pitch, hex_tactics_camera.pitch_min, hex_tactics_camera.pitch_max);
 
     cam_forward, cam_right, cam_up: Vector3;
-    editor_camera_basis(*hex_tactics_camera, *cam_forward, *cam_right, *cam_up);
+    editor_camera_basis(hex_tactics_camera, *cam_forward, *cam_right, *cam_up);
     hex_tactics_camera.position = hex_tactics_orbit_target - cam_forward * hex_tactics_orbit_distance;
 }
 

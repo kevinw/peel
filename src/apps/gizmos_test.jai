@@ -144,7 +144,7 @@ tick :: () {
 
     cam_pos := gizmos_test_camera.position;
     cam_forward, cam_right, cam_up: Vector3;
-    editor_camera_basis(*gizmos_test_camera, *cam_forward, *cam_right, *cam_up);
+    editor_camera_basis(gizmos_test_camera, *cam_forward, *cam_right, *cam_up);
 
     view := editor_camera_make_view(*gizmos_test_camera);
     proj := editor_camera_make_projection(*gizmos_test_camera, aspect, 0.05, 100.0);
@@ -182,9 +182,7 @@ tick :: () {
         ]
     });
 
-    draw_result := Gizmo_Render.gizmo_render_draw(*gizmo_render_ctx, cmd_buff, *gizmo_ctx, viewport, depth_mode = .NONE);
-    assert(draw_result == .SUCCESS, tprint("Gizmos draw failed: %", draw_result));
-
+    Gizmo_Render.gizmo_render_draw(*gizmo_render_ctx, cmd_buff, *gizmo_ctx, viewport, depth_mode = .NONE);
     submit_and_present_with_ui(cmd_buff);
 } @on_tick
 

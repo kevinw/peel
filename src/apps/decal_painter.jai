@@ -402,7 +402,7 @@ draw_ui :: () {
 decal_painter_mouse_world_ray :: (mouse_x: float, mouse_y: float, viewport: Vector2, camera: Editor_Camera) -> (origin: Vector3, dir: Vector3, ok: bool) {
     if viewport.x <= 1.0 || viewport.y <= 1.0 return camera.position, .{0.0, 0.0, -1.0}, false;
     forward, right, up: Vector3;
-    editor_camera_basis(*camera, *forward, *right, *up);
+    editor_camera_basis(camera, *forward, *right, *up);
     nx := ((mouse_x + 0.5) / viewport.x) * 2.0 - 1.0;
     ny := ((mouse_y + 0.5) / viewport.y) * 2.0 - 1.0;
     aspect := viewport.x / max(viewport.y, 1.0);

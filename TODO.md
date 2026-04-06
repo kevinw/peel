@@ -1,4 +1,6 @@
 # TODO
+- make sure @on_unload tears down all gpu_free_arenas
+- putting assert(false) in textured_triangle's on_dll_init didn't stop the program!??!
 - deferred deletion for pipelines, textures, etc. maybe a simple version is just "3 frames later"
 - shorten #import "Jai-Shader-Transpiler/modules/ShaderFuncs";
 - these shader function names are OUT OF CONTROL: transpiled_pair_metal_debug_shadow_vertex_main_debug_shadow_fragment_main_FragmentMain - maybe we can do something smarter.

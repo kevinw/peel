@@ -475,7 +475,7 @@ tick :: () {
             allow_move = !io.WantCaptureKeyboard,
             allow_look = right_down && !io.WantCaptureMouse,
             allow_zoom = !io.WantCaptureMouse);
-        editor_camera_basis(*scene_camera, *controller_forward, *controller_right, *controller_up);
+        editor_camera_basis(scene_camera, *controller_forward, *controller_right, *controller_up);
     }
 
     controller_forward.y = 0.0;
@@ -535,7 +535,7 @@ tick :: () {
         }
         process_scene_pick_result_if_ready();
         cam_forward, cam_right, cam_up: Vector3;
-        editor_camera_basis(*scene_camera, *cam_forward, *cam_right, *cam_up);
+        editor_camera_basis(scene_camera, *cam_forward, *cam_right, *cam_up);
         frame := Manip_Frame_Input.{
             viewport = .{cast(float) win_w, cast(float) win_h},
             camera_pos = scene_camera.position,
@@ -577,7 +577,7 @@ tick :: () {
     }
 
     cam_forward, cam_right, cam_up: Vector3;
-    editor_camera_basis(*scene_camera, *cam_forward, *cam_right, *cam_up);
+    editor_camera_basis(scene_camera, *cam_forward, *cam_right, *cam_up);
     view := editor_camera_make_view(*scene_camera);
     aspect := ifx win_h > 0 then cast(float) win_w / cast(float) win_h else 1.0;
     proj := editor_camera_make_projection(*scene_camera, aspect, 0.05, 250.0);

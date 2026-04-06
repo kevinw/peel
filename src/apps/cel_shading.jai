@@ -78,10 +78,24 @@ Cel_Sky_Fragment_In :: struct {
 }
 
 app: struct {
-    sky_pipeline: Gpu_Pipeline;
-    scene_pipeline: Gpu_Pipeline;
-    edge_pipeline: Gpu_Pipeline;
-    composite_pipeline: Gpu_Pipeline;
+    sky_shader: Shader(fullscreen_tri_vert, cel_sky_fragment_main, {
+        cull = .NONE,
+        color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
+    });
+    scene_shader: Shader(cel_vertex_main, cel_fragment_main, {
+        cull = .NONE,
+        depth_format = .D32_SFLOAT,
+        color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
+    });
+    edge_shader: Shader(cel_vertex_main, cel_edge_fragment_main, {
+        cull = .NONE,
+        depth_format = .D32_SFLOAT,
+        color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
+    });
+    composite_shader: Shader(fullscreen_tri_vert, cel_composite_fragment_main, {
+        cull = .NONE,
+        color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
+    });
     gpu_arena: Gpu_Arena;
     draw_params: Gpu_Frame_Param_Allocator(Cel_Scene_Params_CPU);
     sky_params: Gpu_Frame_Param_Allocator(Cel_Sky_Params);
@@ -130,29 +144,10 @@ app: struct {
 
 on_dll_init :: () {
     using app;
-    sky_raster: Gpu_Raster_Desc = .{
-        cull = .NONE,
-        color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
-    };
-    scene_raster: Gpu_Raster_Desc = .{
-        cull = .NONE,
-        depth_format = .D32_SFLOAT,
-        color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
-    };
-    edge_raster: Gpu_Raster_Desc = .{
-        cull = .NONE,
-        depth_format = .D32_SFLOAT,
-        color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
-    };
-    composite_raster: Gpu_Raster_Desc = .{
-        cull = .NONE,
-        color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
-    };
-
-    SHR.gfx_pipeline(*sky_pipeline, sky_raster, fullscreen_tri_vert, cel_sky_fragment_main);
-    SHR.gfx_pipeline(*scene_pipeline, scene_raster, cel_vertex_main, cel_fragment_main);
-    SHR.gfx_pipeline(*edge_pipeline, edge_raster, cel_vertex_main, cel_edge_fragment_main);
-    SHR.gfx_pipeline(*composite_pipeline, composite_raster, fullscreen_tri_vert, cel_composite_fragment_main);
+    SHR.init(*sky_shader);
+    SHR.init(*scene_shader);
+    SHR.init(*edge_shader);
+    SHR.init(*composite_shader);
 
     build_scene_geometry();
     init_scene_objects();
@@ -222,7 +217,7 @@ tick :: () {
         });
 
         gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
-        gpu_set_pipeline(cmd_buff, sky_pipeline);
+        gpu_set_pipeline(cmd_buff, sky_shader.pipeline);
         sky := sgpu_frame_param_alloc(*sky_params);
         sky.cpu.* = .{
             camera_right = .{view_right.x, view_right.y, view_right.z, 0.0},
@@ -238,7 +233,7 @@ tick :: () {
         gpu_draw_instanced_direct(cmd_buff, sky.gpu, 3, 1);
 
         gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .LESS, depth_mode = .READ | .WRITE});
-        gpu_set_pipeline(cmd_buff, scene_pipeline);
+        gpu_set_pipeline(cmd_buff, scene_shader.pipeline);
         draw_scene_mesh(cmd_buff, floor_mesh, floor_model, .{0.24, 0.22, 0.28, 1.0}, view_proj, current_time);
 
         for object: objects {
@@ -267,7 +262,7 @@ tick :: () {
             ]
         });
         gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .LESS, depth_mode = .READ | .WRITE});
-        gpu_set_pipeline(cmd_buff, edge_pipeline);
+        gpu_set_pipeline(cmd_buff, edge_shader.pipeline);
         draw_scene_mesh(cmd_buff, floor_mesh, floor_model, .{0.24, 0.22, 0.28, 1.0}, view_proj, current_time);
 
         for object: objects {
@@ -286,11 +281,11 @@ tick :: () {
                 store_op = .STORE,
                 clear_color._float = .[0.0, 0.0, 0.0, 1.0],
             }
-        ]
-    });
-    gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
-    gpu_set_pipeline(cmd_buff, composite_pipeline);
-    post := sgpu_frame_param_alloc(*post_params);
+            ]
+        });
+        gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
+        gpu_set_pipeline(cmd_buff, composite_shader.pipeline);
+        post := sgpu_frame_param_alloc(*post_params);
     post.cpu.* = .{
         scene_texture_index = gpu_texture_view_index(scene_view),
         edge_texture_index = gpu_texture_view_index(edge_view),

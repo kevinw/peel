@@ -1,4 +1,7 @@
-graphics_pipeline: Gpu_Pipeline;
+shader: Shader(fullscreen_tri_vert, raytracer_fragment_main, {
+    cull = .CW,
+    color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
+});
 gpu_arena: Gpu_Arena;
 raytracer_params: Gpu_Buffer(Raytracer_Params);
 raytracer_gizmo_ctx: Gizmo.Gizmo_Context;
@@ -22,12 +25,7 @@ raytracer_camera: Editor_Camera = .{
 };
 
 on_dll_init :: () {
-    raster_desc: Gpu_Raster_Desc = .{
-        cull = .CW,
-        color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
-    };
-
-    SHR.gfx_pipeline(*graphics_pipeline, raster_desc, fullscreen_tri_vert, raytracer_fragment_main);
+    SHR.init(*shader);
     gpu_arena = gpu_make_arena(64 * 1024, label = "raytracer arena");
     raytracer_params = gpu_alloc_buffer(*gpu_arena, Raytracer_Params);
     raytracer_params.cpu.* = .{};
@@ -120,7 +118,7 @@ tick :: () {
         allow_zoom = !io.WantCaptureMouse);
 
     cam_forward, cam_right, cam_up: Vector3;
-    editor_camera_basis(*raytracer_camera, *cam_forward, *cam_right, *cam_up);
+    editor_camera_basis(raytracer_camera, *cam_forward, *cam_right, *cam_up);
 
     raytracer_params.cpu.camera_pos = raytracer_camera.position;
     raytracer_params.cpu.time = cast(float) frame_count * (1.0 / 60.0);
@@ -144,7 +142,7 @@ tick :: () {
         ]
     });
     gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
-    gpu_set_pipeline(cmd_buff, graphics_pipeline);
+    gpu_set_pipeline(cmd_buff, shader.pipeline);
 
     draw_result := gpu_draw_instanced(cmd_buff, 0, raytracer_params.gpu, 3, 1);
     assert(draw_result == .SUCCESS, tprint("Raytracer draw failed: %", draw_result));

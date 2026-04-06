@@ -306,7 +306,7 @@ crowd_nav_seed_state :: () {
 crowd_nav_camera_forward :: (camera: Editor_Camera) -> Vector3 {
     cam := camera;
     forward, right, up: Vector3;
-    editor_camera_basis(*cam, *forward, *right, *up);
+    editor_camera_basis(cam, *forward, *right, *up);
     return forward;
 }
 
@@ -326,7 +326,7 @@ crowd_nav_orbit_update_camera :: (mouse_pos: Vector2) {
     crowd_nav_camera.pitch = clamp(crowd_nav_camera.pitch, crowd_nav_camera.pitch_min, crowd_nav_camera.pitch_max);
 
     cam_forward, cam_right, cam_up: Vector3;
-    editor_camera_basis(*crowd_nav_camera, *cam_forward, *cam_right, *cam_up);
+    editor_camera_basis(crowd_nav_camera, *cam_forward, *cam_right, *cam_up);
     crowd_nav_camera.position = crowd_nav_orbit_target - cam_forward * crowd_nav_orbit_distance;
 }
 

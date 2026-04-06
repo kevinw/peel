@@ -1,4 +1,50 @@
-SRM :: #import,file "../modules/Jai-Shader-Transpiler/modules/shader_reload_manifest.jai";
+shader_reload_ctx: *Shader_Hot_Reload; // the one global implicit shader reload context
+
+Shader_Base :: struct {
+    pipeline: Gpu_Pipeline;
+}
+
+Shader :: struct(vert: $V, frag: $F, raster: Gpu_Raster_Desc) {
+    using #as base: Shader_Base;
+
+    Vertex_Function :: vert;
+    Fragment_Function :: frag;
+
+    raster_desc :: raster;
+}
+
+Compute_Shader :: struct(kernel: $K) {
+    using #as base: Shader_Base;
+
+    Kernel_Function :: kernel;
+}
+
+Mesh_Shader :: struct(mesh: $M, frag: $F, desc: Gpu_Mesh_Pipeline_Desc, task: $T = null) {
+    using #as base: Shader_Base;
+
+    Mesh_Function :: mesh;
+    Fragment_Function :: frag;
+    Task_Function :: task;
+    mesh_desc :: desc;
+}
+
+// TODO: consolidate these with the above?
+Shader_Hot_Reload_Graphics_Target :: struct {
+    using #as base: Shader_Hot_Reload_Base;
+
+    raster_desc: Gpu_Raster_Desc;
+}
+
+Shader_Hot_Reload_Compute_Target :: struct {
+    using #as base: Shader_Hot_Reload_Base;
+}
+
+Shader_Hot_Reload_Mesh_Target :: struct {
+    using #as base: Shader_Hot_Reload_Base;
+
+    desc: Shader_Hot_Reload_Mesh_Desc;
+}
+
 
 Shader_Hot_Reload :: struct {
     enabled: bool;
@@ -35,21 +81,9 @@ Shader_Hot_Reload_Last_Result :: enum {
     SWAP_OK;
 }
 
-Shader_Hot_Reload_Graphics_Target :: struct {
+Shader_Hot_Reload_Base :: struct {
     entry_id: string;
     pipeline: *Gpu_Pipeline;
-    raster_desc: Gpu_Raster_Desc;
-}
-
-Shader_Hot_Reload_Compute_Target :: struct {
-    entry_id: string;
-    pipeline: *Gpu_Pipeline;
-}
-
-Shader_Hot_Reload_Mesh_Target :: struct {
-    entry_id: string;
-    pipeline: *Gpu_Pipeline;
-    desc: Shader_Hot_Reload_Mesh_Desc;
 }
 
 Shader_Hot_Reload_Mesh_Desc :: struct {
@@ -60,11 +94,95 @@ Shader_Hot_Reload_Mesh_Desc :: struct {
     max_total_threadgroups_per_mesh_grid: u32;
 }
 
-shader_reload_ctx: *Shader_Hot_Reload;
+init :: (using shader: *Shader, loc: Source_Code_Location = #caller_location) -> bool #expand {
+    #insert #run,stallable -> string {
+        vertex_name   :: #procedure_name(Vertex_Function);
+        fragment_name :: #procedure_name(Fragment_Function);
+        source_expr, meta_expr, ok := JTS.get_transpiled2_named_exprs(vertex_name, fragment_name, loc);
+        if !ok {
+            compiler_report("Shader hot reload graphics helper requires direct vertex/fragment procedure identifiers.", loc=loc);
+            return "return false;";
+        }
+        return tprint(#string END
+G :: #import,file "%";
+shader_source, shader_meta := %, %;
+assert(shader_source.count > 0, "Transpilation failed for graphics shaders '%', '%'.");
+assert(shader_meta.entry_id.count > 0, "Missing shader hot-reload entry id for graphics shaders '%', '%'.");
+return shader_hot_reload_create_and_register_graphics_pipeline_with_entry_id(shader_meta.entry_id, *shader.pipeline, cast([]u8) shader_source, raster_desc);
+END, path_to_shader_module, source_expr, meta_expr, vertex_name, fragment_name, vertex_name, fragment_name);
+    };
+}
 
-shader_hot_reload_current_ctx :: () -> *Shader_Hot_Reload {
-    assert(shader_reload_ctx != null, "shader_reload_ctx is null. Initialize SHR.shader_reload_ctx before using shader hot reload.");
-    return shader_reload_ctx;
+init :: (using compute_shader: *Compute_Shader, loc: Source_Code_Location = #caller_location) -> bool #expand {
+    #insert #run,stallable -> string {
+        compute_name :: #run #procedure_name(Kernel_Function);
+        source_expr, meta_expr, ok := JTS.get_transpiled_compute_named_exprs(compute_name, loc);
+        if !ok {
+            compiler_report("Shader hot reload compute helper requires a direct compute procedure identifier.", loc=loc);
+            return "return false;";
+        }
+        return tprint(#string END
+G :: #import,file "%";
+shader_source, shader_meta := %, %;
+assert(shader_source.count > 0, "Transpilation failed for compute shader '%'.");
+assert(shader_meta.entry_id.count > 0, "Missing shader hot-reload entry id for compute shader '%'.");
+return shader_hot_reload_create_and_register_compute_pipeline_with_entry_id(shader_meta.entry_id, *pipeline, cast([]u8) shader_source);
+END, path_to_shader_module, source_expr, meta_expr, compute_name, compute_name);
+    };
+}
+
+init :: (using mesh_shader: *Mesh_Shader, loc: Source_Code_Location = #caller_location) -> bool #expand {
+    #insert #run,stallable -> string {
+        mesh_name :: #procedure_name(Mesh_Function);
+        fragment_name :: #procedure_name(Fragment_Function);
+
+        if Task_Function != null {
+            task_name :: #procedure_name(Task_Function);
+            bundle_expr, meta_expr, ok := JTS.get_transpiled_task_mesh_pipeline_named_exprs(task_name, mesh_name, fragment_name, loc);
+            if !ok {
+                compiler_report("Shader hot reload mesh helper requires direct task/mesh/fragment procedure identifiers.", loc=loc);
+                return "return false;";
+            }
+            return tprint(#string END
+G :: #import,file "%";
+lookup_bundle := %;
+shader_bundle := JTS.Transpiled_Mesh_Pipeline.{
+    task_source = lookup_bundle.task_source,
+    mesh_source = lookup_bundle.mesh_source,
+    pixel_source = lookup_bundle.pixel_source,
+    payload_size_bytes = lookup_bundle.payload_size_bytes,
+    payload_memory_length = lookup_bundle.payload_memory_length,
+    meta = %,
+};
+assert(shader_bundle.mesh_source.count > 0, "Transpilation failed for task+mesh pipeline shaders '%', '%', '%'.");
+assert(shader_bundle.pixel_source.count > 0, "Transpilation failed for task+mesh pipeline shaders '%', '%', '%'.");
+assert(shader_bundle.meta.entry_id.count > 0, "Missing shader hot-reload entry id for task+mesh pipeline shaders '%', '%', '%'.");
+return shader_hot_reload_create_and_register_mesh_pipeline_with_entry_id(shader_bundle.meta.entry_id, *mesh_shader.pipeline, shader_bundle, mesh_desc);
+END, path_to_shader_module, bundle_expr, meta_expr, task_name, mesh_name, fragment_name, task_name, mesh_name, fragment_name, task_name, mesh_name, fragment_name);
+        }
+
+        bundle_expr, meta_expr, ok := JTS.get_transpiled_mesh_pipeline_named_exprs(mesh_name, fragment_name, loc);
+        if !ok {
+            compiler_report("Shader hot reload mesh helper requires direct mesh/fragment procedure identifiers.", loc=loc);
+            return "return false;";
+        }
+        return tprint(#string END
+G :: #import,file "%";
+lookup_bundle := %;
+shader_bundle := JTS.Transpiled_Mesh_Pipeline.{
+    task_source = lookup_bundle.task_source,
+    mesh_source = lookup_bundle.mesh_source,
+    pixel_source = lookup_bundle.pixel_source,
+    payload_size_bytes = lookup_bundle.payload_size_bytes,
+    payload_memory_length = lookup_bundle.payload_memory_length,
+    meta = %,
+};
+assert(shader_bundle.mesh_source.count > 0, "Transpilation failed for mesh pipeline shaders '%', '%'.");
+assert(shader_bundle.pixel_source.count > 0, "Transpilation failed for mesh pipeline shaders '%', '%'.");
+assert(shader_bundle.meta.entry_id.count > 0, "Missing shader hot-reload entry id for mesh pipeline shaders '%', '%'.");
+return shader_hot_reload_create_and_register_mesh_pipeline_with_entry_id(shader_bundle.meta.entry_id, *mesh_shader.pipeline, shader_bundle, mesh_desc);
+END, path_to_shader_module, bundle_expr, meta_expr, mesh_name, fragment_name, mesh_name, fragment_name, mesh_name, fragment_name);
+    };
 }
 
 shader_hot_reload_init_auto :: (app_source_file: string, poll_every_frames: s64 = 15, log_prefix: string = "SHADER_RELOAD", enabled_by_default: bool = false, use_background_thread: bool = true) -> bool {
@@ -117,8 +235,8 @@ shader_hot_reload_create_and_register_graphics_pipeline_with_entry_id :: (entry_
 }
 
 shader_hot_reload_create_and_register_graphics_pipeline :: (pipeline: *Gpu_Pipeline, source: []u8, raster_desc: Gpu_Raster_Desc, target: JTS.Transpiled_Target, $vertex_shader: $VERTEX_SHADER, $fragment_shader: $FRAGMENT_SHADER, call: Code = #caller_code) -> bool #expand {
-    vertex_name   := #run shader_hot_reload_proc_name_from_caller_arg_compile_time(call, 4);
-    fragment_name := #run shader_hot_reload_proc_name_from_caller_arg_compile_time(call, 5);
+    vertex_name   := #run proc_name_from_caller_arg(call, 4);
+    fragment_name := #run proc_name_from_caller_arg(call, 5);
     target_name   := tprint("%", target);
     entry_id      := tprint("pair|%|%|%", target_name, vertex_name, fragment_name);
     return shader_hot_reload_create_and_register_graphics_pipeline_with_entry_id(entry_id, pipeline, source, raster_desc);
@@ -128,17 +246,16 @@ gfx_pipeline :: (pipeline: *Gpu_Pipeline, source: []u8, raster_desc: Gpu_Raster_
     return shader_hot_reload_create_and_register_graphics_pipeline(pipeline, source, raster_desc, target, vertex_shader, fragment_shader, call);
 }
 
-gfx_pipeline :: (pipeline: *Gpu_Pipeline, raster_desc: Gpu_Raster_Desc, $vertex_shader: $VERTEX_SHADER, $fragment_shader: $FRAGMENT_SHADER, call: Code = #caller_code, loc: Source_Code_Location = #caller_location) -> bool #expand {
+gfx_pipeline :: (pipeline: *Gpu_Pipeline, raster_desc: Gpu_Raster_Desc, $vert_2: $VERTEX_SHADER, $frag_2: $FRAGMENT_SHADER, call: Code = #caller_code, loc: Source_Code_Location = #caller_location) -> bool #expand {
     #insert #run,stallable -> string {
-        vertex_name   := shader_hot_reload_proc_name_from_caller_arg_compile_time(call, 2);
-        fragment_name := shader_hot_reload_proc_name_from_caller_arg_compile_time(call, 3);
+        vertex_name   := proc_name_from_caller_arg(call, 2);
+        fragment_name := proc_name_from_caller_arg(call, 3);
         source_expr, meta_expr, ok := JTS.get_transpiled2_named_exprs(vertex_name, fragment_name, loc);
         if !ok {
             compiler_report("Shader hot reload graphics helper requires direct vertex/fragment procedure identifiers.", loc=loc);
             return "return false;";
         }
 
-        path_to_shader_module := JTS.compute_path_to_shader_bucket_module(get_current_workspace());
         return tprint(#string END
 G :: #import,file "%";
 shader_source, shader_meta := %, %;
@@ -148,7 +265,6 @@ return shader_hot_reload_create_and_register_graphics_pipeline_with_entry_id(sha
 END, path_to_shader_module, source_expr, meta_expr, vertex_name, fragment_name, vertex_name, fragment_name);
     };
 }
-
 
 shader_hot_reload_register_compute_pipeline :: (entry_id: string, pipeline: *Gpu_Pipeline) {
     reload := shader_hot_reload_current_ctx();
@@ -194,7 +310,7 @@ shader_hot_reload_create_and_register_compute_pipeline_with_entry_id :: (entry_i
 }
 
 shader_hot_reload_create_and_register_compute_pipeline :: (pipeline: *Gpu_Pipeline, source: []u8, target: JTS.Transpiled_Target, $compute_shader: $COMPUTE_SHADER, call: Code = #caller_code) -> bool #expand {
-    compute_name := #run shader_hot_reload_proc_name_from_caller_arg_compile_time(call, 3);
+    compute_name := #run proc_name_from_caller_arg(call, 3);
     target_name := tprint("%", target);
     entry_id := tprint("single|%|compute|%", target_name, compute_name);
     return shader_hot_reload_create_and_register_compute_pipeline_with_entry_id(entry_id, pipeline, source);
@@ -206,14 +322,13 @@ compute_pipeline :: (pipeline: *Gpu_Pipeline, source: []u8, target: JTS.Transpil
 
 compute_pipeline :: (pipeline: *Gpu_Pipeline, $compute_shader: $COMPUTE_SHADER, call: Code = #caller_code, loc: Source_Code_Location = #caller_location) -> bool #expand {
     #insert #run,stallable -> string {
-        compute_name := shader_hot_reload_proc_name_from_caller_arg_compile_time(call, 1);
+        compute_name := proc_name_from_caller_arg(call, 1);
         source_expr, meta_expr, ok := JTS.get_transpiled_compute_named_exprs(compute_name, loc);
         if !ok {
             compiler_report("Shader hot reload compute helper requires a direct compute procedure identifier.", loc=loc);
             return "return false;";
         }
 
-        path_to_shader_module := JTS.compute_path_to_shader_bucket_module(get_current_workspace());
         return tprint(#string END
 G :: #import,file "%";
 shader_source, shader_meta := %, %;
@@ -266,12 +381,12 @@ mesh_pipeline :: (pipeline: *Gpu_Pipeline, desc: Gpu_Mesh_Pipeline_Desc, shader:
     return shader_hot_reload_create_and_register_mesh_pipeline_with_entry_id(shader.meta.entry_id, pipeline, shader, desc);
 }
 
+
 mesh_pipeline :: (pipeline: *Gpu_Pipeline, desc: Gpu_Mesh_Pipeline_Desc, shader_a: Code, shader_b: Code, shader_c: Code = null, loc: Source_Code_Location = #caller_location) -> bool #expand {
     #insert #run,stallable -> string {
-        shader_a_name := shader_hot_reload_proc_name_from_code_compile_time(shader_a);
-        shader_b_name := shader_hot_reload_proc_name_from_code_compile_time(shader_b);
-        shader_c_name := shader_hot_reload_proc_name_from_code_compile_time(shader_c);
-        path_to_shader_module := JTS.compute_path_to_shader_bucket_module(get_current_workspace());
+        shader_a_name := proc_name_from_code_compile_time(shader_a);
+        shader_b_name := proc_name_from_code_compile_time(shader_b);
+        shader_c_name := proc_name_from_code_compile_time(shader_c);
 
         if shader_c_name.count != 0 {
             task_name := shader_a_name;
@@ -339,7 +454,7 @@ shader_hot_reload_tick :: (frame_num: s64) -> (did_rebuild: bool, swapped_all: b
         completed_ok: bool;
         completed_ids_csv: string;
         completed_error: string;
-        has_completed := shader_hot_reload_take_background_completion(reload, *completed_ok, *completed_ids_csv, *completed_error);
+        has_completed := take_background_completion(reload, *completed_ok, *completed_ids_csv, *completed_error);
         if !has_completed return false, true, true;
 
         reload.last_event_frame = frame_num;
@@ -408,7 +523,7 @@ shader_hot_reload_status_line :: (max_ids_chars: s64 = 72) -> string {
     return tprint("shader_reload=on status=% frame=% ids=%", result_text, last_event_frame, ids_short);
 }
 
-shader_hot_reload_proc_name_from_caller_arg_compile_time :: (call: Code, arg_index: s64) -> string {
+proc_name_from_caller_arg :: (call: Code, arg_index: s64) -> string {
     root, _ := compiler_get_nodes(call);
     if !root || root.kind != .PROCEDURE_CALL return "";
     pc := cast(*Code_Procedure_Call) root;
@@ -416,12 +531,6 @@ shader_hot_reload_proc_name_from_caller_arg_compile_time :: (call: Code, arg_ind
     arg := pc.arguments_unsorted[arg_index].expression;
     if !arg || arg.kind != .IDENT return "";
     return (cast(*Code_Ident) arg).name;
-}
-
-shader_hot_reload_proc_name_from_code_compile_time :: (code: Code) -> string {
-    root, _ := compiler_get_nodes(code);
-    if !root || root.kind != .IDENT return "";
-    return (cast(*Code_Ident) root).name;
 }
 
 shader_hot_reload_apply_registered_pipelines :: (using reload: *Shader_Hot_Reload) -> bool {
@@ -544,21 +653,6 @@ shader_hot_reload_queue_background_build :: (using reload: *Shader_Hot_Reload, c
     assign_string(*worker_pending_ids_csv, changed_ids_csv);
     worker_has_pending = true;
     signal(*worker_wake);
-}
-
-shader_hot_reload_take_background_completion :: (using reload: *Shader_Hot_Reload, completed_ok: *bool, completed_ids_csv: *string, completed_error: *string) -> bool {
-    if !worker_started return false;
-    lock(*worker_mutex);
-    defer unlock(*worker_mutex);
-
-    if !worker_has_completed return false;
-    worker_has_completed = false;
-    completed_ok.* = worker_completed_ok;
-    completed_ids_csv.* = worker_completed_ids_csv;
-    completed_error.* = worker_completed_error_message;
-    worker_completed_ids_csv = "";
-    worker_completed_error_message = "";
-    return true;
 }
 
 shader_hot_reload_worker_proc :: (thread: *Thread) -> s64 {
@@ -894,3 +988,34 @@ String :: #import "String";
 Process :: #import "Process";
 JTS :: #import "Jai-Shader-Transpiler";
 ImGui :: #import "ImGui";
+
+path_to_shader_module :: #run JTS.compute_path_to_shader_bucket_module(get_current_workspace());
+
+take_background_completion :: (using reload: *Shader_Hot_Reload, completed_ok: *bool, completed_ids_csv: *string, completed_error: *string) -> bool {
+    if !worker_started return false;
+    lock(*worker_mutex);
+    defer unlock(*worker_mutex);
+
+    if !worker_has_completed return false;
+    worker_has_completed = false;
+    completed_ok.* = worker_completed_ok;
+    completed_ids_csv.* = worker_completed_ids_csv;
+    completed_error.* = worker_completed_error_message;
+    worker_completed_ids_csv = "";
+    worker_completed_error_message = "";
+    return true;
+}
+
+proc_name_from_code_compile_time :: (code: Code) -> string {
+    root, _ := compiler_get_nodes(code);
+    if !root || root.kind != .IDENT return "";
+    return (cast(*Code_Ident) root).name;
+}
+
+shader_hot_reload_current_ctx :: () -> *Shader_Hot_Reload {
+    assert(shader_reload_ctx != null, "shader_reload_ctx is null. Initialize SHR.shader_reload_ctx before using shader hot reload.");
+    return shader_reload_ctx;
+}
+
+
+SRM :: #import,file "../modules/Jai-Shader-Transpiler/modules/shader_reload_manifest.jai";

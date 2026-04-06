@@ -35,7 +35,13 @@ editor_camera_set_look_at :: (camera: *Editor_Camera, target: Vector3) {
     editor_camera_set_forward(camera, target - camera.position);
 }
 
-editor_camera_basis :: (using camera: *Editor_Camera, forward: *Vector3, right: *Vector3, up: *Vector3) {
+editor_camera_forward :: (using camera: Editor_Camera) -> Vector3 {
+    f := editor_camera_forward_from_angles(yaw, pitch);
+    normalize(*f, fallback = .{0.0, 0.0, -1.0});
+    return f;
+}
+
+editor_camera_basis :: (using camera: Editor_Camera, forward: *Vector3, right: *Vector3, up: *Vector3) {
     f := editor_camera_forward_from_angles(yaw, pitch);
     normalize(*f, fallback = .{0.0, 0.0, -1.0});
 

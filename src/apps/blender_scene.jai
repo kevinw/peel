@@ -1,3 +1,5 @@
+ #load "../SGPU_App_Common.jai";
+
 BLENDER_SCENE_DEFAULT_BLEND_PATH :: "tools/blender_exporter/monkeys.blend";
 
 Meshlet_Grid_Instance :: struct {
@@ -57,7 +59,18 @@ MESHLET_TASK_EMIT_MESHLET_COUNT : u32 : 64;
 BLENDER_SCENE_MAX_MESH_GROUPS_PER_DRAW : u32 : 1024;
 
 using app: struct {
-    pipeline: Gpu_Pipeline;
+    mesh_shader: Mesh_Shader(mesh_main, fragment_main, .{
+        raster_desc = .{
+            cull = .NONE,
+            depth_format = .D32_SFLOAT,
+            color_targets = .[
+                .{format = .B8G8R8A8_UNORM},
+            ],
+        },
+        task_threads = .[1, 1, 1],
+        mesh_threads = .[1, 1, 1],
+        max_total_threadgroups_per_mesh_grid = BLENDER_SCENE_MAX_MESH_GROUPS_PER_DRAW,
+    }, task_main);
     depth_texture: Gpu_Texture;
     depth_view: Gpu_Texture_View;
     depth_w: u32;
@@ -130,7 +143,7 @@ on_unload :: () {
     free(export_path);
     if mesh_source.count != 0 free(mesh_source);
     if depth_texture != 0 gpu_free(depth_texture);
-    if pipeline != 0 gpu_delete(*pipeline);
+    if mesh_shader.pipeline != 0 gpu_delete(*mesh_shader.pipeline);
     if arena.cpu != null gpu_free_arena(arena);
     array_free(batches);
     scene_geo_deinit(*geo);
@@ -222,7 +235,7 @@ tick :: () {
         ]
     });
     gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .LESS, depth_mode = .READ | .WRITE});
-    gpu_set_pipeline(cmd_buff, pipeline);
+    gpu_set_pipeline(cmd_buff, mesh_shader.pipeline);
 
     for batches {
         if debug_batch_filter >= 0 && cast(s32) it_index != debug_batch_filter continue;
@@ -425,22 +438,10 @@ spawn_live_blender :: () {
 }
 
 init_blender_scene_pipeline :: () {
-    mesh_desc := Gpu_Mesh_Pipeline_Desc.{
-        raster_desc = .{
-            cull = .NONE,
-            depth_format = .D32_SFLOAT,
-            color_targets = .[
-                .{format = .B8G8R8A8_UNORM},
-            ],
-        },
-        task_threads = .[1, 1, 1],
-        mesh_threads = .[1, 1, 1],
-        max_total_threadgroups_per_mesh_grid = BLENDER_SCENE_MAX_MESH_GROUPS_PER_DRAW,
-    };
-    ok := SHR.mesh_pipeline(*pipeline, mesh_desc, task_main, mesh_main, fragment_main);
+    ok := SHR.init(*mesh_shader);
     assert(ok, "Failed to create blender_scene mesh pipeline.");
 
-    mesh_grid_limit = gpu_get_mesh_pipeline_max_total_threadgroups_per_grid(pipeline);
+    mesh_grid_limit = gpu_get_mesh_pipeline_max_total_threadgroups_per_grid(mesh_shader.pipeline);
     if mesh_grid_limit == 0 mesh_grid_limit = BLENDER_SCENE_MAX_MESH_GROUPS_PER_DRAW;
 }
 
@@ -622,7 +623,6 @@ ensure_depth_target :: (width: u32, height: u32) {
     depth_h = height;
 }
 
-#load "../SGPU_App_Common.jai";
 #load "../editor_camera.jai";
 #load "../scene_geo.jai";
 #import "Jai-Shader-Transpiler";

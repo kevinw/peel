@@ -1,4 +1,3 @@
-
 #load "../SGPU_App_Common.jai";
 #load "../editor_camera.jai";
 
@@ -12,8 +11,13 @@ Input :: #import "Input";
 TEXTURE3D_SIZE :: 128;
 TEXTURE3D_VOXEL_COUNT :: TEXTURE3D_SIZE * TEXTURE3D_SIZE * TEXTURE3D_SIZE;
 
-graphics_pipeline: Gpu_Pipeline;
-compute_pipeline: Gpu_Pipeline;
+texture_render: Shader(fullscreen_tri_vert, texture3d_fragment_main, {
+    cull = .NONE,
+    color_targets = .[ { format = .B8G8R8A8_UNORM }],
+});
+
+texture_compute: Compute_Shader(texture3d_compute_main);
+
 gpu_arena: Gpu_Arena;
 
 texture3d_params: Gpu_Buffer(Texture3D_Params);
@@ -52,8 +56,8 @@ on_dll_init :: () {
         ],
     };
 
-    SHR.gfx_pipeline(*graphics_pipeline, raster_desc, fullscreen_tri_vert, texture3d_fragment_main);
-    SHR.compute_pipeline(*compute_pipeline, texture3d_compute_main);
+    SHR.init(*texture_render);
+    SHR.init(*texture_compute);
 
     texture_result, volume_texture= := gpu_create_texture(.{
         type = ._3D,
@@ -163,7 +167,7 @@ tick :: () {
         allow_zoom = !io.WantCaptureMouse && !texture3d_orbit_drag_active);
 
     camera_forward, camera_right, camera_up: Vector3;
-    editor_camera_basis(*texture3d_camera, *camera_forward, *camera_right, *camera_up);
+    editor_camera_basis(texture3d_camera, *camera_forward, *camera_right, *camera_up);
     texture3d_params.cpu.camera_pos = texture3d_camera.position;
     texture3d_params.cpu.camera_forward = camera_forward;
     texture3d_params.cpu.camera_right = camera_right;
@@ -185,8 +189,7 @@ tick :: () {
     assert(result == .SUCCESS);
 
     if volume_needs_init {
-        compute_result := gpu_set_pipeline(cmd_buff, compute_pipeline);
-        assert(compute_result == .SUCCESS, tprint("texture3d compute set pipeline failed: %", compute_result));
+        gpu_set_pipeline(cmd_buff, texture_compute.pipeline);
         groups_x := cast(u32) (TEXTURE3D_VOXEL_COUNT + 63) / 64;
         gpu_dispatch_buffers(cmd_buff, .[texture3d_params.gpu], .[groups_x, 1, 1]);
         gpu_barrier(cmd_buff, .COMPUTE_SHADER, .PIXEL_SHADER);
@@ -205,22 +208,14 @@ tick :: () {
             ]
         }, .COLOR_ATTACHMENT_WRITE, .COLOR_ATTACHMENT_WRITE);
         gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
-        gpu_set_pipeline(cmd_buff, graphics_pipeline);
-        draw_result := gpu_draw_instanced(cmd_buff, 0, texture3d_params.gpu, 3, 1);
-        assert(draw_result == .SUCCESS, tprint("texture3d draw failed: %", draw_result));
+        gpu_set_pipeline(cmd_buff, texture_render.pipeline);
+        gpu_draw_instanced(cmd_buff, 0, texture3d_params.gpu, 3, 1);
     }
 
     submit_and_present_with_ui(cmd_buff);
 } @on_tick
 
 #scope_file
-
-editor_camera_forward :: (camera: Editor_Camera) -> Vector3 {
-    forward, right, up: Vector3;
-    cam := camera;
-    editor_camera_basis(*cam, *forward, *right, *up);
-    return forward;
-}
 
 texture3d_orbit_update_camera :: (mouse_pos: Vector2) {
     if !texture3d_orbit_have_prev_mouse {
@@ -238,6 +233,6 @@ texture3d_orbit_update_camera :: (mouse_pos: Vector2) {
     texture3d_camera.pitch = clamp(texture3d_camera.pitch, texture3d_camera.pitch_min, texture3d_camera.pitch_max);
 
     cam_forward, cam_right, cam_up: Vector3;
-    editor_camera_basis(*texture3d_camera, *cam_forward, *cam_right, *cam_up);
+    editor_camera_basis(texture3d_camera, *cam_forward, *cam_right, *cam_up);
     texture3d_camera.position = texture3d_orbit_target - cam_forward * texture3d_orbit_distance;
 }

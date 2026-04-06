@@ -699,7 +699,7 @@ tick :: () {
     orbit_start := alt_down && left_pressed && !io.WantCaptureMouse && !right_down && mouse_ok && dims_ok && win_w > 0 && win_h > 0;
     if orbit_start {
         cam_forward, cam_right, cam_up: Vector3;
-        editor_camera_basis(*camera, *cam_forward, *cam_right, *cam_up);
+        editor_camera_basis(camera, *cam_forward, *cam_right, *cam_up);
         ray_origin, ray_dir, ray_ok := mouse_world_ray(
             .{cast(float) win_w, cast(float) win_h}, tan((PI / 3.0) * 0.5),
             camera.position, cam_forward, cam_right, cam_up,
@@ -751,7 +751,7 @@ tick :: () {
     }
     if auto_fly_forward && control_mode == .Editor {
         cam_forward, cam_right, cam_up: Vector3;
-        editor_camera_basis(*camera, *cam_forward, *cam_right, *cam_up);
+        editor_camera_basis(camera, *cam_forward, *cam_right, *cam_up);
         camera.position += cam_forward * (auto_fly_speed * cast(float) dt);
     }
 
@@ -847,7 +847,7 @@ tick :: () {
     params.cpu.camera_pos = camera.position;
     params.cpu.camera_fov_y = camera.fov_y;
     params.cpu.camera_tan_half_fov = tan(params.cpu.camera_fov_y * 0.5);
-    editor_camera_basis(*camera, *params.cpu.camera_forward, *params.cpu.camera_right, *params.cpu.camera_up);
+    editor_camera_basis(camera, *params.cpu.camera_forward, *params.cpu.camera_right, *params.cpu.camera_up);
     aspect := ifx dims_ok && win_h > 0 then cast(float) win_w / cast(float) win_h else 1.0;
     current_view := editor_camera_make_view(*camera);
     current_proj := make_projection_matrix(params.cpu.camera_fov_y, aspect, 0.05, 160.0);
@@ -2299,7 +2299,7 @@ update_player_mode :: (dt: float, mouse_ok: bool, right_down: bool, mx: s32, my:
         allow_zoom = !ImGui.GetIO().WantCaptureMouse && !orbit_drag_active);
 
     cam_forward, cam_right, cam_up: Vector3;
-    editor_camera_basis(*camera, *cam_forward, *cam_right, *cam_up);
+    editor_camera_basis(camera, *cam_forward, *cam_right, *cam_up);
     forward := normalize_or_zero(Vector3.{cam_forward.x, 0.0, cam_forward.z});
     right := normalize_or_zero(Vector3.{cam_right.x, 0.0, cam_right.z});
 
@@ -2906,7 +2906,7 @@ start_focus_on_edit :: (edit_index: s32) {
     framed_distance := max(radius / max(tan(fov_y * 0.5), 0.0001) * 1.30, radius * 2.0);
 
     cam_forward, cam_right, cam_up: Vector3;
-    editor_camera_basis(*camera, *cam_forward, *cam_right, *cam_up);
+    editor_camera_basis(camera, *cam_forward, *cam_right, *cam_up);
     desired_pos := center - cam_forward * framed_distance;
     look_dir := center - desired_pos;
     look_len := length(look_dir);
