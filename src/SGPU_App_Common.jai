@@ -472,6 +472,7 @@ host_init :: (init_ctx: Init_Ctx) -> bool {
         use_background_thread = false,
     );
 
+    call_init_functions();
     call_event_functions(.dll_init);
 
     return true;
@@ -641,7 +642,7 @@ using,except(Viewport) _ :: #import "sgpu"()(SLANG_COMPILER=false);
 #load "App_Common.jai";
 #load "ui/ui.jai";
 SHR :: #import,file "./shader_hot_reload.jai";
-using,only(Shader, Compute_Shader, Mesh_Shader) _ :: SHR;
+using,only(Shader, Compute_Shader, Mesh_Shader, init) _ :: SHR;
 
 #scope_file
 #load "measure_fps.jai";

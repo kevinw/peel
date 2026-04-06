@@ -2,18 +2,19 @@
 #import "Compiler";
 #import "sgpu";
 #import "Thread";
+JTS :: #import "Jai-Shader-Transpiler";
+ImGui :: #import "ImGui";
+SRM :: #import,file "../modules/Jai-Shader-Transpiler/modules/shader_reload_manifest.jai";
+
 String :: #import "String";
 Process :: #import "Process";
 Hash :: #import "Hash";
-JTS :: #import "Jai-Shader-Transpiler";
-ImGui :: #import "ImGui";
 #if OS == .MACOS {
-#import "Objective_C";
-#import "Metal";
-#import "Objective_C_Tools";
+    #import "Objective_C";
+    #import "Metal";
+    #import "Objective_C_Tools";
 }
 
-SRM :: #import,file "../modules/Jai-Shader-Transpiler/modules/shader_reload_manifest.jai";
 
 path_to_shader_module :: #run JTS.compute_path_to_shader_bucket_module(get_current_workspace());
 
@@ -35,18 +36,11 @@ Shader_Hot_Reload_Base :: struct {
 
 Shader_Hot_Reload_Function_Constant_Type :: enum {
     BOOL;
-    U8;
-    S8;
-    U16;
-    S16;
-    U32;
-    S32;
-    U64;
-    S64;
-    FLOAT;
-    FLOAT2;
-    FLOAT3;
-    FLOAT4;
+    U8; S8;
+    U16; S16;
+    U32; S32;
+    U64; S64;
+    FLOAT; FLOAT2; FLOAT3; FLOAT4;
 }
 
 Shader_Hot_Reload_Function_Constant_Info :: struct {
@@ -140,4 +134,3 @@ shader_hot_reload_current_ctx :: () -> *Shader_Hot_Reload {
 #load "./shader_api.jai";
 #load "./shader_reload_ui.jai";
 #load "./shader_reload_runtime.jai";
-

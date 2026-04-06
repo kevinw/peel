@@ -499,6 +499,10 @@ add_app_plugins :: (plugins: *[..] *Metaprogram_Plugin,
         array_add(plugins, Event_Functions_Metaprogram.get_plugin());
     }
     {
+        Init_Metaprogram :: #import "Init_Metaprogram";
+        array_add(plugins, Init_Metaprogram.get_plugin());
+    }
+    {
         JSL :: #import "Jai-Shader-Transpiler";
         plugin := JSL.get_plugin();
         // plugin.output_shaders = true;

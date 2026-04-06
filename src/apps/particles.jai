@@ -21,9 +21,7 @@ surprise_vec2_normalize_or_zero :: (v: Vector2) -> Vector2 {
 
 on_dll_init :: () {
     graphics_source := cast([]u8) get_transpiled(.METAL, surprise_vertex_main, surprise_fragment_main);
-    assert(graphics_source.count > 0, "Transpilation failed for surprise graphics shaders.");
     compute_source  := cast([]u8) get_transpiled(.METAL, surprise_step_compute);
-    assert(compute_source.count > 0, "Transpilation failed for surprise compute shader.");
 
     blend_state: Gpu_Blend_Desc = {
         src_color_factor = .SRC_ALPHA,
@@ -46,16 +44,6 @@ on_dll_init :: () {
 
     gpu_arena = gpu_make_arena(1024 * 1024 * 4, label = "surprise arena");
 
-    quad := gpu_alloc_view(*gpu_arena, Vector2, 6);
-    quad.cpu = .[
-        .{-1.0, -1.0},
-        .{+1.0, -1.0},
-        .{+1.0, +1.0},
-        .{-1.0, -1.0},
-        .{+1.0, +1.0},
-        .{-1.0, +1.0},
-    ];
-
     spark_state = gpu_alloc_view(*gpu_arena, Particle, PARTICLE_COUNT);
 
     for 0..PARTICLE_COUNT-1 {
@@ -72,11 +60,8 @@ on_dll_init :: () {
         };
     }
 
-    param_block := gpu_alloc_view(*gpu_arena, Gpu_Ptr, 2);
-    param_block.cpu = .[quad.gpu, spark_state.gpu];
-
     draw_data = .{
-        vertex_params_gpu = param_block.gpu,
+        vertex_params_gpu = spark_state.gpu,
         pixel_gpu = 0,
         num_vertices = 6,
         num_instances = PARTICLE_COUNT,

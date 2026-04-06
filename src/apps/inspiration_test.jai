@@ -5,8 +5,7 @@ on_dll_init :: () {
 } @on_dll_init
 
 tick :: () {
-    result, swapchain_image := app_swapchain_acquire();
-    assert(result == .SUCCESS);
+    _, swapchain_image := app_swapchain_acquire();
     if !swapchain_image return;
 
     main_queue := gpu_get_queue(.MAIN, 0);

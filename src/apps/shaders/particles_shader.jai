@@ -23,11 +23,6 @@ Surprise_Vertex_In :: struct {
     instance_id: u32; @SV_InstanceID
 }
 
-Surprise_Vertex_Params :: struct {
-    quad: *Vector2;
-    sparks: *Particle;
-}
-
 Surprise_Vertex_Out :: struct {
     gl_Position: Vector4; @position
     local_uv: Vector2;
@@ -106,11 +101,23 @@ surprise_step_compute :: (using in: Surprise_Compute_In, sparks: *Particle) {
     sparks[i] = s;
 } @compute_shader
 
-surprise_vertex_main :: (using in: Surprise_Vertex_In, data: *Surprise_Vertex_Params) -> Surprise_Vertex_Out {
+surprise_quad_vertex :: (vertex_id: u32) -> Vector2 {
+    if vertex_id == {
+    case 0; return .{-1.0, -1.0};
+    case 1; return .{+1.0, -1.0};
+    case 2; return .{+1.0, +1.0};
+    case 3; return .{-1.0, -1.0};
+    case 4; return .{+1.0, +1.0};
+    case 5; return .{-1.0, +1.0};
+    }
+    return .{0.0, 0.0};
+}
+
+surprise_vertex_main :: (using in: Surprise_Vertex_In, sparks: *Particle) -> Surprise_Vertex_Out {
     using out: Surprise_Vertex_Out;
 
-    p := data.sparks[instance_id];
-    quad := data.quad[vertex_id];
+    p := sparks[instance_id];
+    quad := surprise_quad_vertex(vertex_id);
 
     local_speed := sqrt(p.vel.x * p.vel.x + p.vel.y * p.vel.y);
     size := 0.0045 + (1.0 - p.life) * 0.006 + local_speed * 3.0;
@@ -126,8 +133,7 @@ surprise_vertex_main :: (using in: Surprise_Vertex_In, data: *Surprise_Vertex_Pa
     return out;
 } @vertex_shader
 
-surprise_fragment_main :: (using in: Surprise_Fragment_In, data: *Surprise_Vertex_Params) -> Vector4 @SV_Target0 {
-    _ = data;
+surprise_fragment_main :: (using in: Surprise_Fragment_In) -> Vector4 @SV_Target0 {
     r2 := local_uv.x * local_uv.x + local_uv.y * local_uv.y;
     core := surprise_clamp01(1.0 - r2);
     glow := core * core;

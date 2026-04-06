@@ -9,15 +9,18 @@ Draw_Data :: struct {
     num_instances: u32;
 }
 
-shader: Shader(flux_vertex_main, flux_fragment_main, main_raster);
-sky_shader: Shader(flux_sky_vertex_main, flux_sky_fragment_main, main_raster);
-debug_shadow_shader: Shader(flux_debug_shadow_vertex_main, flux_debug_shadow_fragment_main, main_raster);
-shadow_shader: Shader(flux_shadow_vertex_main, flux_shadow_fragment_main, shadow_raster);
-grass_shadow_shader: Shader(flux_grass_shadow_vertex_main, flux_shadow_fragment_main, shadow_raster);
-step_compute: Compute_Shader(flux_step_compute);
-init_compute: Compute_Shader(flux_init_compute);
-grass_spawn_compute: Compute_Shader(flux_grass_spawn_compute);
-grass_shader: Shader(flux_grass_vertex_main, flux_grass_fragment_main, main_raster);
+using shaders: struct @init_group {
+    shader: Shader(flux_vertex_main, flux_fragment_main, main_raster);
+    sky_shader: Shader(flux_sky_vertex_main, flux_sky_fragment_main, main_raster);
+    debug_shadow_shader: Shader(flux_debug_shadow_vertex_main, flux_debug_shadow_fragment_main, main_raster);
+    shadow_shader: Shader(flux_shadow_vertex_main, flux_shadow_fragment_main, shadow_raster);
+    grass_shadow_shader: Shader(flux_grass_shadow_vertex_main, flux_shadow_fragment_main, shadow_raster);
+    step_compute: Compute_Shader(flux_step_compute);
+    init_compute: Compute_Shader(flux_init_compute);
+    grass_spawn_compute: Compute_Shader(flux_grass_spawn_compute);
+    grass_shader: Shader(flux_grass_vertex_main, flux_grass_fragment_main, main_raster);
+};
+
 gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
 FLUX_GRASS_INSTANCE_COUNT :: 130000;
@@ -294,24 +297,6 @@ flux_write_render_payload :: (win_w: u32, win_h: u32) {
 }
 
 on_dll_init :: () {
-    init_compute_source := cast([]u8) get_transpiled(.METAL, flux_init_compute);
-    assert(init_compute_source.count > 0, "Compute transpilation failed (flux_init_compute).");
-    compute_source := cast([]u8) get_transpiled(.METAL, flux_step_compute);
-    assert(compute_source.count > 0, "Compute transpilation failed (flux_step_compute).");
-    grass_spawn_compute_source := cast([]u8) get_transpiled(.METAL, flux_grass_spawn_compute);
-    assert(grass_spawn_compute_source.count > 0, "Compute transpilation failed (flux_grass_spawn_compute).");
-
-
-    SHR.init(*shader);
-    SHR.init(*sky_shader);
-    SHR.init(*debug_shadow_shader);
-    SHR.init(*shadow_shader);
-    SHR.init(*grass_shadow_shader);
-    SHR.init(*init_compute);
-    SHR.init(*step_compute);
-    SHR.init(*grass_spawn_compute);
-    SHR.init(*grass_shader);
-
     gpu_arena = gpu_make_arena(1024 * 1024 * 196, label = "flux arena");
 
     payload = gpu_alloc_buffer(*gpu_arena, Flux_Payload);

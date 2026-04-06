@@ -8,11 +8,9 @@ noise_sampler: Gpu_Sampler;
 shader: Shader(vert_main, frag_main, {
     cull = .NONE,
     color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
-});
+}); @init
 
 on_dll_init :: () {
-    SHR.init(*shader);
-
     gpu_arena = gpu_make_arena(1024 * 1024, label = "textured triangle arena");
     texture_result, noise_texture= := gpu_create_texture({
         dimensions = .[NOISE_SZ, NOISE_SZ, 1],
