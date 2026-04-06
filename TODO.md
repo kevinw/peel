@@ -1,4 +1,5 @@
 # TODO
+- make a shader live reload test mode on by default which reloads shaders at startup by touching files, or by simulating their being updated
 - make sure @on_unload tears down all gpu_free_arenas
 - putting assert(false) in textured_triangle's on_dll_init didn't stop the program!??!
 - deferred deletion for pipelines, textures, etc. maybe a simple version is just "3 frames later"
@@ -67,6 +68,8 @@ Sebastian Aaltonen
 
 # use
 - lumberyard https://developer.nvidia.com/orca/amazon-lumberyard-bistro
+- local 3d model generation https://github.com/tencent-hunyuan/hunyuan3d-2.1
+- nice grass https://omma.build/8pu8yc6fm0d
 
 # read
 - https://www.rastergrid.com/blog/gpu-tech/2026/03/vulkan-memory-barriers-and-image-layouts-explained/
@@ -84,4 +87,5 @@ Sebastian Aaltonen
 - https://github.com/myemural/VulkanCppExamples/tree/master
 - cascade receiver culling https://x.com/SebAaltonen/status/2036768312667902463?s=20
 - https://github.com/RandyGaul/nudge/blob/main/src/split_store.h
+- lightweight 3d physics https://github.com/RandyGaul/nudge
 - sparse virtual shadowmaps https://ktstephano.github.io/rendering/stratusgfx/svsm

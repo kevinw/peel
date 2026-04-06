@@ -51,7 +51,7 @@ Meshlet_Grid_Params :: struct {
     batch_max_meshlet_count: u32;
     batch_meshlet_chunk_count: u32;
     batch_object_group_start: u32;
-    debug_flags: u32;
+    pad: u32;
 }
 
 BLENDER_SCENE_POLL_SECONDS :: 0.20;
@@ -123,7 +123,6 @@ using app: struct {
 
     using draw: Meshlet_Grid_Params = {
         debug_mode = cast(u32) Meshlet_Grid_Debug_Mode.SHADED,
-        debug_flags = 0,
     };
 }
 
@@ -235,7 +234,7 @@ tick :: () {
         ]
     });
     gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .LESS, depth_mode = .READ | .WRITE});
-    gpu_set_pipeline(cmd_buff, mesh_shader.pipeline);
+    gpu_set_pipeline(cmd_buff, SHR.pipeline(*mesh_shader, constants));
 
     for batches {
         if debug_batch_filter >= 0 && cast(s32) it_index != debug_batch_filter continue;
@@ -305,41 +304,10 @@ show_ui :: () {
     Text("Max Meshlets / Mesh: %", geo.max_meshlet_count);
     Text("RMB look, WASD move, Shift boost");
     Checkbox("Auto Orbit", *auto_orbit);
-    disable_frustum_cull := (draw.debug_flags & MESHLET_DEBUG_DISABLE_FRUSTUM_CULL) != 0;
-    if Checkbox("Disable Frustum Cull", *disable_frustum_cull) {
-        if disable_frustum_cull draw.debug_flags |= MESHLET_DEBUG_DISABLE_FRUSTUM_CULL;
-        else                    draw.debug_flags &= ~MESHLET_DEBUG_DISABLE_FRUSTUM_CULL;
-    }
-    force_first_meshlet := (draw.debug_flags & MESHLET_DEBUG_FORCE_FIRST_MESHLET) != 0;
-    if Checkbox("Force First Meshlet", *force_first_meshlet) {
-        if force_first_meshlet draw.debug_flags |= MESHLET_DEBUG_FORCE_FIRST_MESHLET;
-        else                   draw.debug_flags &= ~MESHLET_DEBUG_FORCE_FIRST_MESHLET;
-    }
-    force_all_meshlets := (draw.debug_flags & MESHLET_DEBUG_FORCE_ALL_MESHLETS) != 0;
-    if Checkbox("Force All Meshlets", *force_all_meshlets) {
-        if force_all_meshlets draw.debug_flags |= MESHLET_DEBUG_FORCE_ALL_MESHLETS;
-        else                 draw.debug_flags &= ~MESHLET_DEBUG_FORCE_ALL_MESHLETS;
-    }
-    simple_selection := (draw.debug_flags & MESHLET_DEBUG_SIMPLE_SELECTION) != 0;
-    if Checkbox("Simple Selection", *simple_selection) {
-        if simple_selection draw.debug_flags |= MESHLET_DEBUG_SIMPLE_SELECTION;
-        else                draw.debug_flags &= ~MESHLET_DEBUG_SIMPLE_SELECTION;
-    }
-    disable_lods := (draw.debug_flags & MESHLET_DEBUG_DISABLE_LODS) != 0;
-    if Checkbox("Disable LODs", *disable_lods) {
-        if disable_lods draw.debug_flags |= MESHLET_DEBUG_DISABLE_LODS;
-        else            draw.debug_flags &= ~MESHLET_DEBUG_DISABLE_LODS;
-    }
-    task_markers := (draw.debug_flags & MESHLET_DEBUG_TASK_MARKERS) != 0;
-    if Checkbox("Task Markers", *task_markers) {
-        if task_markers draw.debug_flags |= MESHLET_DEBUG_TASK_MARKERS;
-        else            draw.debug_flags &= ~MESHLET_DEBUG_TASK_MARKERS;
-    }
-    synthetic_triangle := (draw.debug_flags & MESHLET_DEBUG_SYNTHETIC_TRIANGLE) != 0;
-    if Checkbox("Synthetic Triangle", *synthetic_triangle) {
-        if synthetic_triangle draw.debug_flags |= MESHLET_DEBUG_SYNTHETIC_TRIANGLE;
-        else                  draw.debug_flags &= ~MESHLET_DEBUG_SYNTHETIC_TRIANGLE;
-    }
+
+    using constants;
+
+    inspect("Debug Flags", *debug_flags);
 
     if Checkbox("Freeze Culling", *freeze_culling) {
         if freeze_culling freeze_culling_set = true;
@@ -376,12 +344,14 @@ getenv_string :: (name: string) -> string {
     return to_string(value_c, c_style_strlen(value_c));
 }
 
+constants: Meshlet_Shader_Constants;
+
 apply_debug_env_overrides :: () {
     debug_flags_text := getenv_string("PEEL_MESHLET_DEBUG_FLAGS");
     if debug_flags_text.count != 0 {
         debug_flags_value, ok := string_to_int(debug_flags_text);
         assert(ok, "PEEL_MESHLET_DEBUG_FLAGS must be an integer, got '%'.", debug_flags_text);
-        draw.debug_flags = cast(u32) debug_flags_value;
+        constants.debug_flags = cast(Meshlet_Debug_Flags) debug_flags_value;
     }
 
     debug_mode_text := getenv_string("PEEL_MESHLET_DEBUG_MODE");
@@ -438,7 +408,7 @@ spawn_live_blender :: () {
 }
 
 init_blender_scene_pipeline :: () {
-    ok := SHR.init(*mesh_shader);
+    ok := SHR.init(*mesh_shader, Meshlet_Shader_Constants.{});
     assert(ok, "Failed to create blender_scene mesh pipeline.");
 
     mesh_grid_limit = gpu_get_mesh_pipeline_max_total_threadgroups_per_grid(mesh_shader.pipeline);

@@ -9,15 +9,15 @@ Draw_Data :: struct {
     num_instances: u32;
 }
 
-graphics_pipeline: Gpu_Pipeline;
-sky_pipeline: Gpu_Pipeline;
-debug_shadow_pipeline: Gpu_Pipeline;
-shadow_pipeline: Gpu_Pipeline;
-grass_shadow_pipeline: Gpu_Pipeline;
-compute_pipeline: Gpu_Pipeline;
-init_compute_pipeline: Gpu_Pipeline;
-grass_spawn_compute_pipeline: Gpu_Pipeline;
-grass_pipeline: Gpu_Pipeline;
+shader: Shader(flux_vertex_main, flux_fragment_main, main_raster);
+sky_shader: Shader(flux_sky_vertex_main, flux_sky_fragment_main, main_raster);
+debug_shadow_shader: Shader(flux_debug_shadow_vertex_main, flux_debug_shadow_fragment_main, main_raster);
+shadow_shader: Shader(flux_shadow_vertex_main, flux_shadow_fragment_main, shadow_raster);
+grass_shadow_shader: Shader(flux_grass_shadow_vertex_main, flux_shadow_fragment_main, shadow_raster);
+step_compute: Compute_Shader(flux_step_compute);
+init_compute: Compute_Shader(flux_init_compute);
+grass_spawn_compute: Compute_Shader(flux_grass_spawn_compute);
+grass_shader: Shader(flux_grass_vertex_main, flux_grass_fragment_main, main_raster);
 gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
 FLUX_GRASS_INSTANCE_COUNT :: 130000;
@@ -302,31 +302,15 @@ on_dll_init :: () {
     assert(grass_spawn_compute_source.count > 0, "Compute transpilation failed (flux_grass_spawn_compute).");
 
 
-    main_raster: Gpu_Raster_Desc = {
-        cull = .NONE,
-        depth_format = .D32_SFLOAT,
-        color_targets = .[
-            .{format = .B8G8R8A8_UNORM}
-        ],
-    };
-    shadow_raster: Gpu_Raster_Desc = {
-        cull = .NONE,
-        depth_format = .D32_SFLOAT,
-        color_targets = .[
-            .{format = .R32_SFLOAT}
-        ],
-    };
-
-    SHR.gfx_pipeline(*graphics_pipeline, main_raster, flux_vertex_main, flux_fragment_main);
-    SHR.gfx_pipeline(*sky_pipeline, main_raster, flux_sky_vertex_main, flux_sky_fragment_main);
-    SHR.gfx_pipeline(*debug_shadow_pipeline, main_raster, flux_debug_shadow_vertex_main, flux_debug_shadow_fragment_main);
-    SHR.gfx_pipeline(*shadow_pipeline, shadow_raster, flux_shadow_vertex_main, flux_shadow_fragment_main);
-    SHR.gfx_pipeline(*grass_shadow_pipeline, shadow_raster, flux_grass_shadow_vertex_main, flux_shadow_fragment_main);
-
-    SHR.compute_pipeline(*init_compute_pipeline, flux_init_compute);
-    SHR.compute_pipeline(*compute_pipeline, flux_step_compute);
-    SHR.compute_pipeline(*grass_spawn_compute_pipeline, flux_grass_spawn_compute);
-    SHR.gfx_pipeline    (*grass_pipeline, main_raster, flux_grass_vertex_main, flux_grass_fragment_main);
+    SHR.init(*shader);
+    SHR.init(*sky_shader);
+    SHR.init(*debug_shadow_shader);
+    SHR.init(*shadow_shader);
+    SHR.init(*grass_shadow_shader);
+    SHR.init(*init_compute);
+    SHR.init(*step_compute);
+    SHR.init(*grass_spawn_compute);
+    SHR.init(*grass_shader);
 
     gpu_arena = gpu_make_arena(1024 * 1024 * 196, label = "flux arena");
 
@@ -497,7 +481,7 @@ tick :: () {
 
     if !state_initialized {
         init_state_start := current_time_monotonic();
-        result = gpu_set_pipeline(cmd_buff, init_compute_pipeline);
+        result = gpu_set_pipeline(cmd_buff, init_compute.pipeline);
         assert(result == .SUCCESS, tprint("Flux init compute set pipeline failed: %", result));
         gpu_dispatch_buffers(cmd_buff, .[state.a_gpu], .[(FLUX_CELL_COUNT + 63) / 64, 1, 1]);
         gpu_dispatch_buffers(cmd_buff, .[state.b_gpu], .[(FLUX_CELL_COUNT + 63) / 64, 1, 1]);
@@ -510,7 +494,7 @@ tick :: () {
     copy_result := gpu_memcpy(cmd_buff, payload.gpu, render_params.gpu, size_of(Flux_Render_Params));
     assert(copy_result == .SUCCESS, tprint("Flux params memcpy failed: %", copy_result));
 
-    result = gpu_set_pipeline(cmd_buff, compute_pipeline);
+    result = gpu_set_pipeline(cmd_buff, step_compute.pipeline);
     assert(result == .SUCCESS, tprint("Flux compute set pipeline failed: %", result));
     gpu_dispatch_buffers(cmd_buff, .[state.a_gpu, control.gpu], .[(FLUX_CELL_COUNT + 63) / 64, 1, 1]);
 
@@ -521,7 +505,7 @@ tick :: () {
     }
 
     if render_grass {
-        result = gpu_set_pipeline(cmd_buff, grass_spawn_compute_pipeline);
+        result = gpu_set_pipeline(cmd_buff, grass_spawn_compute.pipeline);
         assert(result == .SUCCESS, tprint("Flux grass compute set pipeline failed: %", result));
         gpu_dispatch_buffers(cmd_buff, .[payload.gpu], .[(FLUX_GRASS_INSTANCE_COUNT + 63) / 64, 1, 1]);
     }
@@ -549,10 +533,10 @@ tick :: () {
         }, .COLOR_ATTACHMENT_WRITE, .SHADER_READ);
 
         gpu_set_depth_stencil_state(cmd_buff, {depth_test = .LESS, depth_mode = .READ | .WRITE,});
-        gpu_set_pipeline(cmd_buff, shadow_pipeline);
+        gpu_set_pipeline(cmd_buff, shadow_shader.pipeline);
         gpu_draw_instanced_direct(cmd_buff, payload.gpu, draw_data.num_vertices, draw_data.num_instances);
         if render_grass {
-            gpu_set_pipeline(cmd_buff, grass_shadow_pipeline);
+            gpu_set_pipeline(cmd_buff, grass_shadow_shader.pipeline);
             gpu_draw_instanced_direct(cmd_buff, payload.gpu, FLUX_GRASS_VERTS_PER_INSTANCE, cast(u32) FLUX_GRASS_INSTANCE_COUNT);
         }
     }
@@ -579,22 +563,22 @@ tick :: () {
             ]
         }, .COLOR_ATTACHMENT_WRITE, .COLOR_ATTACHMENT_WRITE);
         gpu_set_depth_stencil_state(cmd_buff, {depth_test = .ALWAYS, depth_mode = .NONE,});
-        gpu_set_pipeline(cmd_buff, sky_pipeline);
+        gpu_set_pipeline(cmd_buff, sky_shader.pipeline);
         sky_draw_result := gpu_draw_instanced_direct(cmd_buff, payload.gpu, 6, 1);
 
         gpu_set_depth_stencil_state(cmd_buff, {depth_test = .LESS, depth_mode = .READ | .WRITE,});
-        gpu_set_pipeline(cmd_buff, graphics_pipeline);
+        gpu_set_pipeline(cmd_buff, shader.pipeline);
         gpu_draw_instanced_direct(cmd_buff, payload.gpu, draw_data.num_vertices, draw_data.num_instances);
 
         if render_grass {
             gpu_set_depth_stencil_state(cmd_buff, {depth_test = .LESS, depth_mode = .READ | .WRITE,});
-            gpu_set_pipeline(cmd_buff, grass_pipeline);
+            gpu_set_pipeline(cmd_buff, grass_shader.pipeline);
             gpu_draw_instanced_direct(cmd_buff, payload.gpu, FLUX_GRASS_VERTS_PER_INSTANCE, cast(u32) FLUX_GRASS_INSTANCE_COUNT);
         }
 
         if show_shadow_debug {
             gpu_set_depth_stencil_state(cmd_buff, {depth_test = .ALWAYS, depth_mode = .NONE,});
-            gpu_set_pipeline(cmd_buff, debug_shadow_pipeline);
+            gpu_set_pipeline(cmd_buff, debug_shadow_shader.pipeline);
             gpu_draw_instanced_direct(cmd_buff, payload.gpu, 6, 1);
         }
     }
@@ -658,3 +642,15 @@ ensure_shadow_targets :: () {
 #load "shaders/flux_shader.jai";
 Input :: #import "Input";
 ImGui :: #import "ImGui";
+
+main_raster: Gpu_Raster_Desc : {
+    cull = .NONE,
+    depth_format = .D32_SFLOAT,
+    color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
+};
+
+shadow_raster: Gpu_Raster_Desc : {
+    cull = .NONE,
+    depth_format = .D32_SFLOAT,
+    color_targets = .[ .{format = .R32_SFLOAT} ],
+};
