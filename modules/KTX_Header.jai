@@ -64,6 +64,8 @@ Image_Descriptor :: struct {
     levels: [..]struct {
         fileOffset: s64;
         sizeInBytes: s64;
+        faceSizeInBytes: s64;
+        faceStrideInBytes: s64;
         bytesPerRow: s64;
         bytesPerImage: s64;
         size: IntSize;
@@ -139,7 +141,6 @@ ktx1_load_from_memory :: (file_bytes: string, verbose: bool) -> bool, Image_Desc
     bytes_read: s64 = 0;
     while bytes_read < header.bytesOfKeyValueData {
         kvCount: u32 = read_u32(*cursor);
-        print("kvCount: %\n", kvCount);
 
         if kvCount & 0x03 { // Align to 4 bytes boundary.
             kvCount = cast(u32)((kvCount + 0x04) & ~0x03);
@@ -153,16 +154,14 @@ ktx1_load_from_memory :: (file_bytes: string, verbose: bool) -> bool, Image_Desc
 
         // read the kv pair separated by \0
         values: [2][..]u8;
+        values[0].allocator = temp;
+        values[1].allocator = temp;
         vindex := 0;
         for c: buffer {
             if !c vindex +=1;
             if vindex > 1 break;
             if c array_add(*values[vindex], c);
         }
-
-        key   := string.{values[0].count, values[0].data};
-        value := string.{values[1].count, values[1].data};
-        log("K: %, V: %", key, value);
 
         bytes_read += 4 + kvCount;
     }
@@ -172,6 +171,7 @@ ktx1_load_from_memory :: (file_bytes: string, verbose: bool) -> bool, Image_Desc
     GL_COMPRESSED_RGBA_ASTC_6x6_KHR :: 0x93B4;
     GL_RGBA8 :: 0x8058;
     GL_SRGB8_ALPHA8 :: 0x8C43;
+    GL_R11F_G11F_B10F :: 0x8C3A;
     block_dim: s64 = 1;
 
     // Read mipmap sizes and offsets.
@@ -194,6 +194,10 @@ ktx1_load_from_memory :: (file_bytes: string, verbose: bool) -> bool, Image_Desc
             pixelFormat = .RGBA8Unorm_sRGB;
             bytesPerPixel = 4;
             compressed = false;
+        case GL_R11F_G11F_B10F;
+            pixelFormat = .RG11B10Float;
+            bytesPerPixel = 4;
+            compressed = false;
         case;
             assert(false, "unhandled glInternalFormat in ktx1 texture: %", header.glInternalFormat);
         }
@@ -202,11 +206,12 @@ ktx1_load_from_memory :: (file_bytes: string, verbose: bool) -> bool, Image_Desc
     imageDataSizeInBytes = 0;
     // record the offset and size of each mipmap level
     for level: 0..header.numberOfMipmapLevels-1 {
-        levelSizeInBytes: u32 = read_u32(*cursor);
+        imageSizePerFace: u32 = read_u32(*cursor);
         levelSize := IntSize.{ width = header.pixelWidth >> level, height = header.pixelHeight >> level, depth = 1 };
+        face_stride_in_bytes := cast(s64) imageSizePerFace;
+        if face_stride_in_bytes & 0x03 face_stride_in_bytes = (face_stride_in_bytes + 3) & ~cast(s64) 3;
+        levelSizeInBytes := face_stride_in_bytes * cast(s64) max(header.numberOfFaces, 1);
 
-        // 4 byte boundary
-        if levelSizeInBytes & 0x03 levelSizeInBytes = (levelSizeInBytes + 0x04) & 0x03;
         // update the total amount of the image and get the current file offset.
         imageDataSizeInBytes += levelSizeInBytes;
         levelFileOffset := cursor.data - original_cursor.data;
@@ -227,6 +232,8 @@ ktx1_load_from_memory :: (file_bytes: string, verbose: bool) -> bool, Image_Desc
         array_add(*result.levels, .{
             fileOffset = levelFileOffset,
             sizeInBytes = levelSizeInBytes,
+            faceSizeInBytes = cast(s64) imageSizePerFace,
+            faceStrideInBytes = face_stride_in_bytes,
             bytesPerRow = bytesPerRow,
             bytesPerImage = bytesPerImage,
             size = levelSize,
@@ -339,6 +346,8 @@ ktx2_load_from_memory :: (file_bytes: string, verbose: bool) -> bool, Image_Desc
         array_add(*result.levels, .{
             fileOffset = xx lvl.byteOffset,
             sizeInBytes = xx lvl.byteLength,
+            faceSizeInBytes = ifx result.faceCount > 1 then cast(s64) lvl.byteLength / cast(s64) result.faceCount else xx lvl.byteLength,
+            faceStrideInBytes = ifx result.faceCount > 1 then cast(s64) lvl.byteLength / cast(s64) result.faceCount else xx lvl.byteLength,
             bytesPerRow = bytesPerRow,
             bytesPerImage = bytesPerRow * cast(s64)levelSize.height,
             size = levelSize,

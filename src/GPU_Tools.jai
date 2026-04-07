@@ -43,10 +43,35 @@ Gpu_Frame_Ring :: struct($T: Type, $N: s64 = SGPU_FRAMES_IN_FLIGHT) {
     view: Gpu_View(T);
 }
 
+Gpu_Frame_View :: struct($T: Type, $N: s64 = SGPU_FRAMES_IN_FLIGHT) {
+    view: Gpu_View(T);
+    items_per_frame: s64;
+}
+
+Gpu_Buffer_Ring :: struct($T: Type, $N: s64 = SGPU_FRAMES_IN_FLIGHT) {
+    buffers: [N]Gpu_Buffer(T);
+}
+
 sgpu_make_frame_ring :: (arena: *Gpu_Arena, $T: Type, min_alignment: s64 = 16) -> Gpu_Frame_Ring(T) {
     return .{
         view = gpu_alloc_view(arena, T, SGPU_FRAMES_IN_FLIGHT, min_alignment),
     };
+}
+
+sgpu_make_frame_view :: (arena: *Gpu_Arena, $T: Type, items_per_frame: s64, min_alignment: s64 = 16) -> Gpu_Frame_View(T) {
+    assert(items_per_frame > 0, "sgpu_make_frame_view requires items_per_frame > 0.");
+    return .{
+        view = gpu_alloc_view(arena, T, SGPU_FRAMES_IN_FLIGHT * items_per_frame, min_alignment),
+        items_per_frame = items_per_frame,
+    };
+}
+
+gpu_make_buffer_ring :: ($T: Type, memory_type: Memory_Type = .DEFAULT, label := "") -> Gpu_Buffer_Ring(T) {
+    ring: Gpu_Buffer_Ring(T);
+    for i: 0..SGPU_FRAMES_IN_FLIGHT-1 {
+        ring.buffers[i] = gpu_alloc_buffer(T, memory_type, label = ifx label.count != 0 then tprint("% %", label, i) else "");
+    }
+    return ring;
 }
 
 sgpu_arena_alloc_frame_ring :: (arena: *Gpu_Arena, $T: Type, min_alignment: s64 = 16) -> (*[SGPU_FRAMES_IN_FLIGHT] T, Gpu_Ptr) {
@@ -119,6 +144,23 @@ sgpu_frame_ring_slot :: (ring: *Gpu_Frame_Ring($T), frame_number: s64 = -1) -> G
     };
 }
 
+sgpu_frame_view_slot :: (ring: *Gpu_Frame_View($T), frame_number: s64 = -1) -> Gpu_View(T) {
+    idx := sgpu_frame_ring_index(frame_number);
+    base := idx * ring.items_per_frame;
+    return .{
+        cpu = .{
+            data = ring.view.cpu.data + base,
+            count = ring.items_per_frame,
+        },
+        gpu = ring.view.gpu + (base * size_of(T)).(Gpu_Ptr),
+    };
+}
+
+gpu_buffer_ring_slot :: (ring: *Gpu_Buffer_Ring($T), frame_number: s64 = -1) -> Gpu_Buffer(T) #expand {
+    idx := sgpu_frame_ring_index(frame_number);
+    return ring.buffers[idx];
+}
+
 sgpu_frame_ring_cpu_slot :: (ring: *[SGPU_FRAMES_IN_FLIGHT] $T, frame_number: s64 = -1) -> *T #expand {
     idx := sgpu_frame_ring_index(frame_number);
     return cast(*T) ring + idx;
@@ -141,6 +183,31 @@ gpu_begin_scoped_render_pass :: (cmd_buf: Gpu_Command_Buffer, desc: Gpu_Render_P
 // some helper functions for deleting gpu resources
 //
 
+Sampled_Texture :: struct {
+    texture: Gpu_Texture;
+    view: Gpu_Texture_View;
+}
+
+Texture_Ring :: struct {
+    desc: Gpu_Texture_Desc;
+    textures: [SGPU_FRAMES_IN_FLIGHT]Gpu_Texture;
+    views: [SGPU_FRAMES_IN_FLIGHT]Gpu_Texture_View;
+}
+
+gpu_create_sampled_texture :: (desc: Gpu_Texture_Desc, optional_signal_texture_ready: []Gpu_Timeline_Pair = .[]) -> Gpu_Result, Sampled_Texture {
+    result, texture := gpu_create_texture(desc, optional_signal_texture_ready);
+    if result != .SUCCESS || texture == 0 return result, .{};
+    view := gpu_texture_view(texture);
+    if view == 0 {
+        gpu_free(texture);
+        return .ERROR_TEXTURE_LIMIT_EXCEEDED, .{};
+    }
+    return .SUCCESS, .{
+        texture = texture,
+        view = view,
+    };
+}
+
 gpu_delete :: (texture_view_ptr: *Gpu_Texture_View) {
     if texture_view_ptr == null return;
 
@@ -157,6 +224,23 @@ gpu_delete :: (texture_ptr: *Gpu_Texture) {
     texture_ptr.* = 0;
 }
 
+gpu_delete :: (sampled_texture_ptr: *Sampled_Texture) {
+    if sampled_texture_ptr == null return;
+
+    sampled := sampled_texture_ptr.*;
+    if sampled.view != 0 gpu_free_texture_view(sampled.view);
+    if sampled.texture != 0 gpu_free(sampled.texture);
+    sampled_texture_ptr.* = {};
+}
+
+gpu_delete :: (texture_ring_ptr: *Texture_Ring) {
+    if texture_ring_ptr == null return;
+
+    for *texture_ring_ptr.views if it.* != 0 gpu_free_texture_view(it.*);
+    for *texture_ring_ptr.textures if it.* != 0 gpu_free(it.*);
+    texture_ring_ptr.* = {};
+}
+
 gpu_delete :: (sampler_ptr: *Gpu_Sampler) {
     if sampler_ptr == null return;
 
@@ -171,11 +255,23 @@ gpu_delete :: (gpu_view: *Gpu_View($T)) {
     gpu_view.* = {};
 }
 
+gpu_delete :: (gpu_frame_view: *Gpu_Frame_View($T)) {
+    if gpu_frame_view == null return;
+    gpu_delete(*gpu_frame_view.view);
+    gpu_frame_view.* = {};
+}
+
 gpu_delete :: (gpu_buffer: *Gpu_Buffer($T)) {
     if gpu_buffer == null return;
 
     if gpu_buffer.cpu != null gpu_free(gpu_buffer.cpu);
     gpu_buffer.* = {};
+}
+
+gpu_delete :: (gpu_buffer_ring: *Gpu_Buffer_Ring($T)) {
+    if gpu_buffer_ring == null return;
+    for *gpu_buffer_ring.buffers if it.cpu != null gpu_free(it.cpu);
+    gpu_buffer_ring.* = {};
 }
 
 gpu_delete :: (pipeline: *Gpu_Pipeline) {
@@ -237,6 +333,59 @@ load_texture_rgba8 :: (path: string) -> Gpu_Texture, Gpu_Texture_View {
 
     view := gpu_texture_view(texture);
     return texture, view;
+}
+
+load_sampled_texture_rgba8 :: (path: string) -> Sampled_Texture {
+    texture, view := load_texture_rgba8(path);
+    return .{
+        texture = texture,
+        view = view,
+    };
+}
+
+texture_ring_current_slot :: (frame_number: s64 = -1) -> s64 {
+    if frame_number < 0 frame_number = cast(s64) gpu_submission_frame_index();
+    return sgpu_frame_ring_index(frame_number);
+}
+
+texture_ring_current_view :: (ring: *Texture_Ring, frame_number: s64 = -1) -> Gpu_Texture_View {
+    if ring == null return 0;
+    return ring.views[texture_ring_current_slot(frame_number)];
+}
+
+texture_ring_current_texture :: (ring: *Texture_Ring, frame_number: s64 = -1) -> Gpu_Texture {
+    if ring == null return 0;
+    return ring.textures[texture_ring_current_slot(frame_number)];
+}
+
+ensure_texture_ring :: (ring: *Texture_Ring, desc: Gpu_Texture_Desc) -> bool {
+    if ring == null return false;
+    if desc.dimensions[0] == 0 || desc.dimensions[1] == 0 || desc.dimensions[2] == 0 return false;
+
+    same_desc :=
+        ring.textures[0] != 0 &&
+        ring.desc.type == desc.type &&
+        ring.desc.dimensions[0] == desc.dimensions[0] &&
+        ring.desc.dimensions[1] == desc.dimensions[1] &&
+        ring.desc.dimensions[2] == desc.dimensions[2] &&
+        ring.desc.mip_count == desc.mip_count &&
+        ring.desc.layer_count == desc.layer_count &&
+        ring.desc.sample_count == desc.sample_count &&
+        ring.desc.format == desc.format &&
+        ring.desc.usage == desc.usage;
+    if same_desc return true;
+
+    gpu_delete(ring);
+    ring.desc = desc;
+    for i: 0..SGPU_FRAMES_IN_FLIGHT-1 {
+        result, texture := gpu_create_texture(desc);
+        assert(result == .SUCCESS && texture != 0, "ensure_texture_ring: failed creating slot %: %", i, result);
+        view := gpu_texture_view(texture);
+        assert(view != 0, "ensure_texture_ring: failed creating view for slot %", i);
+        ring.textures[i] = texture;
+        ring.views[i] = view;
+    }
+    return true;
 }
 
 quat_from_euler_deg :: (deg: Vector3) -> Quaternion {

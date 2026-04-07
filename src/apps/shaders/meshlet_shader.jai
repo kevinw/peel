@@ -39,6 +39,19 @@ Meshlet_Grid_Params :: struct {
     alpha_mode: u32;
     alpha_cutoff: float;
     sampler_index: u32;
+    ibl_texture_index: u32;
+    dfg_texture_index: u32;
+    ibl_max_lod: float;
+    env_intensity: float;
+    env_sh0: Vector4;
+    env_sh1: Vector4;
+    env_sh2: Vector4;
+    env_sh3: Vector4;
+    env_sh4: Vector4;
+    env_sh5: Vector4;
+    env_sh6: Vector4;
+    env_sh7: Vector4;
+    env_sh8: Vector4;
     batch_first_instance: u32;
     batch_instance_count: u32;
     batch_max_meshlet_count: u32;
@@ -157,6 +170,36 @@ scene_material_alpha :: (params: *Meshlet_Grid_Params, uv: Vector2) -> float {
         alpha *= sample_2d(params.opacity_texture_index, params.sampler_index, uv).x;
     }
     return alpha;
+}
+
+sample_env_sh :: (params: *Meshlet_Grid_Params, n: Vector3) -> Vector3 {
+    x := n.x;
+    y := n.y;
+    z := n.z;
+    basis0 := cast(float) 0.282095;
+    basis1 := cast(float) 0.488603 * y;
+    basis2 := cast(float) 0.488603 * z;
+    basis3 := cast(float) 0.488603 * x;
+    basis4 := cast(float) 1.092548 * x * y;
+    basis5 := cast(float) 1.092548 * y * z;
+    basis6 := cast(float) 0.315392 * (3.0 * z * z - 1.0);
+    basis7 := cast(float) 1.092548 * x * z;
+    basis8 := cast(float) 0.546274 * (x * x - y * y);
+
+    color := params.env_sh0.xyz * basis0;
+    color += params.env_sh1.xyz * basis1;
+    color += params.env_sh2.xyz * basis2;
+    color += params.env_sh3.xyz * basis3;
+    color += params.env_sh4.xyz * basis4;
+    color += params.env_sh5.xyz * basis5;
+    color += params.env_sh6.xyz * basis6;
+    color += params.env_sh7.xyz * basis7;
+    color += params.env_sh8.xyz * basis8;
+    return .{
+        max(color.x, 0.0),
+        max(color.y, 0.0),
+        max(color.z, 0.0),
+    };
 }
 
 mesh_main :: (
@@ -491,7 +534,22 @@ fragment_main :: (
     spec_strength := mix(0.035, 0.22, metallic) * mix(1.0, 0.2, roughness);
     sun_col := mix(Vector3.{1.0, 0.96, 0.9}, Vector3.{1.16, 0.62, 0.32}, 1.0 - clamp(abs(sun_dir.y) * 2.2, 0.0, 1.0));
     specular := sun_col * (pow(ndh, spec_power) * spec_strength);
-    shaded := ambient + diffuse + specular;
+    F0 := mix(Vector3.{0.04, 0.04, 0.04}, base_rgb, metallic);
+    ndv := clamp(dot(N, V), 0.0, 1.0);
+    env_diffuse := Vector3.{0.0, 0.0, 0.0};
+    env_specular := Vector3.{0.0, 0.0, 0.0};
+    if params.ibl_texture_index != SCENE_INVALID_TEXTURE_INDEX && params.dfg_texture_index != SCENE_INVALID_TEXTURE_INDEX {
+        irradiance := sample_env_sh(params, N);
+        env_diffuse = irradiance * base_rgb * (1.0 - metallic);
+
+        R := reflect(-V, N);
+        prefiltered := sample_cube_lod(params.ibl_texture_index, params.sampler_index, R, roughness * params.ibl_max_lod).xyz;
+        brdf := sample_2d(params.dfg_texture_index, params.sampler_index, Vector2.{ndv, roughness}).xy;
+        env_specular = prefiltered * (F0 * brdf.x + Vector3.{brdf.y, brdf.y, brdf.y});
+    }
+
+    ibl := (env_diffuse + env_specular) * (params.env_intensity * ao);
+    shaded := ambient + diffuse + specular + ibl;
 
     return .{
         shaded.x,
