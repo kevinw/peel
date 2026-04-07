@@ -20,12 +20,6 @@ Meshlet_Grid_Draw_Batch :: struct {
     max_meshlet_count: u32;
 }
 
-Meshlet_Grid_Debug_Mode :: enum u32 {
-    SHADED;
-    LODS;
-    MESHLETS;
-}
-
 
 Meshlet_Grid_Params :: struct {
     camera_vp: Matrix4;

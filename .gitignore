@@ -97,3 +97,5 @@ dist/blender_scene
 dist/blender_scene.dylib
 *.blend1
 *.peelscene
+dist/empty_window
+dist/empty_window.dylib

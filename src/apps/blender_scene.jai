@@ -18,41 +18,7 @@ Scene_Instance :: struct {
     tint: Vector4;
 }
 
-Meshlet_Grid_Debug_Mode :: enum u32 {
-    SHADED;
-    LODS;
-    CHUNKS;
-    MESHLETS;
-}
-
 last_frustum_planes: [6]Vector4;
-
-Meshlet_Grid_Params :: struct {
-    camera_vp: Matrix4;
-    frustum_planes: [6]Vector4;
-    eye_position: Vector3;
-    lod_projection_scale: float;
-    lod_radius_threshold: float;
-    lod_metric_power: float;
-    debug_mode: u32;
-    light_dir: Vector3;
-    base_color_factor: Vector4;
-    batch_mesh_index: u32;
-    base_color_texture_index: u32;
-    opacity_texture_index: u32;
-    normal_texture_index: u32;
-    roughness_texture_index: u32;
-    ao_texture_index: u32;
-    alpha_mode: u32;
-    alpha_cutoff: float;
-    sampler_index: u32;
-    batch_first_instance: u32;
-    batch_instance_count: u32;
-    batch_max_meshlet_count: u32;
-    batch_meshlet_chunk_count: u32;
-    batch_object_group_start: u32;
-    pad: u32;
-}
 
 BLENDER_SCENE_POLL_SECONDS :: 0.20;
 MESHLET_TASK_EMIT_MESHLET_COUNT : u32 : 64;
@@ -121,9 +87,7 @@ using app: struct {
     freeze_culling_set := false;
     frozen_culling_cam_matrix: Matrix4;
 
-    using draw: Meshlet_Grid_Params = {
-        debug_mode = cast(u32) Meshlet_Grid_Debug_Mode.SHADED,
-    };
+    using draw: Meshlet_Grid_Params;
 }
 
 on_dll_init :: () {
@@ -257,6 +221,8 @@ tick :: () {
                 batch_material := materials.cpu[meshes.cpu[it.mesh_index].material_index];
                 primary_params := sgpu_frame_param_alloc(*params, base_params);
                 primary_params.cpu.base_color_factor = batch_material.base_color_factor;
+                primary_params.cpu.metallic_factor = batch_material.metallic_factor;
+                primary_params.cpu.roughness_factor = batch_material.roughness_factor;
                 primary_params.cpu.batch_mesh_index = it.mesh_index;
                 primary_params.cpu.base_color_texture_index = batch_material.base_color_texture_index;
                 primary_params.cpu.opacity_texture_index = batch_material.opacity_texture_index;
@@ -313,15 +279,8 @@ show_ui :: () {
         if freeze_culling freeze_culling_set = true;
     }
 
-    inspect("last_frustum_planes", *last_frustum_planes);
-    debug_mode_value := draw.debug_mode;
-    if RadioButton("Shaded", debug_mode_value == cast(u32) Meshlet_Grid_Debug_Mode.SHADED) draw.debug_mode = cast(u32) Meshlet_Grid_Debug_Mode.SHADED;
-    SameLine();
-    if RadioButton("LODs", debug_mode_value == cast(u32) Meshlet_Grid_Debug_Mode.LODS) draw.debug_mode = cast(u32) Meshlet_Grid_Debug_Mode.LODS;
-    SameLine();
-    if RadioButton("Chunks", debug_mode_value == cast(u32) Meshlet_Grid_Debug_Mode.CHUNKS) draw.debug_mode = cast(u32) Meshlet_Grid_Debug_Mode.CHUNKS;
-    SameLine();
-    if RadioButton("Meshlets", debug_mode_value == cast(u32) Meshlet_Grid_Debug_Mode.MESHLETS) draw.debug_mode = cast(u32) Meshlet_Grid_Debug_Mode.MESHLETS;
+    //inspect("last_frustum_planes", *last_frustum_planes);
+    inspect("Debug Mode", *debug_mode);
     SliderFloat("LOD Screen Radius", *lod_screen_radius, 8.0, 1024.0);
     SliderFloat("LOD Power", *lod_distance_power, 0.5, 2.0);
 } @on_ui
@@ -358,7 +317,7 @@ apply_debug_env_overrides :: () {
     if debug_mode_text.count != 0 {
         debug_mode_value, ok := string_to_int(debug_mode_text);
         assert(ok, "PEEL_MESHLET_DEBUG_MODE must be an integer, got '%'.", debug_mode_text);
-        draw.debug_mode = cast(u32) debug_mode_value;
+        constants.debug_mode = cast(Meshlet_Grid_Debug_Mode) debug_mode_value;
     }
 
     debug_batch_text := getenv_string("PEEL_MESHLET_BATCH");
@@ -395,7 +354,14 @@ spawn_live_blender :: () {
     }
 
     launch_args := string.[script_path, source_path];
-    launch_cmd := tprint("nohup % >/tmp/peel_blender_live.log 2>&1 &", Process_Module.get_quoted_command_string(launch_args));
+
+    // our build of blender was crashing with metal validation layers enabled, so I'm clearing them here - @kev Apr 2026
+    cleared_env := "env -u MTL_SHADER_VALIDATION -u MTL_SHADER_VALIDATION_REPORT_TO_STDERR -u MTL_LOG_TO_STDERR -u MTL_DEBUG_LAYER -u MTL_LOG_LEVEL -u MTL_LOG_BUFFER_SIZE";
+
+    launch_cmd := tprint(
+        "nohup % % > >(tee -a /tmp/peel_blender_live.log) 2> >(tee -a /tmp/peel_blender_live.log >&2) &",
+        cleared_env,
+        Process_Module.get_quoted_command_string(launch_args));
     result, _, _, timeout_reached := Process_Module.run_command(
         "/bin/zsh", "-lc", launch_cmd,
         working_directory = root,

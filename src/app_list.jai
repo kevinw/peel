@@ -2,6 +2,7 @@ PATH_TO_APP_FILES :: "src/apps";
 APP_CAPTURE_DIR :: ".build/screenshots";
 
 APP_FILES :: string.[
+    "empty_window.jai",
     "textured_triangle.jai",
     "pbr.jai",
     "particles.jai",

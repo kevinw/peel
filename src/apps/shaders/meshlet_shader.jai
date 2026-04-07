@@ -18,6 +18,36 @@ Meshlet_Debug_Flags :: enum_flags u32 {
     TASK_MARKERS         :: (1 << 6);
 }
 
+Meshlet_Grid_Params :: struct {
+    camera_vp: Matrix4;
+    frustum_planes: [6]Vector4;
+    eye_position: Vector3;
+    lod_projection_scale: float;
+    lod_radius_threshold: float;
+    lod_metric_power: float;
+    pad2: u32;
+    light_dir: Vector3;
+    base_color_factor: Vector4;
+    metallic_factor: float;
+    roughness_factor: float;
+    batch_mesh_index: u32;
+    base_color_texture_index: u32;
+    opacity_texture_index: u32;
+    normal_texture_index: u32;
+    roughness_texture_index: u32;
+    ao_texture_index: u32;
+    alpha_mode: u32;
+    alpha_cutoff: float;
+    sampler_index: u32;
+    batch_first_instance: u32;
+    batch_instance_count: u32;
+    batch_max_meshlet_count: u32;
+    batch_meshlet_chunk_count: u32;
+    batch_object_group_start: u32;
+    pad: u32;
+}
+
+
 Fragment_In :: struct {
     position: Vector4; @SV_Position
     color: Vector3; @TEXCOORD0
@@ -29,7 +59,15 @@ Fragment_In :: struct {
 
 Meshlet_Shader_Constants :: struct {
     debug_flags: Meshlet_Debug_Flags = 0;
+    debug_mode: Meshlet_Grid_Debug_Mode = .SHADED;
 } @function_constants
+
+Meshlet_Grid_Debug_Mode :: enum u32 {
+    SHADED;
+    LODS;
+    CHUNKS;
+    MESHLETS;
+}
 
 hash01 :: (x: u32) -> float {
     phase := cast(float) x * cast(float) 12.9898 + cast(float) 78.233;
@@ -135,8 +173,7 @@ mesh_main :: (
     using constants: Meshlet_Shader_Constants
 ) {
     mesh_set_max_output_counts(MESHLET_MAX_VERTICES, MESHLET_MAX_TRIANGLES);
-    debug_synthetic_triangle := (debug_flags & .SYNTHETIC_TRIANGLE) != 0;
-    if debug_synthetic_triangle {
+    if debug_flags & .SYNTHETIC_TRIANGLE != 0 {
         mesh_set_output_counts(3, 1);
         mesh_set_vertex(0, Fragment_In.{
             position = .{-0.55, -0.45, 0.0, 1.0},
@@ -237,9 +274,9 @@ mesh_main :: (
                 world_tangent := normalize(Vector3.{world_tangent4.x, world_tangent4.y, world_tangent4.z});
 
                 color := Vector3.{1.0, 1.0, 1.0};
-                if params.debug_mode == cast(u32) Meshlet_Grid_Debug_Mode.LODS {
+                if debug_mode == .LODS {
                     color = lod_debug_color(lod_from_mesh_index(meshes, params.batch_mesh_index, payload_mesh_index));
-                } else if params.debug_mode == cast(u32) Meshlet_Grid_Debug_Mode.MESHLETS {
+                } else if debug_mode == .MESHLETS {
                     color = meshlet_tint;
                 }
                 vertex_out: Fragment_In = .{
@@ -400,10 +437,11 @@ task_main :: (
 fragment_main :: (
     using input: Fragment_In,
     params: *Meshlet_Grid_Params,
+    using constants: Meshlet_Shader_Constants,
 ) -> Vector4 @SV_Target0 {
     alpha := scene_material_alpha(params, uv);
     if params.alpha_mode == SCENE_ALPHA_MODE_MASK && alpha < params.alpha_cutoff discard();
-    if params.debug_mode != cast(u32) Meshlet_Grid_Debug_Mode.SHADED {
+    if debug_mode != .SHADED {
         return .{color.x, color.y, color.z, 1.0};
     }
 
@@ -432,10 +470,11 @@ fragment_main :: (
     if params.ao_texture_index != SCENE_INVALID_TEXTURE_INDEX {
         ao = sample_2d(params.ao_texture_index, params.sampler_index, uv).x;
     }
-    roughness := 0.82;
+    roughness := clamp(params.roughness_factor, 0.05, 1.0);
     if params.roughness_texture_index != SCENE_INVALID_TEXTURE_INDEX {
-        roughness = sample_2d(params.roughness_texture_index, params.sampler_index, uv).y;
+        roughness = clamp(sample_2d(params.roughness_texture_index, params.sampler_index, uv).y, 0.05, 1.0);
     }
+    metallic := clamp(params.metallic_factor, 0.0, 1.0);
 
     sun_dir := normalize(-params.light_dir);
     L := sun_dir;
@@ -446,9 +485,10 @@ fragment_main :: (
     ndh := max(dot(N, H), 0.0);
 
     ambient := base_rgb * mix(0.18, 0.32, ao);
-    diffuse := base_rgb * wrapped_ndl * 0.74;
+    diffuse_strength := mix(1.0, 0.25, metallic);
+    diffuse := base_rgb * wrapped_ndl * 0.74 * diffuse_strength;
     spec_power := mix(48.0, 5.0, clamp(roughness, 0.0, 1.0));
-    spec_strength := mix(0.18, 0.035, clamp(roughness, 0.0, 1.0));
+    spec_strength := mix(0.035, 0.22, metallic) * mix(1.0, 0.2, roughness);
     sun_col := mix(Vector3.{1.0, 0.96, 0.9}, Vector3.{1.16, 0.62, 0.32}, 1.0 - clamp(abs(sun_dir.y) * 2.2, 0.0, 1.0));
     specular := sun_col * (pow(ndh, spec_power) * spec_strength);
     shaded := ambient + diffuse + specular;

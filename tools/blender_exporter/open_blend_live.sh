@@ -7,16 +7,43 @@ BLENDER_BIN="${BLENDER_BIN:-$HOME/src/build_darwin_release/bin/Blender.app/Conte
 LIVE_SYNC_PY="$ROOT/tools/blender_exporter/live_sync.py"
 
 usage() {
-    echo "Usage: $0 <input.blend|--factory-startup> [output.peelscene]" >&2
+    echo "Usage: $0 [--debugger] <input.blend|--factory-startup> [output.peelscene]" >&2
     exit 1
 }
 
-if [[ $# -lt 1 || $# -gt 2 ]]; then
+USE_DEBUGGER=0
+POSITIONAL_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --debugger)
+            USE_DEBUGGER=1
+            shift
+            ;;
+        --)
+            shift
+            while [[ $# -gt 0 ]]; do
+                POSITIONAL_ARGS+=("$1")
+                shift
+            done
+            ;;
+        -*)
+            echo "Unknown option: $1" >&2
+            usage
+            ;;
+        *)
+            POSITIONAL_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+if [[ ${#POSITIONAL_ARGS[@]} -lt 1 || ${#POSITIONAL_ARGS[@]} -gt 2 ]]; then
     usage
 fi
 
-INPUT_PATH="$1"
-OUTPUT_PATH="${2:-}"
+INPUT_PATH="${POSITIONAL_ARGS[1]}"
+OUTPUT_PATH="${POSITIONAL_ARGS[2]:-}"
 
 if [[ ! -x "$BLENDER_BIN" ]]; then
     echo "Missing Blender binary: $BLENDER_BIN" >&2
@@ -46,4 +73,8 @@ else
     BLENDER_ARGS=("$INPUT_PATH" "${BLENDER_ARGS[@]}")
 fi
 
-"$BLENDER_BIN" "${BLENDER_ARGS[@]}"
+if (( USE_DEBUGGER )); then
+    exec lldb -o run -- "$BLENDER_BIN" "${BLENDER_ARGS[@]}"
+fi
+
+exec "$BLENDER_BIN" "${BLENDER_ARGS[@]}"

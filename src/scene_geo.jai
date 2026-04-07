@@ -18,6 +18,8 @@ LOD_Simplify_Attributes :: struct {
 
 Scene_Material :: struct {
     base_color_factor: Vector4;
+    metallic_factor: float;
+    roughness_factor: float;
     base_color_texture_index: u32;
     opacity_texture_index: u32;
     normal_texture_index: u32;
@@ -303,8 +305,10 @@ scene_geo_init_from_imported :: (using geo: *Scene_Geo, imported: *Imported_Scen
     if imported.materials.count > 0 {
         for imported.materials {
             material := it;
-            assert(material.base_color_texture_index < texture_views.count, "Imported texture index % out of range %.", material.base_color_texture_index, texture_views.count);
-            material.base_color_texture_index = gpu_texture_view_index(texture_views[material.base_color_texture_index]);
+            if material.base_color_texture_index != SCENE_INVALID_TEXTURE_INDEX {
+                assert(material.base_color_texture_index < texture_views.count, "Imported texture index % out of range %.", material.base_color_texture_index, texture_views.count);
+                material.base_color_texture_index = gpu_texture_view_index(texture_views[material.base_color_texture_index]);
+            }
             if material.opacity_texture_index != SCENE_INVALID_TEXTURE_INDEX {
                 assert(material.opacity_texture_index < texture_views.count, "Imported opacity texture index % out of range %.", material.opacity_texture_index, texture_views.count);
                 material.opacity_texture_index = gpu_texture_view_index(texture_views[material.opacity_texture_index]);
@@ -1066,7 +1070,9 @@ load_peel_blender_scene_into_imported_scene :: (imported: *Imported_Scene, path:
                 material.base_color[2],
                 material.base_color[3],
             },
-            base_color_texture_index = 0,
+            metallic_factor = material.metallic,
+            roughness_factor = material.roughness,
+            base_color_texture_index = SCENE_INVALID_TEXTURE_INDEX,
             opacity_texture_index = SCENE_INVALID_TEXTURE_INDEX,
             normal_texture_index = SCENE_INVALID_TEXTURE_INDEX,
             roughness_texture_index = SCENE_INVALID_TEXTURE_INDEX,
@@ -1212,6 +1218,8 @@ load_model_into_imported_scene :: (imported: *Imported_Scene, path: string) {
         alpha_mode, alpha_cutoff := detect_material_alpha_mode(scene, it, imported.*, base_color_load.texture_index, opacity_texture_index, base_color_load.texture_flags);
         array_add(*imported.materials, .{
             base_color_factor = .{1.0, 1.0, 1.0, 1.0},
+            metallic_factor = 0.0,
+            roughness_factor = 0.82,
             base_color_texture_index = base_color_load.texture_index,
             opacity_texture_index = opacity_texture_index,
             normal_texture_index = normal_texture_index,

@@ -46,7 +46,6 @@ init :: (using shader: *Shader, loc: Source_Code_Location = #caller_location) ->
         return tprint(#string END
 G :: #import,file "%";
 shader_source, shader_meta := %, %;
-assert(shader_source.count > 0, "Transpilation failed for graphics shaders '%', '%'.");
 assert(shader_meta.entry_id.count > 0, "Missing shader hot-reload entry id for graphics shaders '%', '%'.");
 ok := shader_hot_reload_create_and_register_graphics_pipeline_with_entry_id(shader_meta.entry_id, *shader.pipeline, cast([]u8) shader_source, raster_desc);
 if ok shader_hot_reload_reset_function_constant_variants(cast(*Shader_Base) shader);
@@ -89,7 +88,6 @@ init :: (using compute_shader: *Compute_Shader, loc: Source_Code_Location = #cal
         return tprint(#string END
 G :: #import,file "%";
 shader_source, shader_meta := %, %;
-assert(shader_source.count > 0, "Transpilation failed for compute shader '%'.");
 assert(shader_meta.entry_id.count > 0, "Missing shader hot-reload entry id for compute shader '%'.");
 ok := shader_hot_reload_create_and_register_compute_pipeline_with_entry_id(shader_meta.entry_id, *pipeline, cast([]u8) shader_source);
 if ok shader_hot_reload_reset_function_constant_variants(cast(*Shader_Base) compute_shader);
@@ -466,4 +464,3 @@ return shader_hot_reload_create_and_register_mesh_pipeline_with_entry_id(shader_
 END, path_to_shader_module, bundle_expr, meta_expr, mesh_name, fragment_name, mesh_name, fragment_name, mesh_name, fragment_name);
     };
 }
-

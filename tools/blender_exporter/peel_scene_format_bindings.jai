@@ -7,7 +7,7 @@
 
 
 PEEL_SCENE_FILE_MAGIC :: "PEBLEND2";
-PEEL_SCENE_FILE_VERSION :: 2;
+PEEL_SCENE_FILE_VERSION :: 3;
 
 PeelSceneFileHeader :: struct {
     magic:               [8] u8;
@@ -22,6 +22,8 @@ PeelSceneFileHeader :: struct {
 
 PeelSceneFileMaterial :: struct {
     base_color: [4] float;
+    metallic:   float;
+    roughness:  float;
 }
 
 PeelSceneFileMesh :: struct {

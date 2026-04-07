@@ -498,7 +498,7 @@ add_build_string_to_module :: (using p: *Globals_Reload_Metaprogram_Plugin, str:
     // This corresponds to the "module" which is your application/DLL.
     // Passing it to add_build_string causes a crash as of Oct 2025, but the workaround is to just use add_build_string without a message_import argument.
 
-    if message_import.fully_pathed_filename {
+    if message_import && message_import.fully_pathed_filename {
         add_build_string(str, p.workspace, message_import);
     } else {
         add_build_string(str, p.workspace);

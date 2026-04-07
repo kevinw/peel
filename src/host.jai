@@ -26,7 +26,7 @@ main :: () {
     #if !RELEASE {
         Debug.init();
         Debug.set_report_mode(interactive = false);
-
+        context.assertion_failed = Debug.break_assert;
         setup_env_vars();
     }
 

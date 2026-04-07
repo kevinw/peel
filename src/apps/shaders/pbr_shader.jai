@@ -3,8 +3,6 @@
 #import "Math";
 
 PBR_PI :: cast(float) 3.1415926535;
-PBR_SPHERE_SEG_X :: 64;
-PBR_SPHERE_SEG_Y :: 48;
 
 PBR_Vertex_In :: struct {
     vertex_id: u32; @SV_VertexID
@@ -15,14 +13,20 @@ PBR_Vertex_Out :: struct {
     gl_Position: Vector4; @position
     uv: Vector2;
     world_pos: Vector3;
+    world_normal: Vector3;
 }
 
 PBR_Fragment_In :: struct {
     uv: Vector2;
     world_pos: Vector3;
+    world_normal: Vector3;
 }
 
 PBR_Params :: struct {
+    vertices: *Procedural_Geometry_Vertex;
+    indices: *u32;
+    view_proj: Matrix4;
+
     albedo_index: u32;
     normal_index: u32;
     roughness_index: u32;
@@ -92,96 +96,60 @@ geometry_smith :: (N: Vector3, V: Vector3, L: Vector3, roughness: float) -> floa
 
 pbr_vertex_main :: (using in: PBR_Vertex_In, params: *PBR_Params) -> PBR_Vertex_Out {
     using out: PBR_Vertex_Out;
+    idx := params[0].indices[vertex_id];
+    vertex := params[0].vertices[idx];
+    local_pos := vertex.position.xyz;
+    local_normal := normalize(vertex.normal.xyz);
 
-    tri := vertex_id / 3;
-    corner := vertex_id % 3;
-    cell := tri / 2;
-    tri_in_cell := tri % 2;
-
-    cell_x := cell % PBR_SPHERE_SEG_X;
-    cell_y := cell / PBR_SPHERE_SEG_X;
-
-    u0 := cast(float) cell_x / cast(float) PBR_SPHERE_SEG_X;
-    v0 := cast(float) cell_y / cast(float) PBR_SPHERE_SEG_Y;
-    u1 := cast(float) (cell_x + 1) / cast(float) PBR_SPHERE_SEG_X;
-    v1 := cast(float) (cell_y + 1) / cast(float) PBR_SPHERE_SEG_Y;
-
-    a := Vector2.{u0, v0};
-    b := Vector2.{u1, v0};
-    c := Vector2.{u1, v1};
-    d := Vector2.{u0, v1};
-
+    abs_normal := abs(local_normal);
     uv_out: Vector2;
-    if tri_in_cell == 0 {
-        if corner == 0 {
-            uv_out = a;
-        } else if corner == 1 {
-            uv_out = b;
-        } else {
-            uv_out = c;
-        }
+    if abs_normal.x > abs_normal.y && abs_normal.x > abs_normal.z {
+        uv_out = .{local_pos.z, local_pos.y};
+    } else if abs_normal.y > abs_normal.z {
+        uv_out = .{local_pos.x, local_pos.z};
     } else {
-        if corner == 0 {
-            uv_out = a;
-        } else if corner == 1 {
-            uv_out = c;
-        } else {
-            uv_out = d;
-        }
+        uv_out = .{local_pos.x, local_pos.y};
     }
-
-    phi := uv_out.x * (2.0 * PBR_PI);
-    theta := uv_out.y * PBR_PI;
-    sin_theta := sin(theta);
-    cos_theta := cos(theta);
-    sin_phi := sin(phi);
-    cos_phi := cos(phi);
-
-    n := Vector3.{
-        cos_phi * sin_theta,
-        cos_theta,
-        sin_phi * sin_theta,
-    };
 
     _ = instance_id;
+    rot_x := params[0].time * 0.13;
+    rot_y := params[0].time * 0.19;
+    rot_z := params[0].time * 0.11;
 
-    p := params[0];
-    spin := p.time * 0.25;
-    spin_sin := sin(spin);
-    spin_cos := cos(spin);
-    n_rot := Vector3.{
-        n.x * spin_cos - n.z * spin_sin,
-        n.y,
-        n.x * spin_sin + n.z * spin_cos,
-    };
+    sx := sin(rot_x); cx := cos(rot_x);
+    sy := sin(rot_y); cy := cos(rot_y);
+    sz := sin(rot_z); cz := cos(rot_z);
 
-    aspect := 1.0;
-    if p.resolution_y > 0.0 {
-        aspect = p.resolution_x / p.resolution_y;
-    }
-    radius_x := 0.85 / max(aspect, 0.0001);
-    radius_y := 0.85;
+    pos_scaled := local_pos * 0.72;
+    pos_rot_x := Vector3.{pos_scaled.x, pos_scaled.y * cx - pos_scaled.z * sx, pos_scaled.y * sx + pos_scaled.z * cx};
+    pos_rot_y := Vector3.{pos_rot_x.x * cy + pos_rot_x.z * sy, pos_rot_x.y, -pos_rot_x.x * sy + pos_rot_x.z * cy};
+    pos_rot := Vector3.{pos_rot_y.x * cz - pos_rot_y.y * sz, pos_rot_y.x * sz + pos_rot_y.y * cz, pos_rot_y.z};
 
-    gl_Position = .{n_rot.x * radius_x, n_rot.y * radius_y, 0.0, 1.0};
+    normal_rot_x := Vector3.{local_normal.x, local_normal.y * cx - local_normal.z * sx, local_normal.y * sx + local_normal.z * cx};
+    normal_rot_y := Vector3.{normal_rot_x.x * cy + normal_rot_x.z * sy, normal_rot_x.y, -normal_rot_x.x * sy + normal_rot_x.z * cy};
+    normal_rot := normalize(Vector3.{normal_rot_y.x * cz - normal_rot_y.y * sz, normal_rot_y.x * sz + normal_rot_y.y * cz, normal_rot_y.z});
+
+    world4 := Vector4.{pos_rot.x, pos_rot.y, pos_rot.z, 1.0};
+    gl_Position = params[0].view_proj * world4;
     uv = uv_out;
-    world_pos = n_rot;
+    world_pos = pos_rot;
+    world_normal = normal_rot;
     return out;
 } @vertex_shader
 
 pbr_fragment_main :: (using in: PBR_Fragment_In, params: *PBR_Params) -> Vector4 @SV_Target0 {
-    p := params[0];
-    if p.debug_mode == 99 {
+    if params[0].debug_mode == 99 {
         return .{uv.x, uv.y, 0.0, 1.0};
     }
 
-    uv_tiled: Vector2 = .{uv.x * p.uv_scale, uv.y * p.uv_scale};
-    albedo_srgb   := sample_2d(p.albedo_index, p.sampler_index, uv_tiled);
-    normal_tex    := sample_2d(p.normal_index, p.sampler_index, uv_tiled);
-    roughness_tex := sample_2d(p.roughness_index, p.sampler_index, uv_tiled);
-    ao_tex        := sample_2d(p.ao_index, p.sampler_index, uv_tiled);
-    disp_tex      := sample_2d(p.displacement_index, p.sampler_index, uv_tiled);
+    uv_tiled: Vector2 = .{uv.x * params[0].uv_scale, uv.y * params[0].uv_scale};
+    albedo_srgb   := sample_2d(params[0].albedo_index, params[0].sampler_index, uv_tiled);
+    normal_tex    := sample_2d(params[0].normal_index, params[0].sampler_index, uv_tiled);
+    roughness_tex := sample_2d(params[0].roughness_index, params[0].sampler_index, uv_tiled);
+    ao_tex        := sample_2d(params[0].ao_index, params[0].sampler_index, uv_tiled);
+    disp_tex      := sample_2d(params[0].displacement_index, params[0].sampler_index, uv_tiled);
 
-    base_n := normalize(world_pos);
+    base_n := normalize(world_normal);
     tangent := normalize(cross(Vector3.{0.0, 1.0, 0.0}, base_n));
     if dot(tangent, tangent) < 0.0001 {
         tangent = normalize(cross(Vector3.{1.0, 0.0, 0.0}, base_n));
@@ -196,8 +164,8 @@ pbr_fragment_main :: (using in: PBR_Fragment_In, params: *PBR_Params) -> Vector4
     N := normalize(tangent * normal_map.x + bitangent * normal_map.y + base_n * normal_map.z);
 
     disp_height := disp_tex.x * 2.0 - 1.0;
-    hit_pos := world_pos + N * (disp_height * p.displacement_strength);
-    L := normalize(.{p.light_pos_x - hit_pos.x, p.light_pos_y - hit_pos.y, p.light_pos_z - hit_pos.z});
+    hit_pos := world_pos + N * (disp_height * params[0].displacement_strength);
+    L := normalize(.{params[0].light_pos_x - hit_pos.x, params[0].light_pos_y - hit_pos.y, params[0].light_pos_z - hit_pos.z});
     ndl := max(dot(N, L), 0.0);
 
     roughness := clamp(roughness_tex.x, 0.05, 1.0);
@@ -209,11 +177,11 @@ pbr_fragment_main :: (using in: PBR_Fragment_In, params: *PBR_Params) -> Vector4
         pow(clamp(albedo_srgb.z, 0.0, 1.0), 2.2),
     };
 
-    light_tint := Vector3.{p.light_color_r, p.light_color_g, p.light_color_b};
+    light_tint := Vector3.{params[0].light_color_r, params[0].light_color_g, params[0].light_color_b};
     diffuse := Vector3.{
-        albedo.x * light_tint.x * (0.10 + ndl * p.light_intensity * 0.06),
-        albedo.y * light_tint.y * (0.10 + ndl * p.light_intensity * 0.06),
-        albedo.z * light_tint.z * (0.10 + ndl * p.light_intensity * 0.06),
+        albedo.x * light_tint.x * (0.10 + ndl * params[0].light_intensity * 0.06),
+        albedo.y * light_tint.y * (0.10 + ndl * params[0].light_intensity * 0.06),
+        albedo.z * light_tint.z * (0.10 + ndl * params[0].light_intensity * 0.06),
     };
     shade := 1.0 - roughness * 0.35;
     color := Vector3.{
@@ -234,15 +202,15 @@ pbr_fragment_main :: (using in: PBR_Fragment_In, params: *PBR_Params) -> Vector4
     };
 
     out_rgb := final_color;
-    if p.debug_mode == 1 {
+    if params[0].debug_mode == 1 {
         out_rgb = .{albedo_srgb.x, albedo_srgb.y, albedo_srgb.z};
-    } else if p.debug_mode == 2 {
+    } else if params[0].debug_mode == 2 {
         out_rgb = .{normal_tex.x, normal_tex.y, normal_tex.z};
-    } else if p.debug_mode == 3 {
+    } else if params[0].debug_mode == 3 {
         out_rgb = .{roughness_tex.x, roughness_tex.x, roughness_tex.x};
-    } else if p.debug_mode == 4 {
+    } else if params[0].debug_mode == 4 {
         out_rgb = .{ao_tex.x, ao_tex.x, ao_tex.x};
-    } else if p.debug_mode == 5 {
+    } else if params[0].debug_mode == 5 {
         out_rgb = .{disp_tex.x, disp_tex.x, disp_tex.x};
     }
 

@@ -45,7 +45,6 @@ on_compiler_message :: (_p: *Metaprogram_Plugin, msg: *Message) {
 
             struct_decl, struct_node := resolve_struct_declaration_for_global(decl);
             if !struct_has_init_group(struct_decl, struct_node) continue;
-            log("STRUCT INIT GROUP %", decl.name);
             if !struct_node || !struct_node.block || !struct_node.block.members {
                 compiler_report("@init_group currently requires a struct declaration with explicit field declarations.");
                 continue;

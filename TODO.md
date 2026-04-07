@@ -1,4 +1,5 @@
 # TODO
+- figure out why MTL_HUD_ENABLED=1 crashes (by binary search? with empty window?)
 - make a shader live reload test mode on by default which reloads shaders at startup by touching files, or by simulating their being updated
 - make sure @on_unload tears down all gpu_free_arenas
 - putting assert(false) in textured_triangle's on_dll_init didn't stop the program!??!

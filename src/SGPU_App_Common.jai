@@ -7,6 +7,7 @@ ImGui :: #import "ImGui";
 // APP_NAME is like src/apps/boids.jai
 // APP_STEM is like boids
 APP_STEM :: #run String.path_strip_extension(String.path_filename(APP_NAME));
+// TODO: rename APP_NAME
 
 app_needs_recompile: string;
 app_quit_requested := false;

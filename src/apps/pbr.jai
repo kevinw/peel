@@ -20,10 +20,41 @@ Draw_Data :: struct {
     num_instances: u32;
 }
 
-graphics_pipeline: Gpu_Pipeline;
+PBR_Params_CPU :: CPU_Struct(PBR_Params);
+
+PBR_Geometry :: enum s64 {
+    SPHERE   :: 0;
+    TORUS    :: 1;
+    PRISM    :: 2;
+    CONE     :: 3;
+    CYLINDER :: 4;
+    PLANE    :: 5;
+    COUNT    :: 6;
+}
+
+shader: Shader(pbr_vertex_main, pbr_fragment_main, {
+    cull = .CW,
+    depth_format = .D32_SFLOAT,
+    color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
+}); @init
 gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
-pbr_params: Gpu_Buffer(PBR_Params);
+pbr_params: Gpu_Buffer(PBR_Params_CPU);
+pbr_geometry_vertices: Gpu_View(Procedural_Geometry_Vertex);
+pbr_geometry_indices: Gpu_View(u32);
+pbr_meshes: [PBR_Geometry.COUNT]Procedural_Geometry_Mesh_Range;
+pbr_geometry: PBR_Geometry = .TORUS;
+pbr_camera: Editor_Camera = .{
+    position = .{1.35, 0.85, 3.25},
+    yaw = 0.0,
+    pitch = 0.0,
+    move_speed = 2.4,
+    boost_multiplier = 2.0,
+    mouse_sensitivity = 0.0056,
+    move_planar = false,
+    pitch_min = -1.45,
+    pitch_max = 1.45,
+};
 
 pbr_textures: [PBR_TEXTURE_COUNT] Gpu_Texture;
 pbr_views:    [PBR_TEXTURE_COUNT] Gpu_Texture_View;
@@ -34,18 +65,6 @@ pbr_depth_w: u32;
 pbr_depth_h: u32;
 
 on_dll_init :: () {
-    graphics_source := cast([]u8) get_transpiled(.METAL, pbr_vertex_main, pbr_fragment_main);
-    assert(graphics_source.count > 0, "Transpilation failed for PBR shaders.");
-
-    graphics_pipeline = gpu_create_graphics_pipeline(graphics_source, .{
-        cull = .NONE,
-        depth_format = .D32_SFLOAT,
-        color_targets = .[
-            .{format = .B8G8R8A8_UNORM}
-        ],
-    });
-    assert(graphics_pipeline != 0, "PBR graphics pipeline creation failed.");
-
     stbi_set_flip_vertically_on_load(1);
     pbr_textures[PBR_TEX_ALBEDO], pbr_views[PBR_TEX_ALBEDO]             = load_texture_rgba8(PBR_ALBEDO_PATH);
     pbr_textures[PBR_TEX_NORMAL], pbr_views[PBR_TEX_NORMAL]             = load_texture_rgba8(PBR_NORMAL_PATH);
@@ -65,15 +84,18 @@ on_dll_init :: () {
     });
     assert(pbr_sampler != 0, "PBR sampler creation failed.");
 
-    gpu_arena = gpu_make_arena(128 * 1024, label = "pbr arena");
+    gpu_arena = gpu_make_arena(2 * 1024 * 1024, label = "pbr arena");
+    build_geometry();
 
-    pbr_params = gpu_alloc_buffer(PBR_Params);
+    pbr_params = gpu_alloc_buffer(PBR_Params_CPU);
     pbr_params.cpu.* = .{
-        albedo_index = cast(u32) pbr_views[PBR_TEX_ALBEDO] - 1,
-        normal_index = cast(u32) pbr_views[PBR_TEX_NORMAL] - 1,
-        roughness_index = cast(u32) pbr_views[PBR_TEX_ROUGHNESS] - 1,
-        ao_index = cast(u32) pbr_views[PBR_TEX_AO] - 1,
-        displacement_index = cast(u32) pbr_views[PBR_TEX_DISPLACEMENT] - 1,
+        vertices = pbr_geometry_vertices.gpu,
+        indices = pbr_geometry_indices.gpu + cast(Gpu_Ptr) pbr_meshes[pbr_geometry].first_index * size_of(u32),
+        albedo_index = gpu_texture_view_index(pbr_views[PBR_TEX_ALBEDO]),
+        normal_index = gpu_texture_view_index(pbr_views[PBR_TEX_NORMAL]),
+        roughness_index = gpu_texture_view_index(pbr_views[PBR_TEX_ROUGHNESS]),
+        ao_index = gpu_texture_view_index(pbr_views[PBR_TEX_AO]),
+        displacement_index = gpu_texture_view_index(pbr_views[PBR_TEX_DISPLACEMENT]),
 
         sampler_index = cast(u32) pbr_sampler - 1,
 
@@ -87,9 +109,9 @@ on_dll_init :: () {
         light_color_b = 0.95,
         metallic = 0.02,
 
-        camera_pos_x = 0.0,
-        camera_pos_y = 0.2,
-        camera_pos_z = 3.2,
+        camera_pos_x = pbr_camera.position.x,
+        camera_pos_y = pbr_camera.position.y,
+        camera_pos_z = pbr_camera.position.z,
         resolution_x = 1280.0,
         resolution_y = 720.0,
         time = 0.0,
@@ -99,14 +121,19 @@ on_dll_init :: () {
 
     draw_data = .{
         params_gpu = pbr_params.gpu,
-        num_vertices = PBR_SPHERE_SEG_X * PBR_SPHERE_SEG_Y * 6,
+        num_vertices = pbr_meshes[pbr_geometry].index_count,
         num_instances = 1,
     };
 
     _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
     if dims_ok && win_w > 0 && win_h > 0 {
         ensure_depth_target(cast(u32) win_w, cast(u32) win_h);
+        aspect := cast(float) win_w / cast(float) win_h;
+        view := editor_camera_make_view(*pbr_camera);
+        proj := editor_camera_make_projection(*pbr_camera, aspect, 0.05, 50.0);
+        pbr_params.cpu.view_proj = proj * view;
     }
+    editor_camera_set_look_at(*pbr_camera, .{0.0, 0.0, 0.0});
 
     gpu_commit_residency();
 } @on_dll_init
@@ -116,9 +143,31 @@ tick :: () {
     assert(result == .SUCCESS);
     if !swapchain_image return;
 
+    if app_ui_enabled {
+        if ImGui.Begin("PBR") {
+            ImGui.Text("RMB look, WASDQE move");
+            ImGui.SliderFloat("Texture Scale", *pbr_params.cpu.uv_scale, 0.25, 12.0);
+            ImGui.Separator();
+            ImGui.Text("Geometry");
+            if ImGui.RadioButton("Sphere", pbr_geometry == .SPHERE) pbr_geometry = .SPHERE; ImGui.SameLine();
+            if ImGui.RadioButton("Torus", pbr_geometry == .TORUS) pbr_geometry = .TORUS;
+            if ImGui.RadioButton("Prism", pbr_geometry == .PRISM) pbr_geometry = .PRISM; ImGui.SameLine();
+            if ImGui.RadioButton("Cone", pbr_geometry == .CONE) pbr_geometry = .CONE;
+            if ImGui.RadioButton("Cylinder", pbr_geometry == .CYLINDER) pbr_geometry = .CYLINDER; ImGui.SameLine();
+            if ImGui.RadioButton("Plane", pbr_geometry == .PLANE) pbr_geometry = .PLANE;
+        }
+        ImGui.End();
+    }
+
     {
         mx, my, mouse_ok := get_mouse_pointer_position(true);
         _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
+        io := ImGui.GetIO();
+        right_down := (Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_RIGHT] & .DOWN) != 0;
+        _ = editor_camera_update(*pbr_camera, cast(float) dt, mx, my, mouse_ok,
+            allow_move = !io.WantTextInput,
+            allow_look = right_down && !io.WantCaptureMouse,
+            allow_zoom = !io.WantCaptureMouse);
         if dims_ok && win_w > 0 && win_h > 0 {
             pbr_params.cpu.resolution_x = cast(float) win_w;
             pbr_params.cpu.resolution_y = cast(float) win_h;
@@ -141,6 +190,17 @@ tick :: () {
             pbr_params.cpu.light_pos_x = sin(t * 0.35) * 2.2;
             pbr_params.cpu.light_pos_y = 1.8 + sin(t * 0.21) * 0.35;
             pbr_params.cpu.light_pos_z = 2.4 + cos(t * 0.35) * 0.4;
+        }
+        pbr_params.cpu.camera_pos_x = pbr_camera.position.x;
+        pbr_params.cpu.camera_pos_y = pbr_camera.position.y;
+        pbr_params.cpu.camera_pos_z = pbr_camera.position.z;
+        pbr_params.cpu.indices = pbr_geometry_indices.gpu + cast(Gpu_Ptr) pbr_meshes[pbr_geometry].first_index * size_of(u32);
+        draw_data.num_vertices = pbr_meshes[pbr_geometry].index_count;
+        if dims_ok && win_w > 0 && win_h > 0 {
+            aspect := cast(float) win_w / cast(float) win_h;
+            view := editor_camera_make_view(*pbr_camera);
+            proj := editor_camera_make_projection(*pbr_camera, aspect, 0.05, 50.0);
+            pbr_params.cpu.view_proj = proj * view;
         }
     }
 
@@ -168,7 +228,7 @@ tick :: () {
         ]
     });
     gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .LESS, depth_mode = .READ | .WRITE});
-    gpu_set_pipeline(cmd_buff, graphics_pipeline);
+    gpu_set_pipeline(cmd_buff, shader.pipeline);
 
     draw_result := gpu_draw_instanced_direct(cmd_buff, draw_data.params_gpu, draw_data.num_vertices, draw_data.num_instances);
     assert(draw_result == .SUCCESS, tprint("PBR draw failed: %", draw_result));
@@ -221,7 +281,30 @@ ensure_depth_target :: (width: u32, height: u32) {
     gpu_commit_residency();
 }
 
+build_geometry :: () {
+    vertices_cpu: [..]Procedural_Geometry_Vertex;
+    indices_cpu: [..]u32;
+    vertices_cpu.allocator = temp;
+    indices_cpu.allocator = temp;
+
+    pbr_meshes[PBR_Geometry.SPHERE]   = procedural_append_uv_sphere(*vertices_cpu, *indices_cpu, 0.9, 32, 18);
+    pbr_meshes[PBR_Geometry.TORUS]    = procedural_append_torus(*vertices_cpu, *indices_cpu, 0.8, 0.26, 36, 18);
+    pbr_meshes[PBR_Geometry.PRISM]    = procedural_append_prism(*vertices_cpu, *indices_cpu, 0.95, 0.95, 6);
+    pbr_meshes[PBR_Geometry.CONE]     = procedural_append_cone(*vertices_cpu, *indices_cpu, 0.85, 2.1, 28);
+    pbr_meshes[PBR_Geometry.CYLINDER] = procedural_append_cylinder(*vertices_cpu, *indices_cpu, 0.82, 1.0, 28);
+    pbr_meshes[PBR_Geometry.PLANE]    = procedural_append_plane(*vertices_cpu, *indices_cpu, 1.2);
+
+    pbr_geometry_vertices = gpu_alloc_view(*gpu_arena, Procedural_Geometry_Vertex, vertices_cpu.count);
+    pbr_geometry_indices = gpu_alloc_view(*gpu_arena, u32, indices_cpu.count);
+    memcpy(pbr_geometry_vertices.cpu.data, vertices_cpu.data, vertices_cpu.count * size_of(Procedural_Geometry_Vertex));
+    memcpy(pbr_geometry_indices.cpu.data, indices_cpu.data, indices_cpu.count * size_of(u32));
+}
+
 #load "../SGPU_App_Common.jai";
+#load "../editor_camera.jai";
 #import "Jai-Shader-Transpiler";
 #import "stb_image";
+#import "ImGui";
+Input :: #import "Input";
+#load "procedural_geometry.jai";
 #load "shaders/pbr_shader.jai";
