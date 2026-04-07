@@ -59,7 +59,7 @@ Image_Descriptor :: struct {
     pixelHeight: u32;
     imageDataSizeInBytes: s64;
     bytesPerPixel: s32;
-    pixelFormat: MTLPixelFormat = MTLPixelFormatInvalid;
+    pixelFormat: MTLPixelFormat = 0;
     faceCount: u32 = 1;
     levels: [..]struct {
         fileOffset: s64;
@@ -169,28 +169,36 @@ ktx1_load_from_memory :: (file_bytes: string, verbose: bool) -> bool, Image_Desc
     assert(bytes_read == header.bytesOfKeyValueData);
 
     GL_COMPRESSED_RGBA_ASTC_4x4_KHR :: 0x93B0;
+    GL_COMPRESSED_RGBA_ASTC_6x6_KHR :: 0x93B4;
     GL_RGBA8 :: 0x8058;
     GL_SRGB8_ALPHA8 :: 0x8C43;
+    block_dim: s64 = 1;
 
     // Read mipmap sizes and offsets.
     if header.glInternalFormat == {
         case GL_COMPRESSED_RGBA_ASTC_4x4_KHR;
-            pixelFormat = MTLPixelFormatASTC_4x4_sRGB;
+            pixelFormat = .ASTC_4x4_sRGB;
+            block_dim = 4;
+            bytesPerPixel = 1;
+            compressed = true;
+        case GL_COMPRESSED_RGBA_ASTC_6x6_KHR;
+            pixelFormat = .ASTC_6x6_LDR;
+            block_dim = 6;
             bytesPerPixel = 1;
             compressed = true;
         case GL_RGBA8;
-            pixelFormat = MTLPixelFormatRGBA8Unorm;
+            pixelFormat = .RGBA8Unorm;
             bytesPerPixel = 4;
             compressed = false;
         case GL_SRGB8_ALPHA8;
-            pixelFormat = MTLPixelFormatRGBA8Unorm_sRGB;
+            pixelFormat = .RGBA8Unorm_sRGB;
             bytesPerPixel = 4;
             compressed = false;
         case;
             assert(false, "unhandled glInternalFormat in ktx1 texture: %", header.glInternalFormat);
         }
 
-    assert(pixelFormat != MTLPixelFormatInvalid);
+    assert(pixelFormat != 0);
     imageDataSizeInBytes = 0;
     // record the offset and size of each mipmap level
     for level: 0..header.numberOfMipmapLevels-1 {
@@ -205,17 +213,22 @@ ktx1_load_from_memory :: (file_bytes: string, verbose: bool) -> bool, Image_Desc
         advance(*cursor, levelSizeInBytes); // move forward the number of bytes for the image data to get to the next mipmap level.
 
         // Record data sizes based on ASTC 4x4 block compression or bytesPerPixel
-        bytesPerRow: int;
+        bytesPerRow: s64;
+        bytesPerImage: s64;
         if compressed {
-            bytesPerRow = cast(s64)max(levelSize.width / 4 * 16, 16);
+            blocks_x := max((cast(s64) levelSize.width + block_dim - 1) / block_dim, cast(s64) 1);
+            blocks_y := max((cast(s64) levelSize.height + block_dim - 1) / block_dim, cast(s64) 1);
+            bytesPerRow = blocks_x * 16;
+            bytesPerImage = bytesPerRow * blocks_y;
         } else {
             bytesPerRow = cast(s64)max(levelSize.width * bytesPerPixel, 4);
+            bytesPerImage = bytesPerRow * cast(s64) max(levelSize.height, 1);
         }
         array_add(*result.levels, .{
             fileOffset = levelFileOffset,
             sizeInBytes = levelSizeInBytes,
             bytesPerRow = bytesPerRow,
-            bytesPerImage = bytesPerRow * cast(s64)levelSize.height,
+            bytesPerImage = bytesPerImage,
             size = levelSize,
         });
     }
@@ -278,20 +291,20 @@ ktx2_load_from_memory :: (file_bytes: string, verbose: bool) -> bool, Image_Desc
 
     if header.vkFormat == {
         case VK_FORMAT_ASTC_6x6_SRGB_BLOCK;
-            pixelFormat = MTLPixelFormatASTC_6x6_LDR;
+            pixelFormat = .ASTC_6x6_LDR;
             pixels_per_block = 6;
             compressed = true;
         case VK_FORMAT_ASTC_4x4_SRGB_BLOCK;
-            pixelFormat = MTLPixelFormatASTC_4x4_LDR;
+            pixelFormat = .ASTC_4x4_LDR;
             pixels_per_block = 4;
             bytesPerPixel = 1;
             compressed = true;
         case VK_FORMAT_R8G8B8A8_UNORM;
-            pixelFormat = MTLPixelFormatRGBA8Unorm;
+            pixelFormat = .RGBA8Unorm;
             bytesPerPixel = 4;
             compressed = false;
         case VK_FORMAT_R8G8B8A8_SRGB;
-            pixelFormat = MTLPixelFormatRGBA8Unorm_sRGB;
+            pixelFormat = .RGBA8Unorm_sRGB;
             bytesPerPixel = 4;
             compressed = false;
         case;

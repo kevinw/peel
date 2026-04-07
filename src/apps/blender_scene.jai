@@ -25,6 +25,12 @@ MESHLET_TASK_EMIT_MESHLET_COUNT : u32 : 64;
 BLENDER_SCENE_MAX_MESH_GROUPS_PER_DRAW : u32 : 1024;
 
 using app: struct {
+    background_shader: Shader(fullscreen_tri_vert, hdri_background_fragment_main, {
+        cull = .NONE,
+        color_targets = .[
+            .{format = .B8G8R8A8_UNORM},
+        ],
+    });
     mesh_shader: Mesh_Shader(mesh_main, fragment_main, .{
         raster_desc = .{
             cull = .NONE,
@@ -43,6 +49,16 @@ using app: struct {
     depth_h: u32;
     geo: Scene_Geo;
     arena: Gpu_Arena;
+    hdri_params: Gpu_Buffer(HDRI_Background_Params);
+    hdri_texture: Gpu_Texture;
+    hdri_view: Gpu_Texture_View;
+    hdri_sampler: Gpu_Sampler;
+    hdri_enabled: bool = true;
+    hdri_candidates: [..]string;
+    hdri_index: s32 = -1;
+    hdri_source_path: string;
+    hdri_cache_path: string;
+    hdri_exposure: float = 1.0;
     params: Gpu_Frame_Param_Allocator(Meshlet_Grid_Params);
     vertices: Gpu_View(Scene_Vertex);
     materials: Gpu_View(Scene_Material);
@@ -97,6 +113,7 @@ on_dll_init :: () {
     apply_debug_env_overrides();
 
     init_blender_scene_pipeline();
+    init_hdri_background();
     load_blender_scene(first_load=true);
     gpu_commit_residency();
 } @on_dll_init
@@ -105,7 +122,16 @@ on_unload :: () {
     if source_path.count != 0 free(source_path);
     free(export_path);
     if mesh_source.count != 0 free(mesh_source);
+    if hdri_source_path.count != 0 free(hdri_source_path);
+    if hdri_cache_path.count != 0 free(hdri_cache_path);
+    for hdri_candidates free(it);
+    array_free(hdri_candidates);
     if depth_texture != 0 gpu_free(depth_texture);
+    gpu_delete(*hdri_params);
+    gpu_delete(*hdri_sampler);
+    gpu_delete(*hdri_view);
+    gpu_delete(*hdri_texture);
+    if background_shader.pipeline != 0 gpu_delete(*background_shader.pipeline);
     if mesh_shader.pipeline != 0 gpu_delete(*mesh_shader.pipeline);
     if arena.cpu != null gpu_free_arena(arena);
     array_free(batches);
@@ -197,6 +223,19 @@ tick :: () {
             }
         ]
     });
+    if hdri_enabled && hdri_view != 0 && hdri_sampler != 0 && hdri_params.cpu != null {
+        cam_forward, cam_right, cam_up: Vector3;
+        editor_camera_basis(camera, *cam_forward, *cam_right, *cam_up);
+        hdri_params.cpu.camera_right_proj_x = .{cam_right.x, cam_right.y, cam_right.z, proj._11};
+        hdri_params.cpu.camera_up_proj_y = .{cam_up.x, cam_up.y, cam_up.z, proj._22};
+        hdri_params.cpu.camera_forward_exposure = .{cam_forward.x, cam_forward.y, cam_forward.z, hdri_exposure};
+        hdri_params.cpu.texture_index = gpu_texture_view_index(hdri_view);
+        hdri_params.cpu.sampler_index = cast(u32) hdri_sampler - 1;
+
+        gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
+        gpu_set_pipeline(cmd_buff, background_shader.pipeline);
+        gpu_draw_instanced_direct(cmd_buff, hdri_params.gpu, 3, 1);
+    }
     gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .LESS, depth_mode = .READ | .WRITE});
     gpu_set_pipeline(cmd_buff, SHR.pipeline(*mesh_shader, constants));
 
@@ -269,6 +308,22 @@ show_ui :: () {
     Text("Batch Filter: %", debug_batch_filter);
     Text("Max Meshlets / Mesh: %", geo.max_meshlet_count);
     Text("RMB look, WASD move, Shift boost");
+    Checkbox("Render HDRI", *hdri_enabled);
+    if hdri_candidates.count > 0 {
+        if SmallButton("<") {
+            cycle_hdri_selection(-1);
+        }
+        SameLine();
+        current_hdri_name := ifx hdri_source_path.count != 0 then String.path_filename(hdri_source_path) else "(none)";
+        Text("HDRI: %", current_hdri_name);
+        SameLine();
+        if SmallButton(">") {
+            cycle_hdri_selection(1);
+        }
+    } else if hdri_source_path.count != 0 {
+        Text("HDRI: %", String.path_filename(hdri_source_path));
+    }
+    SliderFloat("HDRI Exposure", *hdri_exposure, 0.1, 4.0);
     Checkbox("Auto Orbit", *auto_orbit);
 
     using constants;
@@ -374,11 +429,207 @@ spawn_live_blender :: () {
 }
 
 init_blender_scene_pipeline :: () {
-    ok := SHR.init(*mesh_shader, Meshlet_Shader_Constants.{});
-    assert(ok, "Failed to create blender_scene mesh pipeline.");
+    ok_bg := SHR.init(*background_shader);
+    assert(ok_bg, "Failed to create blender_scene HDRI background pipeline.");
+
+    ok_mesh := SHR.init(*mesh_shader, Meshlet_Shader_Constants.{});
+    assert(ok_mesh, "Failed to create blender_scene mesh pipeline.");
 
     mesh_grid_limit = gpu_get_mesh_pipeline_max_total_threadgroups_per_grid(mesh_shader.pipeline);
     if mesh_grid_limit == 0 mesh_grid_limit = BLENDER_SCENE_MAX_MESH_GROUPS_PER_DRAW;
+}
+
+init_hdri_background :: () {
+    hdri_params = gpu_alloc_buffer(HDRI_Background_Params, label = "blender scene hdri params");
+    hdri_sampler = gpu_create_sampler(.{
+        min_filter = .LINEAR,
+        mag_filter = .LINEAR,
+        mip_filter = .LINEAR,
+        address_mode_u = .REPEAT,
+        address_mode_v = .CLAMP_TO_EDGE,
+        address_mode_w = .CLAMP_TO_EDGE,
+    });
+    assert(hdri_sampler != 0, "HDRI sampler creation failed.");
+
+    refresh_hdri_candidates();
+    if hdri_candidates.count > 0 {
+        select_hdri_index(0);
+        return;
+    }
+
+    resolved_source := resolve_hdri_source_path();
+    if resolved_source.count == 0 return;
+    hdri_source_path = resolved_source;
+    if load_hdri_background_texture(hdri_source_path) return;
+    log_error("blender_scene: failed to load HDRI background from %", hdri_source_path);
+}
+
+resolve_hdri_source_path :: () -> string {
+    env_path := getenv_string("PEEL_HDRI_PATH");
+    if env_path.count != 0 {
+        if !String.is_absolute_path(env_path) env_path = tprint("%/%", find_workspace_root(), env_path);
+        if file_exists(env_path) return copy_string(env_path);
+        log_error("PEEL_HDRI_PATH does not exist: %", env_path);
+        return "";
+    }
+
+    root := find_workspace_root();
+    candidates := string.[
+        tprint("%/dist/textures/hdris/bell_tower_4k.exr", root),
+        tprint("%/dist/textures/hdris/citrus_orchard_puresky_4k.exr", root),
+    ];
+    for candidates {
+        if file_exists(it) return copy_string(it);
+    }
+    return "";
+}
+
+refresh_hdri_candidates :: () {
+    for hdri_candidates free(it);
+    array_reset(*hdri_candidates);
+
+    hdri_dir := tprint("%/dist/textures/hdris", find_workspace_root());
+    if !File_Utilities.is_directory(hdri_dir) return;
+
+    candidates := File_Utilities.file_list(hdri_dir, recursive = false, follow_directory_symlinks = false);
+    defer {
+        for candidates free(it);
+        if candidates.data != null array_free(candidates);
+    }
+
+    for candidates {
+        lower := String.to_lower_copy(it,, temp);
+        if !String.ends_with(lower, ".exr") && !String.ends_with(lower, ".hdr") continue;
+        array_add(*hdri_candidates, copy_string(it));
+    }
+
+    if hdri_candidates.count > 1 {
+        IntroSort.intro_sort(hdri_candidates, hdri_path_compare);
+    }
+}
+
+select_hdri_index :: (index: s32) {
+    if hdri_candidates.count == 0 return;
+    next_index := index;
+    if next_index < 0 next_index = 0;
+    if next_index >= hdri_candidates.count next_index = cast(s32) (hdri_candidates.count - 1);
+    if hdri_index == next_index && hdri_source_path.count != 0 return;
+
+    if hdri_source_path.count != 0 free(hdri_source_path);
+    hdri_source_path = copy_string(hdri_candidates[next_index]);
+    hdri_index = next_index;
+    if !load_hdri_background_texture(hdri_source_path) {
+        log_error("blender_scene: failed to switch HDRI to %", hdri_source_path);
+    }
+}
+
+cycle_hdri_selection :: (delta: s32) {
+    if hdri_candidates.count == 0 return;
+    next_index := hdri_index + delta;
+    if next_index < 0 next_index = cast(s32) (hdri_candidates.count - 1);
+    if next_index >= hdri_candidates.count next_index = 0;
+    select_hdri_index(next_index);
+}
+
+hdri_cache_path_for_source :: (source_path: string, modtime: Apollo_Time, size: s64) -> string {
+    key_source := tprint("hdri|astcenc-ch-6x6-fast|%|%|%:%", source_path, size, modtime.low, modtime.high);
+    key_hash := Hash.fnv1a_hash(key_source.data, key_source.count);
+    cache_dir := tprint("%/.build/texture_cache/hdri", find_workspace_root());
+    return tprint("%/%.astc6x6hdr.ktx", cache_dir, key_hash);
+}
+
+ensure_hdri_cache :: (source_path: string) -> bool, string {
+    modtime, size, exists := file_modtime_and_size(source_path);
+    if !exists {
+        log_error("blender_scene: HDRI source does not exist: %", source_path);
+        return false, "";
+    }
+
+    cache_path := hdri_cache_path_for_source(source_path, modtime, size);
+    _ = File.make_directory_if_it_does_not_exist(String.path_strip_filename(cache_path), true);
+    if file_exists(cache_path) return true, cache_path;
+
+    result, stdout, stderr, timeout_reached := Process_Module.run_command(
+        "astcenc",
+        "-ch",
+        source_path,
+        cache_path,
+        "6x6",
+        "-fast",
+        capture_and_return_output = true,
+        working_directory = find_workspace_root(),
+        timeout_ms = 300000);
+
+    if timeout_reached || result.type != .EXITED || result.exit_code != 0 || !file_exists(cache_path) {
+        log_error("blender_scene: astcenc HDRI compression failed for %", source_path);
+        if stdout.count != 0 log_error("astcenc stdout:\n%", stdout);
+        if stderr.count != 0 log_error("astcenc stderr:\n%", stderr);
+        if stdout.count != 0 free(stdout);
+        if stderr.count != 0 free(stderr);
+        return false, cache_path;
+    }
+
+    if stdout.count != 0 free(stdout);
+    if stderr.count != 0 free(stderr);
+
+    log("blender_scene: built HDRI cache % -> %", source_path, cache_path);
+    return true, cache_path;
+}
+
+load_hdri_background_texture :: (source_path: string) -> bool {
+    ok, cache_path := ensure_hdri_cache(source_path);
+    if !ok return false;
+
+    if hdri_cache_path.count != 0 free(hdri_cache_path);
+    hdri_cache_path = copy_string(cache_path);
+
+    file_bytes, read_ok := File.read_entire_file(cache_path, zero_terminated = false, log_errors = true);
+    if !read_ok {
+        log_error("blender_scene: failed reading HDRI cache %", cache_path);
+        return false;
+    }
+    defer free(file_bytes);
+
+    descriptor_ok, descriptor := ktx_load_descriptor(file_bytes, verbose = false);
+    defer array_free(descriptor.levels);
+    if !descriptor_ok {
+        log_error("blender_scene: failed parsing KTX cache %", cache_path);
+        return false;
+    }
+    assert(descriptor.levels.count > 0, "HDRI cache has no mip levels: %", cache_path);
+
+    gpu_delete(*hdri_view);
+    gpu_delete(*hdri_texture);
+
+    result, hdri_texture= := gpu_create_texture(.{
+        dimensions = .[cast(u32) descriptor.pixelWidth, cast(u32) descriptor.pixelHeight, 1],
+        format = .ASTC_6x6_SFLOAT_BLOCK,
+        mip_count = cast(u8) descriptor.levels.count,
+        usage = .SAMPLED | .TRANSFER_DST,
+    });
+    assert(result == .SUCCESS, "HDRI texture creation failed: %", result);
+    hdri_view = gpu_texture_view(hdri_texture);
+    assert(hdri_view != 0, "HDRI view creation failed.");
+
+    for descriptor.levels {
+        level_bytes := string.{
+            count = it.sizeInBytes,
+            data = file_bytes.data + it.fileOffset,
+        };
+        gpu_copy_to_texture_layout(
+            hdri_texture,
+            level_bytes.data,
+            cast(u32) it.size.width,
+            cast(u32) max(it.size.height, 1),
+            1,
+            it.bytesPerRow,
+            it.bytesPerImage,
+            cast(u32) it_index);
+    }
+
+    gpu_commit_residency();
+
+    return true;
 }
 
 load_blender_scene :: (first_load := false) {
@@ -539,6 +790,10 @@ extract_frustum_planes :: (m: Matrix4) -> [6]Vector4 {
     ];
 }
 
+hdri_path_compare :: (a: string, b: string) -> int {
+    return cast(int) Sort.compare_strings(a, b);
+}
+
 ensure_depth_target :: (width: u32, height: u32) {
     if width == 0 || height == 0 return;
     if depth_view != 0 && depth_w == width && depth_h == height return;
@@ -561,11 +816,18 @@ ensure_depth_target :: (width: u32, height: u32) {
 
 #load "../editor_camera.jai";
 #load "../scene_geo.jai";
+#import "KTX_Header";
 #import "Jai-Shader-Transpiler";
 ImGui :: #import "ImGui";
 Input :: #import "Input";
 Process_Module :: #import "Process";
 String :: #import "String";
+File :: #import "File";
+Hash :: #import "Hash";
+File_Utilities :: #import "File_Utilities";
+IntroSort :: #import "IntroSort";
+Sort :: #import "Sort";
 #import "Math";
 using,only(getenv) POSIX_Getenv :: #import "POSIX";
+#load "shaders/hdri_background_shader.jai";
 #load "shaders/meshlet_shader.jai";
