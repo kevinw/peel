@@ -1,9 +1,3 @@
-Scene_File :: #import,file "scene_file.jai";
-Gizmo :: #import "Gizmo";
-Physics :: #import "Physics";
-using JPH :: #import "JoltC";
-Persist :: #import,file "ui/persist_controls.jai";
-
 Indexed_Indirect_Draw_Args :: struct #type_info_none {
     vertex_count: u32;
     instance_count: u32;
@@ -173,7 +167,6 @@ Horde_Runtime :: struct {
     powerup_active_count: s32;
     debug_next_log_time: float;
 
-    render_enemy_masks: bool = true;
     direct_draw_debug: bool = true;
 
     enemies: [..]Enemy_Runtime;
@@ -236,7 +229,6 @@ reset :: (using runtime: *Horde_Runtime, horde_bindings: Horde_Bindings, camera_
     preserved_spawn_params := spawn_params;
     preserved_auto_fire_params := auto_fire_params;
     preserved_powerup_params := powerup_params;
-    preserved_render_enemy_masks := render_enemy_masks;
     preserved_direct_draw_debug := direct_draw_debug;
     preserved_spider_move_height := spider_move_height;
     preserved_spider_leg_thickness := spider_leg_thickness;
@@ -256,7 +248,6 @@ reset :: (using runtime: *Horde_Runtime, horde_bindings: Horde_Bindings, camera_
     spawn_params = preserved_spawn_params;
     auto_fire_params = preserved_auto_fire_params;
     powerup_params = preserved_powerup_params;
-    render_enemy_masks = preserved_render_enemy_masks;
     direct_draw_debug = preserved_direct_draw_debug;
     spider_move_height = preserved_spider_move_height;
     spider_leg_thickness = preserved_spider_leg_thickness;
@@ -386,20 +377,27 @@ reset :: (using runtime: *Horde_Runtime, horde_bindings: Horde_Bindings, camera_
 }
 
 do_ui :: (using runtime: *Horde_Runtime) {
-    ImGui.Checkbox("Enemy Horde", *spawn_params.enabled);
-    ImGui.Checkbox("Render Enemy Masks", *render_enemy_masks);
+    #import "ImGui";
+    Persist :: #import,file "ui/persist_controls.jai";
+
     ImGui.Checkbox("Enemy Direct Draw", *direct_draw_debug);
     ImGui.Checkbox("Auto Fire", *auto_fire_params.enabled);
     ImGui.Checkbox("Powerups", *powerup_params.enabled);
-    Persist.SliderInt("Enemy Target", *spawn_params.target_alive, 0, max_count, "%d");
-    Persist.SliderFloat("Enemy Spawn Rate", *spawn_params.spawn_rate, 0.0, 600.0, "%.0f/s");
-    Persist.SliderFloat("Enemy Speed", *spawn_params.move_speed, 0.5, 6.0, "%.2f");
-    Persist.SliderFloat("Min Head Size", *spawn_params.min_head_size, 0.4, 1.5, "%.2f");
-    Persist.SliderFloat("Max Head Size", *spawn_params.max_head_size, 0.5, 2.0, "%.2f");
-    Persist.SliderFloat("Enemy Touch DPS", *spawn_params.touch_damage_per_second, 0.0, 40.0, "%.1f");
+    {
+        using spawn_params;
+        ImGui.Checkbox("Enemy Horde", *spawn_params.enabled);
+        Persist.SliderInt("Enemy Target",       *spawn_params.target_alive, 0, max_count, "%d");
+        Persist.SliderFloat("Enemy Spawn Rate", *spawn_params.spawn_rate, 0.0, 600.0, "%.0f/s");
+        Persist.SliderFloat("Enemy Speed",      *spawn_params.move_speed, 0.5, 6.0, "%.2f");
+        Persist.SliderFloat("Min Head Size",    *spawn_params.min_head_size, 0.4, 1.5, "%.2f");
+        Persist.SliderFloat("Max Head Size",    *spawn_params.max_head_size, 0.5, 2.0, "%.2f");
+        Persist.SliderFloat("Enemy Touch DPS",  *spawn_params.touch_damage_per_second, 0.0, 40.0, "%.1f");
+    }
     Persist.SliderFloat("Shots / Sec", *auto_fire_params.shots_per_second, 0.0, 10.0, "%.1f");
     Persist.SliderFloat("Burst Spacing", *auto_fire_params.burst_spacing, 0.02, 0.4, "%.2f");
+
     Persist.SliderFloat("Powerup Spawn Rate", *powerup_params.spawn_rate, 0.0, 1.0, "%.2f/s");
+    Separator();
     ImGui.Text("Player Health: %.1f", player_health);
     ImGui.Text("Bonus Bullets: %", bonus_bullets);
     ImGui.Text("Enemies Alive: % / %", alive_count, spawn_params.target_alive);
@@ -523,7 +521,7 @@ prepare_render :: (using runtime: *Horde_Runtime, view_proj: Matrix4, shadow_bin
 }
 
 draw_shadow :: (using runtime: *Horde_Runtime, cmd_buff: Gpu_Command_Buffer, pipeline: Gpu_Pipeline) {
-    if !render_enemy_masks || draw_groups.count == 0 || draw_params.cpu.data == null || indirect_args.cpu.data == null return;
+    if draw_groups.count == 0 || draw_params.cpu.data == null || indirect_args.cpu.data == null return;
     gpu_set_pipeline(cmd_buff, pipeline);
     for group: draw_groups {
         if group.instance_count == 0 continue;
@@ -539,7 +537,7 @@ draw_shadow :: (using runtime: *Horde_Runtime, cmd_buff: Gpu_Command_Buffer, pip
 }
 
 draw_main :: (using runtime: *Horde_Runtime, cmd_buff: Gpu_Command_Buffer, pipeline: Gpu_Pipeline) {
-    if !render_enemy_masks || draw_groups.count == 0 || draw_params.cpu.data == null || indirect_args.cpu.data == null return;
+    if draw_groups.count == 0 || draw_params.cpu.data == null || indirect_args.cpu.data == null return;
     gpu_set_pipeline(cmd_buff, pipeline);
     for group: draw_groups {
         if group.instance_count == 0 continue;
@@ -1237,3 +1235,9 @@ horde_quat_from_euler_deg :: (deg: Vector3) -> Quaternion {
     normalize_or_identity(*q);
     return q;
 }
+
+#scope_file
+Scene_File :: #import,file "scene_file.jai";
+Gizmo :: #import "Gizmo";
+Physics :: #import "Physics";
+using JPH :: #import "JoltC";

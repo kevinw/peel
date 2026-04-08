@@ -34,14 +34,48 @@ Mesh_Shader :: struct(mesh: $M, frag: $F, desc: Gpu_Mesh_Pipeline_Desc, task: $T
     mesh_desc :: desc;
 }
 
+shader_hot_reload_pick_function_constants_type_expr :: (required_note: string, loc: Source_Code_Location, procs: ..Code) -> string #compile_time {
+    selected: string;
+    for procs {
+        if it == null continue;
+        type_expr := shader_hot_reload_function_constants_type_expr(it, required_note, loc);
+        if type_expr.count == 0 continue;
+        if selected.count == 0 {
+            selected = type_expr;
+            continue;
+        }
+        if type_expr != selected {
+            compiler_report(tprint("Function-constant struct mismatch between shader stages: '%' vs '%'.", selected, type_expr), loc=loc);
+            return "";
+        }
+    }
+    return selected;
+}
+
 init :: (using shader: *Shader, loc: Source_Code_Location = #caller_location) -> bool #expand {
     #insert #run,stallable -> string {
         vertex_name   :: #procedure_name(Vertex_Function);
         fragment_name :: #procedure_name(Fragment_Function);
-        source_expr, meta_expr, ok := JTS.get_transpiled2_named_exprs(vertex_name, fragment_name, loc);
+        source_expr, meta_expr, constants_expr, ok := JTS.get_transpiled2_named_exprs_with_constants(vertex_name, fragment_name, loc);
         if !ok {
             compiler_report("Shader hot reload graphics helper requires direct vertex/fragment procedure identifiers.", loc=loc);
             return "return false;";
+        }
+        function_constants_type_expr := shader_hot_reload_pick_function_constants_type_expr("", loc, Vertex_Function, Fragment_Function);
+        if function_constants_type_expr.count != 0 {
+            default_constants_expr := JTS.default_pair_function_constants_expr_from_procs(Vertex_Function, Fragment_Function, loc);
+            return tprint(#string END
+G :: #import,file "%";
+shader_source, shader_meta := %, %;
+default_constants := %;
+new_pipeline := create_graphics_pipeline_with_function_constants(cast([]u8) shader_source, shader_meta, raster_desc, *default_constants);
+assert(new_pipeline != 0, "Graphics pipeline creation with function constants failed for '%', '%'.");
+shader.pipeline = new_pipeline;
+shader_hot_reload_register_graphics_pipeline_with_function_constants(shader_meta.entry_id, *shader.pipeline, raster_desc, *default_constants);
+shader_hot_reload_reset_function_constant_variants(cast(*Shader_Base) shader);
+gpu_commit_residency();
+return true;
+END, path_to_shader_module, source_expr, meta_expr, default_constants_expr, vertex_name, fragment_name);
         }
         return tprint(#string END
 G :: #import,file "%";
@@ -100,13 +134,36 @@ init :: (using mesh_shader: *Mesh_Shader, loc: Source_Code_Location = #caller_lo
     #insert #run,stallable -> string {
         mesh_name :: #procedure_name(Mesh_Function);
         fragment_name :: #procedure_name(Fragment_Function);
+        function_constants_type_expr := shader_hot_reload_pick_function_constants_type_expr("", loc, Task_Function, Mesh_Function, Fragment_Function);
 
         if Task_Function != null {
             task_name :: #procedure_name(Task_Function);
-            bundle_expr, meta_expr, ok := JTS.get_transpiled_task_mesh_pipeline_named_exprs(task_name, mesh_name, fragment_name, loc);
+            bundle_expr, meta_expr, constants_expr, ok := JTS.get_transpiled_task_mesh_pipeline_named_exprs_with_constants(task_name, mesh_name, fragment_name, loc);
             if !ok {
                 compiler_report("Shader hot reload mesh helper requires direct task/mesh/fragment procedure identifiers.", loc=loc);
                 return "return false;";
+            }
+            if function_constants_type_expr.count != 0 {
+                default_constants_expr := JTS.default_mesh_function_constants_expr_from_procs(Task_Function, Mesh_Function, Fragment_Function, loc);
+                return tprint(#string END
+G :: #import,file "%";
+lookup_bundle := %;
+shader_bundle := JTS.Transpiled_Mesh_Pipeline.{
+    task_source = lookup_bundle.task_source,
+    mesh_source = lookup_bundle.mesh_source,
+    pixel_source = lookup_bundle.pixel_source,
+    payload_size_bytes = lookup_bundle.payload_size_bytes,
+    payload_memory_length = lookup_bundle.payload_memory_length,
+    meta = %,
+};
+default_constants := %;
+assert(shader_bundle.mesh_source.count > 0, "Transpilation failed for task+mesh pipeline shaders '%', '%', '%'.");
+assert(shader_bundle.pixel_source.count > 0, "Transpilation failed for task+mesh pipeline shaders '%', '%', '%'.");
+assert(shader_bundle.meta.entry_id.count > 0, "Missing shader hot-reload entry id for task+mesh pipeline shaders '%', '%', '%'.");
+ok := shader_hot_reload_create_and_register_mesh_pipeline_with_entry_id(shader_bundle.meta.entry_id, *mesh_shader.pipeline, shader_bundle, mesh_desc, *default_constants);
+if ok shader_hot_reload_reset_function_constant_variants(cast(*Shader_Base) mesh_shader);
+return ok;
+END, path_to_shader_module, bundle_expr, meta_expr, default_constants_expr, task_name, mesh_name, fragment_name, task_name, mesh_name, fragment_name, task_name, mesh_name, fragment_name);
             }
             return tprint(#string END
 G :: #import,file "%";
@@ -128,10 +185,32 @@ return ok;
 END, path_to_shader_module, bundle_expr, meta_expr, task_name, mesh_name, fragment_name, task_name, mesh_name, fragment_name, task_name, mesh_name, fragment_name);
         }
 
-        bundle_expr, meta_expr, ok := JTS.get_transpiled_mesh_pipeline_named_exprs(mesh_name, fragment_name, loc);
+        bundle_expr, meta_expr, constants_expr, ok := JTS.get_transpiled_mesh_pipeline_named_exprs_with_constants(mesh_name, fragment_name, loc);
         if !ok {
             compiler_report("Shader hot reload mesh helper requires direct mesh/fragment procedure identifiers.", loc=loc);
             return "return false;";
+        }
+        if function_constants_type_expr.count != 0 {
+            default_constants_expr := JTS.default_mesh_function_constants_expr_from_procs(Mesh_Function, Fragment_Function, loc);
+            return tprint(#string END
+G :: #import,file "%";
+lookup_bundle := %;
+shader_bundle := JTS.Transpiled_Mesh_Pipeline.{
+    task_source = lookup_bundle.task_source,
+    mesh_source = lookup_bundle.mesh_source,
+    pixel_source = lookup_bundle.pixel_source,
+    payload_size_bytes = lookup_bundle.payload_size_bytes,
+    payload_memory_length = lookup_bundle.payload_memory_length,
+    meta = %,
+};
+default_constants := %;
+assert(shader_bundle.mesh_source.count > 0, "Transpilation failed for mesh pipeline shaders '%', '%'.");
+assert(shader_bundle.pixel_source.count > 0, "Transpilation failed for mesh pipeline shaders '%', '%'.");
+assert(shader_bundle.meta.entry_id.count > 0, "Missing shader hot-reload entry id for mesh pipeline shaders '%', '%'.");
+ok := shader_hot_reload_create_and_register_mesh_pipeline_with_entry_id(shader_bundle.meta.entry_id, *mesh_shader.pipeline, shader_bundle, mesh_desc, *default_constants);
+if ok shader_hot_reload_reset_function_constant_variants(cast(*Shader_Base) mesh_shader);
+return ok;
+END, path_to_shader_module, bundle_expr, meta_expr, default_constants_expr, mesh_name, fragment_name, mesh_name, fragment_name, mesh_name, fragment_name);
         }
         return tprint(#string END
 G :: #import,file "%";

@@ -79,3 +79,7 @@ apply_grass_lighting :: (rig: Outdoor_Rig, shadow_params: *Grass_Shadow_Params_C
     draw_params.sun_params = .{rig.sun_strength, rig.time_of_day, 0.0, 0.0};
     draw_params.shadow_meta = shadow_binding;
 }
+
+#scope_file
+Persist :: #import,file "ui/persist_controls.jai";
+Scene_File :: #import,file "scene_file.jai";

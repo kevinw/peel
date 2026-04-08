@@ -1,10 +1,7 @@
 #import "Jai-Shader-Transpiler";
 #import "Jai-Shader-Transpiler/modules/ShaderFuncs";
 #import "Math";
-
-MESHLET_MAX_VERTICES :: 64;
-MESHLET_MAX_TRIANGLES :: 124;
-TASK_EMIT_MESHLET_COUNT : u32 : 64;
+#load "meshlet_common.jai";
 SCENE_ALPHA_MODE_OPAQUE :: 0;
 SCENE_ALPHA_MODE_MASK   :: 1;
 
@@ -74,92 +71,6 @@ Meshlet_Shader_Constants :: struct {
     debug_flags: Meshlet_Debug_Flags = 0;
     debug_mode: Meshlet_Grid_Debug_Mode = .SHADED;
 } @function_constants
-
-Meshlet_Grid_Debug_Mode :: enum u32 {
-    SHADED;
-    LODS;
-    CHUNKS;
-    MESHLETS;
-}
-
-hash01 :: (x: u32) -> float {
-    phase := cast(float) x * cast(float) 12.9898 + cast(float) 78.233;
-    return fract(sin(phase) * cast(float) 43758.5453);
-}
-
-hue2rgb :: (hue: float) -> Vector3 {
-    h := fract(hue);
-    return clamp(Vector3.{
-        abs(h * 6.0 - 3.0) - 1.0,
-        2.0 - abs(h * 6.0 - 2.0),
-        2.0 - abs(h * 6.0 - 4.0),
-    }, 0.0, 1.0);
-}
-
-lod_debug_color :: (lod: u32) -> Vector3 {
-    if lod == {
-    case 0; return .{0.13, 0.47, 0.71}; // blue
-    case 1; return .{0.90, 0.62, 0.00}; // orange
-    case 2; return .{0.80, 0.47, 0.65}; // magenta
-    case 3; return .{0.84, 0.15, 0.16}; // red
-    }
-    return .{0.55, 0.55, 0.55};
-}
-
-Task_Payload :: struct {
-    instance_index: u32;
-    mesh_index: u32;
-    meshlet_start: u32;
-    meshlet_count: u32;
-    chunk_index: u32;
-}
-
-lod_from_mesh_index :: (meshes: *Scene_Mesh, base_mesh_index: u32, selected_mesh_index: u32) -> u32 {
-    if selected_mesh_index == base_mesh_index return 0;
-    return 1 + (selected_mesh_index - meshes[base_mesh_index].lod_mesh_start);
-}
-
-sphere_visible :: (params: *Meshlet_Grid_Params, center: Vector3, radius: float) -> bool {
-    for plane: params.frustum_planes {
-        distance := dot(plane.xyz, center) + plane.w;
-        if distance < -radius return false;
-    }
-    return true;
-}
-
-world_max_scale :: (world: Matrix4) -> float {
-    axis_x4 := world * Vector4.{1.0, 0.0, 0.0, 0.0};
-    axis_y4 := world * Vector4.{0.0, 1.0, 0.0, 0.0};
-    axis_z4 := world * Vector4.{0.0, 0.0, 1.0, 0.0};
-    return max(length(axis_x4.xyz), max(length(axis_y4.xyz), length(axis_z4.xyz)));
-}
-
-lod_metric_for_instance :: (
-    params: *Meshlet_Grid_Params,
-    meshlet_meshes: *Scene_Meshlet_Mesh,
-    base_mesh_index: u32,
-    world: Matrix4,
-) -> float {
-    meshlet_mesh := meshlet_meshes[base_mesh_index];
-    local_center := meshlet_mesh.bounds_center_radius.xyz;
-    local_radius := max(meshlet_mesh.bounds_center_radius.w, 0.001);
-    world_center4 := world * Vector4.{local_center.x, local_center.y, local_center.z, 1.0};
-    world_center := world_center4.xyz;
-    world_radius := max(local_radius * world_max_scale(world), 0.001);
-    distance_to_eye := max(distance(params.eye_position, world_center), 0.001);
-    projected_radius_px := world_radius * params.lod_projection_scale / distance_to_eye;
-    return pow(params.lod_radius_threshold / max(projected_radius_px, 0.0001), params.lod_metric_power);
-}
-
-lod_slot_for_metric :: (metric: float, max_lod: u32) -> u32 {
-    lod_slot: u32;
-    while lod_slot < max_lod {
-        threshold := cast(float) (lod_slot + 1);
-        if metric < threshold break;
-        lod_slot += 1;
-    }
-    return lod_slot;
-}
 
 scene_material_alpha :: (params: *Meshlet_Grid_Params, uv: Vector2) -> float {
     alpha := params.base_color_factor.w;
@@ -257,7 +168,7 @@ mesh_main :: (
             marker_bound := meshlet_bounds[marker_meshlet_index];
             marker_center4 := instance.world * Vector4.{marker_bound.x, marker_bound.y, marker_bound.z, 1.0};
             marker_world := marker_center4.xyz;
-            marker_color := hue2rgb(hash01(mesh_group_id_x()));
+            marker_color := meshlet_hue2rgb(meshlet_hash01(mesh_group_id_x()));
             marker_size := max(marker_bound.w * 0.20, 0.08);
             mesh_set_output_counts(3, 1);
             mesh_set_vertex(0, Fragment_In.{
@@ -296,16 +207,16 @@ mesh_main :: (
         meshlet_bound := meshlet_bounds[meshlet_index];
         meshlet_center4 := instance.world * Vector4.{meshlet_bound.x, meshlet_bound.y, meshlet_bound.z, 1.0};
         meshlet_center := Vector3.{meshlet_center4.x, meshlet_center4.y, meshlet_center4.z};
-        meshlet_radius := max(meshlet_bound.w * world_max_scale(instance.world), 0.001);
+        meshlet_radius := max(meshlet_bound.w * meshlet_world_max_scale(instance.world), 0.001);
         clamped_vertex_count := min(meshlet.vertex_count, cast(u32) MESHLET_MAX_VERTICES);
         clamped_triangle_count := min(meshlet.triangle_count, cast(u32) MESHLET_MAX_TRIANGLES);
-        if debug_flags & .DISABLE_FRUSTUM_CULL == 0 && !sphere_visible(params, meshlet_center, meshlet_radius) || clamped_vertex_count < 3 || clamped_triangle_count == 0 {
+        if debug_flags & .DISABLE_FRUSTUM_CULL == 0 && !meshlet_sphere_visible(params, meshlet_center, meshlet_radius) || clamped_vertex_count < 3 || clamped_triangle_count == 0 {
             mesh_set_output_counts(0, 0);
         } else {
             mesh_set_output_counts(clamped_vertex_count, clamped_triangle_count);
 
-            meshlet_hue := hash01(meshlet_index);
-            meshlet_tint := hue2rgb(meshlet_hue);
+        meshlet_hue := meshlet_hash01(meshlet_index);
+        meshlet_tint := meshlet_hue2rgb(meshlet_hue);
             for vertex_local: 0..cast(s64) clamped_vertex_count-1 {
                 vertex_index := meshlet.vertex_offset + cast(u32) vertex_local;
                 v := vertices[meshlet_vertices[vertex_index]];
@@ -318,7 +229,7 @@ mesh_main :: (
 
                 color := Vector3.{1.0, 1.0, 1.0};
                 if debug_mode == .LODS {
-                    color = lod_debug_color(lod_from_mesh_index(meshes, params.batch_mesh_index, payload_mesh_index));
+                    color = meshlet_lod_debug_color(meshlet_lod_from_mesh_index(meshes, params.batch_mesh_index, payload_mesh_index));
                 } else if debug_mode == .MESHLETS {
                     color = meshlet_tint;
                 }
@@ -436,8 +347,8 @@ task_main :: (
                 selected_lod_mesh_index := params.batch_mesh_index;
                 base_mesh := meshes[params.batch_mesh_index];
                 if (debug_flags & .DISABLE_LODS) == 0 && base_mesh.lod_mesh_count > 0 {
-                    lod_metric := lod_metric_for_instance(params, meshlet_meshes, params.batch_mesh_index, instance.world);
-                    lod_slot := min(lod_slot_for_metric(lod_metric, base_mesh.lod_mesh_count), base_mesh.lod_mesh_count);
+                    lod_metric := meshlet_lod_metric_for_instance(params, meshlet_meshes, params.batch_mesh_index, instance.world);
+                    lod_slot := min(meshlet_lod_slot_for_metric(lod_metric, base_mesh.lod_mesh_count), base_mesh.lod_mesh_count);
                     if lod_slot > 0 {
                         selected_lod_mesh_index = base_mesh.lod_mesh_start + lod_slot - 1;
                     }
@@ -456,8 +367,8 @@ task_main :: (
                         lod_local_radius := max(lod_meshlet_mesh.bounds_center_radius.w, 0.001);
                         lod_world_center4 := instance.world * Vector4.{lod_local_center.x, lod_local_center.y, lod_local_center.z, 1.0};
                         lod_world_center := lod_world_center4.xyz;
-                        lod_world_radius := lod_local_radius * world_max_scale(instance.world);
-                        if debug_flags & .DISABLE_FRUSTUM_CULL == 0 && !sphere_visible(params, lod_world_center, lod_world_radius) {
+                        lod_world_radius := lod_local_radius * meshlet_world_max_scale(instance.world);
+                        if debug_flags & .DISABLE_FRUSTUM_CULL == 0 && !meshlet_sphere_visible(params, lod_world_center, lod_world_radius) {
                             emit_meshlet_count = 0;
                         }
                     }
