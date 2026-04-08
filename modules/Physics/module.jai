@@ -15,9 +15,8 @@ BroadPhaseLayers :: struct {
 set_debug_draw_procs :: () {
     using physics.debug;
 
-    log("set_debug_draw_procs");
     ctx = context; // Save the current context for use in #c_call callbacks.
-    
+
     DebugRenderer_SetProcs(*debug_renderer_procs);
 
     SetTraceHandler((msg_cstr: *u8) #c_call {
@@ -88,9 +87,9 @@ init :: () {
 
 tick :: (dt: float32) {
     using physics;
-    
+
     update_test_environment(dt);
-    
+
     // We simulate the physics world in discrete time steps. 60 Hz is a good rate to update the physics system.
     FIXED_TIMESTEP :: 1.0 / 60.0;
 

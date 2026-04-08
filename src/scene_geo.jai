@@ -204,6 +204,28 @@ Imported_Scene :: struct {
     models: [..]Scene_Model;
 }
 
+Imported_Scene_Cache_Metadata :: struct {
+    materials: [..]Scene_Material;
+    textures: [..]Imported_Texture;
+    meshes: [..]Scene_Mesh;
+    nodes: [..]Scene_Node;
+    node_names: [..]string;
+    node_bind_transforms: [..]Scene_Node_Transform;
+    node_mesh_refs: [..]u32;
+    mesh_skin_bones: [..]Scene_Mesh_Skin_Bone;
+    morph_targets: [..]Scene_Morph_Target;
+    morph_target_names: [..]string;
+    morph_vertex_deltas: [..]Scene_Morph_Vertex_Delta;
+    anim_position_keys: [..]Scene_Anim_Position_Key;
+    anim_rotation_keys: [..]Scene_Anim_Rotation_Key;
+    anim_scale_keys: [..]Scene_Anim_Scale_Key;
+    anim_channels: [..]Scene_Anim_Channel;
+    anim_morph_keys: [..]Scene_Anim_Morph_Key;
+    anim_morph_channels: [..]Scene_Anim_Morph_Channel;
+    anim_clips: [..]Scene_Anim_Clip;
+    models: [..]Scene_Model;
+}
+
 Scene_Geo :: struct {
     arena: Gpu_Arena;
     vertices: Gpu_View(Scene_Vertex);
@@ -550,7 +572,14 @@ imported_scene_load_cached :: (scene: *Imported_Scene, model_paths: []string, re
     serialize_ok := imported_scene_serialize(*cache_blob, scene.*);
     assert(serialize_ok, "Failed to serialize imported scene cache.");
     if cache_blob.count > 0 {
+        legacy_blob: [..]u8;
+        legacy_blob.allocator = context.allocator;
+        legacy_ok := imported_scene_serialize_legacy_raw(*legacy_blob, scene.*);
+        assert(legacy_ok, "Failed to serialize legacy imported scene cache size probe.");
         _ = File.write_entire_file(cache_path, cache_blob.data, cache_blob.count);
+        savings := 100.0 * (1.0 - cast(float) cache_blob.count / cast(float) legacy_blob.count);
+        log("built imported scene cache % -> legacy=% bytes encoded=% bytes savings=% percent", cache_path, legacy_blob.count, cache_blob.count, savings);
+        array_free(legacy_blob);
     }
     array_free(cache_blob);
 }
@@ -787,7 +816,7 @@ compute_model_bounds_from_geo :: (geo: *Scene_Geo, model_index: s32) -> Scene_Bo
 Hash_Table :: #import "Hash_Table";
 using,only(Table, table_find, table_reset, table_set) _ :: Hash_Table;
 #load "../tools/blender_exporter/peel_scene_format_bindings.jai";
-IMPORTED_SCENE_CACHE_VERSION : u32 : 20;
+IMPORTED_SCENE_CACHE_VERSION : u32 : 21;
 IMPORTED_SCENE_CACHE_MAGIC : u32 : 0x53474d44; // SGMD
 IMPORTED_SCENE_MESHLET_CACHE_VERSION : u32 : 1;
 IMPORTED_SCENE_MESHLET_CACHE_MAGIC : u32 : 0x4d534744; // MSGD
@@ -829,6 +858,18 @@ imported_scene_serialize :: (builder: *[..]u8, scene: Imported_Scene) -> bool {
     cache_put(builder, IMPORTED_SCENE_CACHE_MAGIC);
     cache_put(builder, IMPORTED_SCENE_CACHE_VERSION);
     cache_put(builder, imported_scene_recipe_hash());
+    cache_put(builder, geo_cache_type_hash(type_info(Imported_Scene_Cache_Metadata)));
+    cache_put(builder, geo_cache_type_hash(type_info(Scene_Vertex)));
+    if !cache_put_scene_vertices_encoded(builder, scene.vertices) return false;
+    if !cache_put_scene_indices_encoded(builder, scene.indices) return false;
+    metadata := imported_scene_cache_metadata_from_scene(scene);
+    return geo_cache_put_reflected(builder, *metadata, type_info(Imported_Scene_Cache_Metadata));
+}
+
+imported_scene_serialize_legacy_raw :: (builder: *[..]u8, scene: Imported_Scene) -> bool {
+    cache_put(builder, IMPORTED_SCENE_CACHE_MAGIC);
+    cache_put(builder, IMPORTED_SCENE_CACHE_VERSION);
+    cache_put(builder, imported_scene_recipe_hash());
     cache_put(builder, geo_cache_type_hash(type_info(Imported_Scene)));
     return geo_cache_put_reflected(builder, *scene, type_info(Imported_Scene));
 }
@@ -845,8 +886,15 @@ imported_scene_deserialize :: (scene: *Imported_Scene, source_in: string) -> boo
     if recipe_hash != imported_scene_recipe_hash() return false, false;
     schema_hash: u64;
     if !cache_get(*source, *schema_hash) return false, false;
-    if schema_hash != geo_cache_type_hash(type_info(Imported_Scene)) return false, false;
-    if !geo_cache_get_reflected(*source, scene, type_info(Imported_Scene)) return false, false;
+    if schema_hash != geo_cache_type_hash(type_info(Imported_Scene_Cache_Metadata)) return false, false;
+    vertex_schema_hash: u64;
+    if !cache_get(*source, *vertex_schema_hash) return false, false;
+    if vertex_schema_hash != geo_cache_type_hash(type_info(Scene_Vertex)) return false, false;
+    if !cache_get_scene_vertices_encoded(*source, *scene.vertices) return false, false;
+    if !cache_get_scene_indices_encoded(*source, *scene.indices) return false, false;
+    metadata: Imported_Scene_Cache_Metadata;
+    if !geo_cache_get_reflected(*source, *metadata, type_info(Imported_Scene_Cache_Metadata)) return false, false;
+    imported_scene_apply_cache_metadata(scene, metadata);
     return true, source.count == 0;
 }
 
@@ -862,8 +910,150 @@ imported_scene_recipe_hash :: () -> u64 {
     append(*builder, tprint("simplify_options=%|", STATIC_MESH_LOD_SIMPLIFY_OPTIONS));
     append(*builder, tprint("meshlets=%|%|", SCENE_GEO_MESHLET_MAX_VERTICES, SCENE_GEO_MESHLET_MAX_TRIANGLES));
     append(*builder, tprint("blend_scene=%|", PEEL_SCENE_FILE_VERSION));
+    append(*builder, tprint("meshoptimizer=%|", meshopt.MESHOPTIMIZER_VERSION));
     key := builder_to_string(*builder,, temp);
     return fnv1a_hash(key.data, key.count);
+}
+
+imported_scene_cache_metadata_from_scene :: (scene: Imported_Scene) -> Imported_Scene_Cache_Metadata {
+    return .{
+        materials = scene.materials,
+        textures = scene.textures,
+        meshes = scene.meshes,
+        nodes = scene.nodes,
+        node_names = scene.node_names,
+        node_bind_transforms = scene.node_bind_transforms,
+        node_mesh_refs = scene.node_mesh_refs,
+        mesh_skin_bones = scene.mesh_skin_bones,
+        morph_targets = scene.morph_targets,
+        morph_target_names = scene.morph_target_names,
+        morph_vertex_deltas = scene.morph_vertex_deltas,
+        anim_position_keys = scene.anim_position_keys,
+        anim_rotation_keys = scene.anim_rotation_keys,
+        anim_scale_keys = scene.anim_scale_keys,
+        anim_channels = scene.anim_channels,
+        anim_morph_keys = scene.anim_morph_keys,
+        anim_morph_channels = scene.anim_morph_channels,
+        anim_clips = scene.anim_clips,
+        models = scene.models,
+    };
+}
+
+imported_scene_apply_cache_metadata :: (scene: *Imported_Scene, metadata: Imported_Scene_Cache_Metadata) {
+    scene.materials = metadata.materials;
+    scene.textures = metadata.textures;
+    scene.meshes = metadata.meshes;
+    scene.nodes = metadata.nodes;
+    scene.node_names = metadata.node_names;
+    scene.node_bind_transforms = metadata.node_bind_transforms;
+    scene.node_mesh_refs = metadata.node_mesh_refs;
+    scene.mesh_skin_bones = metadata.mesh_skin_bones;
+    scene.morph_targets = metadata.morph_targets;
+    scene.morph_target_names = metadata.morph_target_names;
+    scene.morph_vertex_deltas = metadata.morph_vertex_deltas;
+    scene.anim_position_keys = metadata.anim_position_keys;
+    scene.anim_rotation_keys = metadata.anim_rotation_keys;
+    scene.anim_scale_keys = metadata.anim_scale_keys;
+    scene.anim_channels = metadata.anim_channels;
+    scene.anim_morph_keys = metadata.anim_morph_keys;
+    scene.anim_morph_channels = metadata.anim_morph_channels;
+    scene.anim_clips = metadata.anim_clips;
+    scene.models = metadata.models;
+}
+
+cache_put_scene_vertices_encoded :: (builder: *[..]u8, vertices: []Scene_Vertex) -> bool {
+    count := cast(u32) vertices.count;
+    cache_put(builder, count);
+    if count == 0 return true;
+
+    encode_bound := cast(s64) meshopt.encodeVertexBufferBound(cast(u64) count, cast(u64) size_of(Scene_Vertex));
+    encode_buffer := NewArray(encode_bound, u8);
+    defer array_free(encode_buffer);
+
+    encoded_size := meshopt.encodeVertexBuffer(
+        encode_buffer.data,
+        cast(u64) encode_buffer.count,
+        vertices.data,
+        cast(u64) count,
+        cast(u64) size_of(Scene_Vertex));
+    if encoded_size == 0 return false;
+
+    encoded_size_u32 := cast(u32) encoded_size;
+    cache_put(builder, encoded_size_u32);
+    offset := builder.count;
+    array_resize(builder, offset + cast(s64) encoded_size_u32);
+    memcpy(builder.data + offset, encode_buffer.data, cast(s64) encoded_size_u32);
+    return true;
+}
+
+cache_get_scene_vertices_encoded :: (source: *string, out: *[..]Scene_Vertex) -> bool {
+    count: u32;
+    if !cache_get(source, *count) return false;
+    if count == 0 return true;
+
+    encoded_size: u32;
+    if !cache_get(source, *encoded_size) return false;
+    if source.count < cast(s64) encoded_size return false;
+
+    out.allocator = context.allocator;
+    array_resize(out, count);
+    decode_result := meshopt.decodeVertexBuffer(
+        out.data,
+        cast(u64) count,
+        cast(u64) size_of(Scene_Vertex),
+        cast(*u8) source.data,
+        cast(u64) encoded_size);
+    source.data += encoded_size;
+    source.count -= encoded_size;
+    return decode_result == 0;
+}
+
+cache_put_scene_indices_encoded :: (builder: *[..]u8, indices: []u32) -> bool {
+    count := cast(u32) indices.count;
+    cache_put(builder, count);
+    if count == 0 return true;
+
+    max_index: u32;
+    for indices max_index = max(max_index, it);
+    encode_bound := cast(s64) meshopt.encodeIndexBufferBound(cast(u64) count, cast(u64) max_index + 1);
+    encode_buffer := NewArray(encode_bound, u8);
+    defer array_free(encode_buffer);
+
+    encoded_size := meshopt.encodeIndexBuffer(
+        encode_buffer.data,
+        cast(u64) encode_buffer.count,
+        indices.data,
+        cast(u64) count);
+    if encoded_size == 0 return false;
+
+    encoded_size_u32 := cast(u32) encoded_size;
+    cache_put(builder, encoded_size_u32);
+    offset := builder.count;
+    array_resize(builder, offset + cast(s64) encoded_size_u32);
+    memcpy(builder.data + offset, encode_buffer.data, cast(s64) encoded_size_u32);
+    return true;
+}
+
+cache_get_scene_indices_encoded :: (source: *string, out: *[..]u32) -> bool {
+    count: u32;
+    if !cache_get(source, *count) return false;
+    if count == 0 return true;
+
+    encoded_size: u32;
+    if !cache_get(source, *encoded_size) return false;
+    if source.count < cast(s64) encoded_size return false;
+
+    out.allocator = context.allocator;
+    array_resize(out, count);
+    decode_result := meshopt.decodeIndexBuffer(
+        out.data,
+        cast(u64) count,
+        cast(u64) size_of(u32),
+        cast(*u8) source.data,
+        cast(u64) encoded_size);
+    source.data += encoded_size;
+    source.count -= encoded_size;
+    return decode_result == 0;
 }
 
 cache_put :: (builder: *[..]u8, x: $T) {
@@ -1361,7 +1551,9 @@ load_peel_blender_scene_into_imported_scene :: (imported: *Imported_Scene, path:
 
     compute_world_matrices(imported.nodes, node_base, header.node_count);
     for local_mesh_index: 0..cast(s64) header.mesh_count-1 {
-        build_static_mesh_lods(imported, cast(s32) mesh_base + cast(s32) local_mesh_index);
+        mesh_index := cast(s32) mesh_base + cast(s32) local_mesh_index;
+        optimize_imported_mesh_vertex_fetch(imported, mesh_index, allow_compaction = false);
+        build_static_mesh_lods(imported, mesh_index);
     }
 
     array_add(*imported.models, .{
@@ -1610,11 +1802,94 @@ append_ai_mesh :: (
     });
 
     mesh_index := cast(s32) imported.meshes.count - 1;
+    optimize_imported_mesh_vertex_fetch(imported, mesh_index, allow_compaction = true);
     build_static_mesh_lods(imported, mesh_index);
 
     if mesh.mNumAnimMeshes == 0 && ai.to_string(mesh.mName).count > 0 {
         table_set(mesh_name_to_index, ai.to_string(mesh.mName), cast(s32) imported.meshes.count - 1);
     }
+}
+
+optimize_imported_mesh_vertex_fetch :: (imported: *Imported_Scene, mesh_index: s32, allow_compaction: bool) {
+    if mesh_index < 0 || mesh_index >= imported.meshes.count return;
+    mesh := imported.meshes[mesh_index];
+    if mesh.vertex_count == 0 || mesh.index_count == 0 return;
+    if allow_compaction {
+        if mesh.base_vertex + mesh.vertex_count != imported.vertices.count return;
+        if mesh.first_index + mesh.index_count != imported.indices.count return;
+    }
+
+    local_indices := NewArray(mesh.index_count, u32);
+    remapped_indices := NewArray(mesh.index_count, u32);
+    remap := NewArray(mesh.vertex_count, u32);
+    remapped_vertices := NewArray(mesh.vertex_count, Scene_Vertex);
+    defer {
+        array_free(local_indices);
+        array_free(remapped_indices);
+        array_free(remap);
+        array_free(remapped_vertices);
+    }
+
+    for local_index: 0..cast(s64) mesh.index_count-1 {
+        local_indices[local_index] = imported.indices[mesh.first_index + local_index] - mesh.base_vertex;
+    }
+
+    new_vertex_count := meshopt.optimizeVertexFetchRemap(
+        remap.data,
+        local_indices.data,
+        cast(u64) mesh.index_count,
+        cast(u64) mesh.vertex_count);
+    if new_vertex_count == 0 return;
+    if !allow_compaction && new_vertex_count != mesh.vertex_count return;
+
+    meshopt.remapVertexBuffer(
+        remapped_vertices.data,
+        imported.vertices.data + mesh.base_vertex,
+        cast(u64) mesh.vertex_count,
+        cast(u64) size_of(Scene_Vertex),
+        remap.data);
+    meshopt.remapIndexBuffer(
+        remapped_indices.data,
+        local_indices.data,
+        cast(u64) mesh.index_count,
+        remap.data);
+
+    copy_vertex_count := ifx allow_compaction then cast(s64) new_vertex_count else cast(s64) mesh.vertex_count;
+    memcpy(imported.vertices.data + mesh.base_vertex, remapped_vertices.data, copy_vertex_count * size_of(Scene_Vertex));
+    if allow_compaction {
+        array_resize(*imported.vertices, cast(s64) mesh.base_vertex + cast(s64) new_vertex_count);
+    }
+
+    for local_index: 0..cast(s64) mesh.index_count-1 {
+        imported.indices[mesh.first_index + local_index] = mesh.base_vertex + remapped_indices[local_index];
+    }
+
+    if allow_compaction && mesh.morph_target_count > 0 {
+        remapped_deltas := NewArray(mesh.vertex_count, Scene_Morph_Vertex_Delta);
+        defer array_free(remapped_deltas);
+
+        dest_cursor := imported.morph_targets[mesh.morph_target_start].vertex_delta_start;
+        for target_index: 0..cast(s64) mesh.morph_target_count-1 {
+            target := *imported.morph_targets[mesh.morph_target_start + target_index];
+            assert(target.vertex_delta_count == mesh.vertex_count, "Unexpected morph delta count for mesh % target %: expected %, got %.", mesh_index, target_index, mesh.vertex_count, target.vertex_delta_count);
+            meshopt.remapVertexBuffer(
+                remapped_deltas.data,
+                imported.morph_vertex_deltas.data + target.vertex_delta_start,
+                cast(u64) mesh.vertex_count,
+                cast(u64) size_of(Scene_Morph_Vertex_Delta),
+                remap.data);
+            memcpy(imported.morph_vertex_deltas.data + dest_cursor, remapped_deltas.data, cast(s64) new_vertex_count * size_of(Scene_Morph_Vertex_Delta));
+            target.vertex_delta_start = dest_cursor;
+            target.vertex_delta_count = cast(u32) new_vertex_count;
+            dest_cursor += cast(u32) new_vertex_count;
+        }
+        array_resize(*imported.morph_vertex_deltas, dest_cursor);
+    }
+
+    if allow_compaction {
+        mesh.vertex_count = cast(u32) new_vertex_count;
+    }
+    imported.meshes[mesh_index] = mesh;
 }
 
 assign_top4_bone_weight :: (vertex: *Scene_Vertex, bone_index: float, weight: float, nth_bone: u32) {
