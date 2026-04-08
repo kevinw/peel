@@ -23,12 +23,12 @@ CMAKE_BUILD_TYPE :: "Release";
         // TODO: maybe patch the usage of operator new/delete in the meshoptimizer codebase?? they already have
         // a function to set a custom allocator.
         footer = sprint("%\n%", footer, #string END
-#if OS != .WINDOWS { 
-    #library,system,link_always "libc++"; 
+#if OS != .WINDOWS {
+    #library,system,link_always "libc++";
 }
 END);
     }
-    ok, result :=build_and_generate_bindings(*project, .{
+    ok, result :=build_and_generate_bindings(project, .{
         cmake_build_type=CMAKE_BUILD_TYPE,
         verbose=false,
     });

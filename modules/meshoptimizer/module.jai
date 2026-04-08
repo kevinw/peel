@@ -1,4 +1,6 @@
-#if OS == .MACOS        #load "macos.jai";
-else #if OS == .WINDOWS #load "windows.jai";
-else #if OS == .LINUX   #load "linux.jai";
-else #assert false "TODO: implement for this platform";
+#if OS == {
+case .MACOS;   #load "macos.jai";
+case .WINDOWS; #load "windows.jai";
+case .LINUX;   #load "linux.jai";
+case; #assert false "TODO: implement for this platform";
+}

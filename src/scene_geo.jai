@@ -242,15 +242,18 @@ Scene_Geo :: struct {
 }
 
 scene_geo_init :: (geo: *Scene_Geo, model_paths: []string) {
+    resolved_model_paths := resolve_scene_model_import_paths(model_paths);
+    defer if resolved_model_paths.data != null array_free(resolved_model_paths);
+
     imported: Imported_Scene;
-    imported_scene_load_cached(*imported, model_paths);
+    imported_scene_load_cached(*imported, model_paths, resolved_model_paths);
     defer imported_scene_deinit(*imported);
-    scene_geo_init_from_imported(geo, *imported);
+    scene_geo_init_from_imported(geo, *imported, model_paths, resolved_model_paths);
 }
 
-scene_geo_init_from_imported :: (using geo: *Scene_Geo, imported: *Imported_Scene) {
+scene_geo_init_from_imported :: (using geo: *Scene_Geo, imported: *Imported_Scene, model_paths: []string, resolved_model_paths: []string) {
     cpu_meshlet_meshes, cpu_meshlets, cpu_meshlet_vertices, cpu_meshlet_triangles, cpu_meshlet_bounds, built_max_meshlet_count :=
-        build_scene_meshlets(imported);
+        build_scene_meshlets_cached(imported, model_paths, resolved_model_paths);
     defer {
         array_free(cpu_meshlet_meshes);
         array_free(cpu_meshlets);
@@ -523,10 +526,7 @@ imported_scene_deinit :: (using scene: *Imported_Scene) {
     scene.* = .{};
 }
 
-imported_scene_load_cached :: (scene: *Imported_Scene, model_paths: []string) {
-    resolved_model_paths := resolve_scene_model_import_paths(model_paths);
-    defer if resolved_model_paths.data != null array_free(resolved_model_paths);
-
+imported_scene_load_cached :: (scene: *Imported_Scene, model_paths: []string, resolved_model_paths: []string) {
     cache_path := imported_scene_cache_path(model_paths, resolved_model_paths);
     if file_exists(cache_path) {
         data, ok := File.read_entire_file(cache_path);
@@ -553,6 +553,198 @@ imported_scene_load_cached :: (scene: *Imported_Scene, model_paths: []string) {
         _ = File.write_entire_file(cache_path, cache_blob.data, cache_blob.count);
     }
     array_free(cache_blob);
+}
+
+Meshlet_Cache_Header :: struct {
+    vertex_count: u32;
+    triangle_count: u32;
+    encoded_size: u32;
+}
+
+compute_meshlet_cache_raw_size :: (
+    meshlet_meshes: []Scene_Meshlet_Mesh,
+    meshlets: []Scene_Meshlet,
+    meshlet_vertices: []u32,
+    meshlet_triangles: []u32,
+    meshlet_bounds: []Vector4,
+) -> s64 {
+    return
+        cast(s64) meshlet_meshes.count * size_of(Scene_Meshlet_Mesh) +
+        cast(s64) meshlets.count * size_of(Scene_Meshlet) +
+        cast(s64) meshlet_vertices.count * size_of(u32) +
+        cast(s64) meshlet_triangles.count * size_of(u32) +
+        cast(s64) meshlet_bounds.count * size_of(Vector4);
+}
+
+imported_scene_meshlet_cache_recipe_hash :: () -> u64 {
+    builder: String_Builder;
+    builder.allocator = temp;
+    append(*builder, tprint("v%|", IMPORTED_SCENE_MESHLET_CACHE_VERSION));
+    append(*builder, tprint("meshoptimizer=%|", meshopt.MESHOPTIMIZER_VERSION));
+    append(*builder, tprint("meshlets=%|%|", SCENE_GEO_MESHLET_MAX_VERTICES, SCENE_GEO_MESHLET_MAX_TRIANGLES));
+    append(*builder, tprint("encode_level=%|", SCENE_GEO_MESHLET_ENCODE_LEVEL));
+    key := builder_to_string(*builder,, temp);
+    return fnv1a_hash(key.data, key.count);
+}
+
+imported_scene_meshlet_cache_serialize :: (
+    builder: *[..]u8,
+    meshlet_meshes: []Scene_Meshlet_Mesh,
+    meshlets: []Scene_Meshlet,
+    meshlet_vertices: []u32,
+    meshlet_triangles: []u32,
+    meshlet_bounds: []Vector4,
+    max_meshlet_count: u32,
+) -> bool {
+    cache_put(builder, IMPORTED_SCENE_MESHLET_CACHE_MAGIC);
+    cache_put(builder, IMPORTED_SCENE_MESHLET_CACHE_VERSION);
+    cache_put(builder, imported_scene_meshlet_cache_recipe_hash());
+    cache_put(builder, max_meshlet_count);
+    cache_put_array(builder, meshlet_meshes);
+    cache_put_array(builder, meshlet_bounds);
+    meshlet_count_u32 := cast(u32) meshlets.count;
+    cache_put(builder, meshlet_count_u32);
+
+    encode_bound := cast(s64) meshopt.encodeMeshletBound(SCENE_GEO_MESHLET_MAX_VERTICES, SCENE_GEO_MESHLET_MAX_TRIANGLES);
+    encode_buffer := NewArray(encode_bound, u8);
+    defer array_free(encode_buffer);
+
+    for meshlets {
+        raw_vertex_ptr := meshlet_vertices.data + it.vertex_offset;
+        meshlet_triangles_u8 := NewArray(cast(s64) it.triangle_count * 3, u8);
+        for tri_i: 0..cast(s64) it.triangle_count-1 {
+            packed := meshlet_triangles[it.triangle_offset + tri_i];
+            meshlet_triangles_u8[tri_i * 3 + 0] = cast(u8) (packed & 0xff);
+            meshlet_triangles_u8[tri_i * 3 + 1] = cast(u8) ((packed >> 8) & 0xff);
+            meshlet_triangles_u8[tri_i * 3 + 2] = cast(u8) ((packed >> 16) & 0xff);
+        }
+
+        encoded_size := meshopt.encodeMeshlet(
+            encode_buffer.data,
+            cast(u64) encode_buffer.count,
+            raw_vertex_ptr,
+            cast(u64) it.vertex_count,
+            meshlet_triangles_u8.data,
+            cast(u64) it.triangle_count);
+        if encoded_size == 0 return false;
+
+        header := Meshlet_Cache_Header.{
+            vertex_count = it.vertex_count,
+            triangle_count = it.triangle_count,
+            encoded_size = cast(u32) encoded_size,
+        };
+        cache_put(builder, header);
+        if header.encoded_size > 0 {
+            offset := builder.count;
+            array_resize(builder, offset + cast(s64) header.encoded_size);
+            memcpy(builder.data + offset, encode_buffer.data, cast(s64) header.encoded_size);
+        }
+        array_free(meshlet_triangles_u8);
+    }
+
+    return true;
+}
+
+imported_scene_meshlet_cache_deserialize :: (
+    source_in: string,
+    meshlet_meshes: *[..]Scene_Meshlet_Mesh,
+    meshlets: *[..]Scene_Meshlet,
+    meshlet_vertices: *[..]u32,
+    meshlet_triangles: *[..]u32,
+    meshlet_bounds: *[..]Vector4,
+    max_meshlet_count: *u32,
+) -> bool, bool {
+    source := source_in;
+    magic: u32;
+    version: u32;
+    if !cache_get(*source, *magic) return false, false;
+    if !cache_get(*source, *version) return false, false;
+    if magic != IMPORTED_SCENE_MESHLET_CACHE_MAGIC || version != IMPORTED_SCENE_MESHLET_CACHE_VERSION return false, false;
+    recipe_hash: u64;
+    if !cache_get(*source, *recipe_hash) return false, false;
+    if recipe_hash != imported_scene_meshlet_cache_recipe_hash() return false, false;
+    if !cache_get(*source, max_meshlet_count) return false, false;
+    if !cache_get_array(*source, meshlet_meshes) return false, false;
+    if !cache_get_array(*source, meshlet_bounds) return false, false;
+
+    meshlet_count: u32;
+    if !cache_get(*source, *meshlet_count) return false, false;
+    if meshlet_count == 0 return true, source.count == 0;
+
+    array_reserve(meshlets, meshlet_count);
+    for meshlet_i: 0..cast(s64) meshlet_count-1 {
+        header: Meshlet_Cache_Header;
+        if !cache_get(*source, *header) return false, false;
+        if source.count < cast(s64) header.encoded_size return false, false;
+
+        vertex_offset := cast(u32) meshlet_vertices.count;
+        triangle_offset := cast(u32) meshlet_triangles.count;
+        array_add(meshlets, .{
+            vertex_offset = vertex_offset,
+            triangle_offset = triangle_offset,
+            vertex_count = header.vertex_count,
+            triangle_count = header.triangle_count,
+        });
+        array_resize(meshlet_vertices, meshlet_vertices.count + cast(s64) header.vertex_count);
+        array_resize(meshlet_triangles, meshlet_triangles.count + cast(s64) header.triangle_count);
+        decode_result := meshopt.decodeMeshletRaw(
+            meshlet_vertices.data + vertex_offset,
+            cast(u64) header.vertex_count,
+            meshlet_triangles.data + triangle_offset,
+            cast(u64) header.triangle_count,
+            cast(*u8) source.data,
+            cast(u64) header.encoded_size);
+        source.data += header.encoded_size;
+        source.count -= header.encoded_size;
+        if decode_result != 0 return false, false;
+    }
+
+    return true, source.count == 0;
+}
+
+build_scene_meshlets_cached :: (
+    imported: *Imported_Scene,
+    model_paths: []string,
+    resolved_model_paths: []string,
+) -> [..]Scene_Meshlet_Mesh, [..]Scene_Meshlet, [..]u32, [..]u32, [..]Vector4, u32 {
+    cache_path := imported_scene_meshlet_cache_path(model_paths, resolved_model_paths);
+    meshlet_meshes: [..]Scene_Meshlet_Mesh;
+    meshlets: [..]Scene_Meshlet;
+    meshlet_vertices: [..]u32;
+    meshlet_triangles: [..]u32;
+    meshlet_bounds: [..]Vector4;
+    max_meshlet_count: u32;
+
+    if file_exists(cache_path) {
+        data, ok := File.read_entire_file(cache_path);
+        if ok {
+            loaded, parse_ok := imported_scene_meshlet_cache_deserialize(data, *meshlet_meshes, *meshlets, *meshlet_vertices, *meshlet_triangles, *meshlet_bounds, *max_meshlet_count);
+            free(data);
+            if parse_ok && loaded {
+                log("loaded meshlets from cache %", cache_path);
+                return meshlet_meshes, meshlets, meshlet_vertices, meshlet_triangles, meshlet_bounds, max_meshlet_count;
+            }
+            array_free(meshlet_meshes);
+            array_free(meshlets);
+            array_free(meshlet_vertices);
+            array_free(meshlet_triangles);
+            array_free(meshlet_bounds);
+        }
+    }
+
+    meshlet_meshes, meshlets, meshlet_vertices, meshlet_triangles, meshlet_bounds, max_meshlet_count = build_scene_meshlets(imported);
+    cache_blob: [..]u8;
+    cache_blob.allocator = context.allocator;
+    serialize_ok := imported_scene_meshlet_cache_serialize(*cache_blob, meshlet_meshes, meshlets, meshlet_vertices, meshlet_triangles, meshlet_bounds, max_meshlet_count);
+    assert(serialize_ok, "Failed to serialize meshlet cache.");
+    if cache_blob.count > 0 {
+        _ = File.write_entire_file(cache_path, cache_blob.data, cache_blob.count);
+        raw_size := compute_meshlet_cache_raw_size(meshlet_meshes, meshlets, meshlet_vertices, meshlet_triangles, meshlet_bounds);
+        savings := 100.0 * (1.0 - cast(float) cache_blob.count / cast(float) raw_size);
+        log("built meshlet cache % -> raw=% bytes encoded=% bytes savings=% percent", cache_path, raw_size, cache_blob.count, savings);
+    }
+    array_free(cache_blob);
+    return meshlet_meshes, meshlets, meshlet_vertices, meshlet_triangles, meshlet_bounds, max_meshlet_count;
 }
 
 #scope_file
@@ -597,6 +789,9 @@ using,only(Table, table_find, table_reset, table_set) _ :: Hash_Table;
 #load "../tools/blender_exporter/peel_scene_format_bindings.jai";
 IMPORTED_SCENE_CACHE_VERSION : u32 : 20;
 IMPORTED_SCENE_CACHE_MAGIC : u32 : 0x53474d44; // SGMD
+IMPORTED_SCENE_MESHLET_CACHE_VERSION : u32 : 1;
+IMPORTED_SCENE_MESHLET_CACHE_MAGIC : u32 : 0x4d534744; // MSGD
+SCENE_GEO_MESHLET_ENCODE_LEVEL : s32 : 3;
 
 STATIC_MESH_LOD_TARGET_RATIOS :: float.[0.18, 0.02, 0.002];
 STATIC_MESH_LOD_TARGET_TRIANGLE_CAPS :: u32.[50000, 5000, 500];
@@ -624,6 +819,10 @@ imported_scene_cache_path :: (model_paths: []string, resolved_model_paths: []str
     cache_dir := tprint("%/.build/model_cache", find_workspace_root_for_cache());
     File.make_directory_if_it_does_not_exist(cache_dir, true);
     return tprint("%/scene_geo_%.bin", cache_dir, hash);
+}
+
+imported_scene_meshlet_cache_path :: (model_paths: []string, resolved_model_paths: []string) -> string {
+    return tprint("%.meshlets", imported_scene_cache_path(model_paths, resolved_model_paths));
 }
 
 imported_scene_serialize :: (builder: *[..]u8, scene: Imported_Scene) -> bool {
@@ -1660,11 +1859,12 @@ build_scene_meshlets :: (
             temp_meshlet := temp_meshlets[temp_i];
             if temp_meshlet.triangle_count == 0 || temp_meshlet.vertex_count == 0 continue;
 
-            meshopt.optimizeMeshlet(
+            meshopt.optimizeMeshletLevel(
                 temp_meshlet_vertices.data + temp_meshlet.vertex_offset,
+                cast(u64) temp_meshlet.vertex_count,
                 temp_meshlet_triangles.data + temp_meshlet.triangle_offset,
                 cast(u64) temp_meshlet.triangle_count,
-                cast(u64) temp_meshlet.vertex_count);
+                SCENE_GEO_MESHLET_ENCODE_LEVEL);
 
             vertex_offset := cast(u32) meshlet_vertices.count;
             triangle_offset := cast(u32) raw_meshlet_triangles.count;

@@ -6,7 +6,7 @@
 
 
 
-MESHOPTIMIZER_VERSION :: 240;
+MESHOPTIMIZER_VERSION :: 1010;
 /**
 * Vertex attribute stream
 * Each element takes size bytes, beginning at data, with stride controlling the spacing between successive elements (stride >= size).
@@ -39,7 +39,7 @@ generateVertexRemap :: (destination: *u32, indices: *u32, index_count: u64, vert
 */
 generateVertexRemapMulti :: (destination: *u32, indices: *u32, index_count: u64, vertex_count: u64, streams: *Stream, stream_count: u64) -> u64 #foreign libmeshoptimizer "meshopt_generateVertexRemapMulti";
 /**
-* Experimental: Generates a vertex remap table from the vertex buffer and an optional index buffer and returns number of unique vertices
+* Generates a vertex remap table from the vertex buffer and an optional index buffer and returns number of unique vertices
 * As a result, all vertices that are equivalent map to the same (new) location, with no gaps in the resulting sequence.
 * Equivalence is checked in two steps: vertex positions are compared for equality, and then the user-specified equality function is called (if provided).
 * Resulting remap table maps old vertices to new vertices and can be used in meshopt_remapVertexBuffer/meshopt_remapIndexBuffer.
@@ -84,6 +84,15 @@ generateShadowIndexBuffer :: (destination: *u32, indices: *u32, index_count: u64
 */
 generateShadowIndexBufferMulti :: (destination: *u32, indices: *u32, index_count: u64, vertex_count: u64, streams: *Stream, stream_count: u64) -> void #foreign libmeshoptimizer "meshopt_generateShadowIndexBufferMulti";
 /**
+* Generates a remap table that maps all vertices with the same position to the same (existing) index.
+* Similarly to meshopt_generateShadowIndexBuffer, this can be helpful to pre-process meshes for position-only rendering.
+* This can also be used to implement algorithms that require positional-only connectivity, such as hierarchical simplification.
+*
+* destination must contain enough space for the resulting remap table (vertex_count elements)
+* vertex_positions should have float3 position in the first 12 bytes of each vertex
+*/
+generatePositionRemap :: (destination: *u32, vertex_positions: *float, vertex_count: u64, vertex_positions_stride: u64) -> void #foreign libmeshoptimizer "meshopt_generatePositionRemap";
+/**
 * Generate index buffer that can be used as a geometry shader input with triangle adjacency topology
 * Each triangle is converted into a 6-vertex patch with the following layout:
 * - 0, 2, 4: original triangle vertices
@@ -112,7 +121,7 @@ generateAdjacencyIndexBuffer :: (destination: *u32, indices: *u32, index_count: 
 generateTessellationIndexBuffer :: (destination: *u32, indices: *u32, index_count: u64, vertex_positions: *float, vertex_count: u64, vertex_positions_stride: u64) -> void #foreign libmeshoptimizer "meshopt_generateTessellationIndexBuffer";
 /**
 * Generate index buffer that can be used for visibility buffer rendering and returns the size of the reorder table
-* Each triangle's provoking vertex index is equal to primitive id; this allows passing it to the fragment shader using nointerpolate attribute.
+* Each triangle's provoking vertex index is equal to primitive id; this allows passing it to the fragment shader using flat/nointerpolation attribute.
 * This is important for performance on hardware where primitive id can't be accessed efficiently in fragment shader.
 * The reorder table stores the original vertex id for each vertex in the new index buffer, and should be used in the vertex shader to load vertex data.
 * The provoking vertex is assumed to be the first vertex in the triangle; if this is not the case (OpenGL), rotate each triangle (abc -> bca) before rendering.
@@ -125,7 +134,7 @@ generateProvokingIndexBuffer :: (destination: *u32, reorder: *u32, indices: *u32
 /**
 * Vertex transform cache optimizer
 * Reorders indices to reduce the number of GPU vertex shader invocations
-* If index buffer contains multiple ranges for multiple draw calls, this functions needs to be called on each range individually.
+* If index buffer contains multiple ranges for multiple draw calls, this function needs to be called on each range individually.
 *
 * destination must contain enough space for the resulting index buffer (index_count elements)
 */
@@ -142,7 +151,7 @@ optimizeVertexCacheStrip :: (destination: *u32, indices: *u32, index_count: u64,
 * Vertex transform cache optimizer for FIFO caches
 * Reorders indices to reduce the number of GPU vertex shader invocations
 * Generally takes ~3x less time to optimize meshes but produces inferior results compared to meshopt_optimizeVertexCache
-* If index buffer contains multiple ranges for multiple draw calls, this functions needs to be called on each range individually.
+* If index buffer contains multiple ranges for multiple draw calls, this function needs to be called on each range individually.
 *
 * destination must contain enough space for the resulting index buffer (index_count elements)
 * cache_size should be less than the actual GPU cache size to avoid cache thrashing
@@ -151,7 +160,7 @@ optimizeVertexCacheFifo :: (destination: *u32, indices: *u32, index_count: u64, 
 /**
 * Overdraw optimizer
 * Reorders indices to reduce the number of GPU vertex shader invocations and the pixel overdraw
-* If index buffer contains multiple ranges for multiple draw calls, this functions needs to be called on each range individually.
+* If index buffer contains multiple ranges for multiple draw calls, this function needs to be called on each range individually.
 *
 * destination must contain enough space for the resulting index buffer (index_count elements)
 * indices must contain index data that is the result of meshopt_optimizeVertexCache (*not* the original mesh indices!)
@@ -163,7 +172,7 @@ optimizeOverdraw :: (destination: *u32, indices: *u32, index_count: u64, vertex_
 * Vertex fetch cache optimizer
 * Reorders vertices and changes indices to reduce the amount of GPU memory fetches during vertex processing
 * Returns the number of unique vertices, which is the same as input vertex count unless some vertices are unused
-* This functions works for a single vertex stream; for multiple vertex streams, use meshopt_optimizeVertexFetchRemap + meshopt_remapVertexBuffer for each stream.
+* This function works for a single vertex stream; for multiple vertex streams, use meshopt_optimizeVertexFetchRemap + meshopt_remapVertexBuffer for each stream.
 *
 * destination must contain enough space for the resulting vertex buffer (vertex_count elements)
 * indices is used both as an input and as an output index buffer
@@ -190,7 +199,8 @@ optimizeVertexFetchRemap :: (destination: *u32, indices: *u32, index_count: u64,
 encodeIndexBuffer :: (buffer: *u8, buffer_size: u64, indices: *u32, index_count: u64) -> u64 #foreign libmeshoptimizer "meshopt_encodeIndexBuffer";
 encodeIndexBufferBound :: (index_count: u64, vertex_count: u64) -> u64 #foreign libmeshoptimizer "meshopt_encodeIndexBufferBound";
 /**
-* Set index encoder format version
+* Set index encoder format version (defaults to 1)
+*
 * version must specify the data format version to encode; valid values are 0 (decodable by all library versions) and 1 (decodable by 0.14+)
 */
 encodeIndexVersion :: (version: s32) -> void #foreign libmeshoptimizer "meshopt_encodeIndexVersion";
@@ -229,6 +239,36 @@ encodeIndexSequenceBound :: (index_count: u64, vertex_count: u64) -> u64 #foreig
 */
 decodeIndexSequence :: (destination: *void, index_count: u64, index_size: u64, buffer: *u8, buffer_size: u64) -> s32 #foreign libmeshoptimizer "meshopt_decodeIndexSequence";
 /**
+* Experimental: Meshlet encoder
+* Encodes meshlet data into an array of bytes that is generally smaller and compresses better compared to original.
+* Returns encoded data size on success, 0 on error; the only error condition is if buffer doesn't have enough space
+* This function encodes a single meshlet; when encoding multiple meshlets, additional headers may be necessary to store vertex/triangle count and encoded size.
+* For maximum efficiency the meshlet being encoded should be optimized using meshopt_optimizeMeshletLevel with level 1+ (3 recommended); additionally, vertex reference data should be optimized for locality (fetch).
+*
+* buffer must contain enough space for the encoded meshlet (use meshopt_encodeMeshletBound to compute worst case size)
+* vertices may be NULL, in which case vertex_count must be 0 and only triangle data is encoded
+* vertex_count and triangle_count must be <= 256.
+*/
+encodeMeshlet :: (buffer: *u8, buffer_size: u64, vertices: *u32, vertex_count: u64, triangles: *u8, triangle_count: u64) -> u64 #foreign libmeshoptimizer "meshopt_encodeMeshlet";
+encodeMeshletBound :: (max_vertices: u64, max_triangles: u64) -> u64 #foreign libmeshoptimizer "meshopt_encodeMeshletBound";
+/**
+* Experimental: Meshlet decoder
+* Decodes meshlet data from an array of bytes generated by meshopt_encodeMeshlet
+* Returns 0 if decoding was successful, and an error code otherwise
+* The decoder is safe to use for untrusted input, but it may produce garbage data.
+*
+* vertices must contain enough space for the resulting vertex data, aligned to 4 bytes (align(vertex_count * vertex_size, 4) bytes)
+* vertex_size must be 2 (16-bit vertex references) or 4 (32-bit vertex references)
+* triangles must contain enough space for the resulting triangle data, aligned to 4 bytes (align(triangle_count * triangle_size, 4) bytes)
+* triangle_size must be 3 (8-bit triangle indices) or 4 (32-bit packed triangles, stored as (a) | (b << 8) | (c << 16))
+* vertex_count, triangle_count match those used during encoding exactly; buffer_size must be equal to the encoded size returned by meshopt_encodeMeshlet.
+* vertices may be NULL, in which case vertex_count must be 0 and the meshlet must contain just triangle data
+*
+* When using "raw" decoding (meshopt_decodeMeshletRaw), both vertices and triangles should have available space further aligned to 16 bytes for efficient SIMD decoding.
+*/
+decodeMeshlet :: (vertices: *void, vertex_count: u64, vertex_size: u64, triangles: *void, triangle_count: u64, triangle_size: u64, buffer: *u8, buffer_size: u64) -> s32 #foreign libmeshoptimizer "meshopt_decodeMeshlet";
+decodeMeshletRaw :: (vertices: *u32, vertex_count: u64, triangles: *u32, triangle_count: u64, buffer: *u8, buffer_size: u64) -> s32 #foreign libmeshoptimizer "meshopt_decodeMeshletRaw";
+/**
 * Vertex buffer encoder
 * Encodes vertex data into an array of bytes that is generally smaller and compresses better compared to original.
 * Returns encoded data size on success, 0 on error; the only error condition is if buffer doesn't have enough space
@@ -237,21 +277,25 @@ decodeIndexSequence :: (destination: *void, index_count: u64, index_size: u64, b
 * For maximum efficiency the vertex buffer being encoded has to be quantized and optimized for locality of reference (cache/fetch) first.
 *
 * buffer must contain enough space for the encoded vertex buffer (use meshopt_encodeVertexBufferBound to compute worst case size)
+* vertex_size must be a multiple of 4 (and <= 256)
 */
 encodeVertexBuffer :: (buffer: *u8, buffer_size: u64, vertices: *void, vertex_count: u64, vertex_size: u64) -> u64 #foreign libmeshoptimizer "meshopt_encodeVertexBuffer";
 encodeVertexBufferBound :: (vertex_count: u64, vertex_size: u64) -> u64 #foreign libmeshoptimizer "meshopt_encodeVertexBufferBound";
 /**
-* Experimental: Vertex buffer encoder
+* Vertex buffer encoder
 * Encodes vertex data just like meshopt_encodeVertexBuffer, but allows to override compression level.
 * For compression level to take effect, the vertex encoding version must be set to 1.
 * The default compression level implied by meshopt_encodeVertexBuffer is 2.
 *
+* buffer must contain enough space for the encoded vertex buffer (use meshopt_encodeVertexBufferBound to compute worst case size)
+* vertex_size must be a multiple of 4 (and <= 256)
 * level should be in the range [0, 3] with 0 being the fastest and 3 being the slowest and producing the best compression ratio.
 * version should be -1 to use the default version (specified via meshopt_encodeVertexVersion), or 0/1 to override the version; per above, level won't take effect if version is 0.
 */
 encodeVertexBufferLevel :: (buffer: *u8, buffer_size: u64, vertices: *void, vertex_count: u64, vertex_size: u64, level: s32, version: s32) -> u64 #foreign libmeshoptimizer "meshopt_encodeVertexBufferLevel";
 /**
-* Set vertex encoder format version
+* Set vertex encoder format version (defaults to 1)
+*
 * version must specify the data format version to encode; valid values are 0 (decodable by all library versions) and 1 (decodable by 0.23+)
 */
 encodeVertexVersion :: (version: s32) -> void #foreign libmeshoptimizer "meshopt_encodeVertexVersion";
@@ -262,6 +306,7 @@ encodeVertexVersion :: (version: s32) -> void #foreign libmeshoptimizer "meshopt
 * The decoder is safe to use for untrusted input, but it may produce garbage data.
 *
 * destination must contain enough space for the resulting vertex buffer (vertex_count * vertex_size bytes)
+* vertex_size must be a multiple of 4 (and <= 256)
 */
 decodeVertexBuffer :: (destination: *void, vertex_count: u64, vertex_size: u64, buffer: *u8, buffer_size: u64) -> s32 #foreign libmeshoptimizer "meshopt_decodeVertexBuffer";
 /**
@@ -274,16 +319,16 @@ decodeVertexVersion :: (buffer: *u8, buffer_size: u64) -> s32 #foreign libmeshop
 * Vertex buffer filters
 * These functions can be used to filter output of meshopt_decodeVertexBuffer in-place.
 *
-* meshopt_decodeFilterOct decodes octahedral encoding of a unit vector with K-bit (K <= 16) signed X/Y as an input; Z must store 1.0f.
+* meshopt_decodeFilterOct decodes octahedral encoding of a unit vector with K-bit signed X/Y as an input; Z must store 1.0f.
 * Each component is stored as an 8-bit or 16-bit normalized integer; stride must be equal to 4 or 8. W is preserved as is.
 *
-* meshopt_decodeFilterQuat decodes 3-component quaternion encoding with K-bit (4 <= K <= 16) component encoding and a 2-bit component index indicating which component to reconstruct.
+* meshopt_decodeFilterQuat decodes 3-component quaternion encoding with K-bit component encoding and a 2-bit component index indicating which component to reconstruct.
 * Each component is stored as an 16-bit integer; stride must be equal to 8.
 *
 * meshopt_decodeFilterExp decodes exponential encoding of floating-point data with 8-bit exponent and 24-bit integer mantissa as 2^E*M.
 * Each 32-bit component is decoded in isolation; stride must be divisible by 4.
 *
-* Experimental: meshopt_decodeFilterColor decodes YCoCg (+A) color encoding where RGB is converted to YCoCg space with variable bit quantization.
+* meshopt_decodeFilterColor decodes RGBA colors from YCoCg (+A) color encoding where RGB is converted to YCoCg space with K-bit component encoding, and A is stored using K-1 bits.
 * Each component is stored as an 8-bit or 16-bit normalized integer; stride must be equal to 4 or 8.
 */
 decodeFilterOct :: (buffer: *void, count: u64, stride: u64) -> void #foreign libmeshoptimizer "meshopt_decodeFilterOct";
@@ -294,8 +339,8 @@ decodeFilterColor :: (buffer: *void, count: u64, stride: u64) -> void #foreign l
 * Vertex buffer filter encoders
 * These functions can be used to encode data in a format that meshopt_decodeFilter can decode
 *
-* meshopt_encodeFilterOct encodes unit vectors with K-bit (K <= 16) signed X/Y as an output.
-* Each component is stored as an 8-bit or 16-bit normalized integer; stride must be equal to 4 or 8. W is preserved as is.
+* meshopt_encodeFilterOct encodes unit vectors with K-bit (2 <= K <= 16) signed X/Y as an output.
+* Each component is stored as an 8-bit or 16-bit normalized integer; stride must be equal to 4 or 8. Z will store 1.0f, W is preserved as is.
 * Input data must contain 4 floats for every vector (count*4 total).
 *
 * meshopt_encodeFilterQuat encodes unit quaternions with K-bit (4 <= K <= 16) component encoding.
@@ -306,7 +351,7 @@ decodeFilterColor :: (buffer: *void, count: u64, stride: u64) -> void #foreign l
 * Exponent can be shared between all components of a given vector as defined by stride or all values of a given component; stride must be divisible by 4.
 * Input data must contain stride/4 floats for every vector (count*stride/4 total).
 *
-* Experimental: meshopt_encodeFilterColor encodes RGBA color data by converting RGB to YCoCg color space with variable bit quantization.
+* meshopt_encodeFilterColor encodes RGBA color data by converting RGB to YCoCg color space with K-bit (2 <= K <= 16) component encoding; A is stored using K-1 bits.
 * Each component is stored as an 8-bit or 16-bit integer; stride must be equal to 4 or 8.
 * Input data must contain 4 floats for every color (count*4 total).
 */
@@ -324,20 +369,31 @@ encodeFilterColor :: (destination: *void, count: u64, stride: u64, bits: s32, da
 * Simplification options
 */
 Simplify :: enum u32 {
-    LockBorder    :: 1;
-    Sparse        :: 2;
-    ErrorAbsolute :: 4;
-    Prune         :: 8;
-    Regularize    :: 16;
+    LockBorder      :: 1;
+    Sparse          :: 2;
+    ErrorAbsolute   :: 4;
+    Prune           :: 8;
+    Regularize      :: 16;
+    Permissive      :: 32;
+    RegularizeLight :: 64;
+}
+/**
+* Simplification vertex flags/locks, for use in `vertex_lock` arrays in simplification APIs
+*/
+SimplifyVertex :: enum u32 {
+    Lock     :: 1;
+    Protect  :: 2;
+    Priority :: 4;
 }
 /**
 * Mesh simplifier
 * Reduces the number of triangles in the mesh, attempting to preserve mesh appearance as much as possible
 * The algorithm tries to preserve mesh topology and can stop short of the target goal based on topology constraints or target error.
-* If not all attributes from the input mesh are required, it's recommended to reindex the mesh without them prior to simplification.
+* If not all attributes from the input mesh are needed, it's recommended to reindex the mesh without them prior to simplification.
 * Returns the number of indices after simplification, with destination containing new index data
+*
 * The resulting index buffer references vertices from the original vertex buffer.
-* If the original vertex data isn't required, creating a compact vertex buffer using meshopt_optimizeVertexFetch is recommended.
+* If the original vertex data isn't needed, creating a compact vertex buffer using meshopt_optimizeVertexFetch is recommended.
 *
 * destination must contain enough space for the target index buffer, worst case is index_count elements (*not* target_index_count)!
 * vertex_positions should have float3 position in the first 12 bytes of each vertex
@@ -348,22 +404,56 @@ Simplify :: enum u32 {
 simplify :: (destination: *u32, indices: *u32, index_count: u64, vertex_positions: *float, vertex_count: u64, vertex_positions_stride: u64, target_index_count: u64, target_error: float, options: u32, result_error: *float) -> u64 #foreign libmeshoptimizer "meshopt_simplify";
 /**
 * Mesh simplifier with attribute metric
-* The algorithm enhances meshopt_simplify by incorporating attribute values into the error metric used to prioritize simplification order; see meshopt_simplify documentation for details.
-* Note that the number of attributes affects memory requirements and running time; this algorithm requires ~1.5x more memory and time compared to meshopt_simplify when using 4 scalar attributes.
+* Reduces the number of triangles in the mesh, attempting to preserve mesh appearance as much as possible.
+* Similar to meshopt_simplify, but incorporates attribute values into the error metric used to prioritize simplification order.
+* The algorithm tries to preserve mesh topology and can stop short of the target goal based on topology constraints or target error.
+* If not all attributes from the input mesh are needed, it's recommended to reindex the mesh without them prior to simplification.
+* Returns the number of indices after simplification, with destination containing new index data
 *
+* The resulting index buffer references vertices from the original vertex buffer.
+* If the original vertex data isn't needed, creating a compact vertex buffer using meshopt_optimizeVertexFetch is recommended.
+* Note that the number of attributes with non-zero weights affects memory requirements and running time.
+*
+* destination must contain enough space for the target index buffer, worst case is index_count elements (*not* target_index_count)!
+* vertex_positions should have float3 position in the first 12 bytes of each vertex
 * vertex_attributes should have attribute_count floats for each vertex
 * attribute_weights should have attribute_count floats in total; the weights determine relative priority of attributes between each other and wrt position
 * attribute_count must be <= 32
-* vertex_lock can be NULL; when it's not NULL, it should have a value for each vertex; 1 denotes vertices that can't be moved
+* vertex_lock can be NULL; when it's not NULL, it should have a value for each vertex composed of meshopt_SimplifyVertex_* flags
+* target_error represents the error relative to mesh extents that can be tolerated, e.g. 0.01 = 1% deformation; value range [0..1]
+* options must be a bitmask composed of meshopt_SimplifyX options; 0 is a safe default
+* result_error can be NULL; when it's not NULL, it will contain the resulting (relative) error after simplification
 */
 simplifyWithAttributes :: (destination: *u32, indices: *u32, index_count: u64, vertex_positions: *float, vertex_count: u64, vertex_positions_stride: u64, vertex_attributes: *float, vertex_attributes_stride: u64, attribute_weights: *float, attribute_count: u64, vertex_lock: *u8, target_index_count: u64, target_error: float, options: u32, result_error: *float) -> u64 #foreign libmeshoptimizer "meshopt_simplifyWithAttributes";
 /**
-* Experimental: Mesh simplifier (sloppy)
+* Mesh simplifier with position/attribute update
+* Reduces the number of triangles in the mesh, attempting to preserve mesh appearance as much as possible.
+* Similar to meshopt_simplifyWithAttributes, but destructively updates positions and attribute values for optimal appearance.
+* The algorithm tries to preserve mesh topology and can stop short of the target goal based on topology constraints or target error.
+* If not all attributes from the input mesh are needed, it's recommended to reindex the mesh without them prior to simplification.
+* Returns the number of indices after simplification, indices are destructively updated with new index data
+*
+* The updated index buffer references vertices from the original vertex buffer, however the vertex positions and attributes are updated in-place.
+* Creating a compact vertex buffer using meshopt_optimizeVertexFetch is recommended; if the original vertex data is needed, it should be copied before simplification.
+* Note that the number of attributes with non-zero weights affects memory requirements and running time. Attributes with zero weights are not updated.
+*
+* vertex_positions should have float3 position in the first 12 bytes of each vertex
+* vertex_attributes should have attribute_count floats for each vertex
+* attribute_weights should have attribute_count floats in total; the weights determine relative priority of attributes between each other and wrt position
+* attribute_count must be <= 32
+* vertex_lock can be NULL; when it's not NULL, it should have a value for each vertex composed of meshopt_SimplifyVertex_* flags
+* target_error represents the error relative to mesh extents that can be tolerated, e.g. 0.01 = 1% deformation; value range [0..1]
+* options must be a bitmask composed of meshopt_SimplifyX options; 0 is a safe default
+* result_error can be NULL; when it's not NULL, it will contain the resulting (relative) error after simplification
+*/
+simplifyWithUpdate :: (indices: *u32, index_count: u64, vertex_positions: *float, vertex_count: u64, vertex_positions_stride: u64, vertex_attributes: *float, vertex_attributes_stride: u64, attribute_weights: *float, attribute_count: u64, vertex_lock: *u8, target_index_count: u64, target_error: float, options: u32, result_error: *float) -> u64 #foreign libmeshoptimizer "meshopt_simplifyWithUpdate";
+/**
+* Mesh simplifier (sloppy)
 * Reduces the number of triangles in the mesh, sacrificing mesh appearance for simplification performance
 * The algorithm doesn't preserve mesh topology but can stop short of the target goal based on target error.
 * Returns the number of indices after simplification, with destination containing new index data
 * The resulting index buffer references vertices from the original vertex buffer.
-* If the original vertex data isn't required, creating a compact vertex buffer using meshopt_optimizeVertexFetch is recommended.
+* If the original vertex data isn't needed, creating a compact vertex buffer using meshopt_optimizeVertexFetch is recommended.
 *
 * destination must contain enough space for the target index buffer, worst case is index_count elements (*not* target_index_count)!
 * vertex_positions should have float3 position in the first 12 bytes of each vertex
@@ -373,11 +463,11 @@ simplifyWithAttributes :: (destination: *u32, indices: *u32, index_count: u64, v
 */
 simplifySloppy :: (destination: *u32, indices: *u32, index_count: u64, vertex_positions: *float, vertex_count: u64, vertex_positions_stride: u64, vertex_lock: *u8, target_index_count: u64, target_error: float, result_error: *float) -> u64 #foreign libmeshoptimizer "meshopt_simplifySloppy";
 /**
-* Experimental: Mesh simplifier (pruner)
+* Mesh simplifier (pruner)
 * Reduces the number of triangles in the mesh by removing small isolated parts of the mesh
 * Returns the number of indices after simplification, with destination containing new index data
 * The resulting index buffer references vertices from the original vertex buffer.
-* If the original vertex data isn't required, creating a compact vertex buffer using meshopt_optimizeVertexFetch is recommended.
+* If the original vertex data isn't needed, creating a compact vertex buffer using meshopt_optimizeVertexFetch is recommended.
 *
 * destination must contain enough space for the target index buffer, worst case is index_count elements
 * vertex_positions should have float3 position in the first 12 bytes of each vertex
@@ -389,7 +479,7 @@ simplifyPrune :: (destination: *u32, indices: *u32, index_count: u64, vertex_pos
 * Reduces the number of points in the cloud to reach the given target
 * Returns the number of points after simplification, with destination containing new index data
 * The resulting index buffer references vertices from the original vertex buffer.
-* If the original vertex data isn't required, creating a compact vertex buffer using meshopt_optimizeVertexFetch is recommended.
+* If the original vertex data isn't needed, creating a compact vertex buffer using meshopt_optimizeVertexFetch is recommended.
 *
 * destination must contain enough space for the target index buffer (target_vertex_count elements)
 * vertex_positions should have float3 position in the first 12 bytes of each vertex
@@ -465,7 +555,7 @@ CoverageStatistics :: struct {
     extent:   float; /* viewport size in mesh coordinates */
 }
 /**
-* Experimental: Coverage analyzer
+* Coverage analyzer
 * Returns coverage statistics (ratio of viewport pixels covered from each axis) using a software rasterizer
 *
 * vertex_positions should have float3 position in the first 12 bytes of each vertex
@@ -482,7 +572,7 @@ Meshlet :: struct {
     /* offsets within meshlet_vertices and meshlet_triangles arrays with meshlet data */
     vertex_offset:   u32;
     triangle_offset: u32;
-    /* number of vertices and triangles used in the meshlet; data is stored in consecutive range defined by offset and count */
+    /* number of vertices and triangles used in the meshlet; data is stored in consecutive range [offset..offset+count) for vertices and [offset..offset+count*3) for triangles */
     vertex_count:    u32;
     triangle_count:  u32;
 }
@@ -495,51 +585,57 @@ Meshlet :: struct {
 * When using buildMeshletsScan, for maximum efficiency the index buffer being converted has to be optimized for vertex cache first.
 *
 * meshlets must contain enough space for all meshlets, worst case size can be computed with meshopt_buildMeshletsBound
-* meshlet_vertices must contain enough space for all meshlets, worst case size is equal to max_meshlets * max_vertices
-* meshlet_triangles must contain enough space for all meshlets, worst case size is equal to max_meshlets * max_triangles * 3
+* meshlet_vertices must contain enough space for all meshlets, worst case is index_count elements (*not* vertex_count!)
+* meshlet_triangles must contain enough space for all meshlets, worst case is index_count elements
 * vertex_positions should have float3 position in the first 12 bytes of each vertex
-* max_vertices and max_triangles must not exceed implementation limits (max_vertices <= 256, max_triangles <= 512; max_triangles must be divisible by 4)
+* max_vertices and max_triangles must not exceed implementation limits (max_vertices <= 256, max_triangles <= 512)
 * cone_weight should be set to 0 when cone culling is not used, and a value between 0 and 1 otherwise to balance between cluster size and cone culling efficiency
 */
 buildMeshlets :: (meshlets: *Meshlet, meshlet_vertices: *u32, meshlet_triangles: *u8, indices: *u32, index_count: u64, vertex_positions: *float, vertex_count: u64, vertex_positions_stride: u64, max_vertices: u64, max_triangles: u64, cone_weight: float) -> u64 #foreign libmeshoptimizer "meshopt_buildMeshlets";
 buildMeshletsScan :: (meshlets: *Meshlet, meshlet_vertices: *u32, meshlet_triangles: *u8, indices: *u32, index_count: u64, vertex_count: u64, max_vertices: u64, max_triangles: u64) -> u64 #foreign libmeshoptimizer "meshopt_buildMeshletsScan";
 buildMeshletsBound :: (index_count: u64, max_vertices: u64, max_triangles: u64) -> u64 #foreign libmeshoptimizer "meshopt_buildMeshletsBound";
 /**
-* Experimental: Meshlet builder with flexible cluster sizes
+* Meshlet builder with flexible cluster sizes
 * Splits the mesh into a set of meshlets, similarly to meshopt_buildMeshlets, but allows to specify minimum and maximum number of triangles per meshlet.
 * Clusters between min and max triangle counts are split when the cluster size would have exceeded the expected cluster size by more than split_factor.
-* Additionally, allows to switch to axis aligned clusters by setting cone_weight to a negative value.
 *
-* meshlets must contain enough space for all meshlets, worst case size can be computed with meshopt_buildMeshletsBound using min_triangles (not max!)
-* meshlet_vertices must contain enough space for all meshlets, worst case size is equal to max_meshlets * max_vertices
-* meshlet_triangles must contain enough space for all meshlets, worst case size is equal to max_meshlets * max_triangles * 3
+* meshlets must contain enough space for all meshlets, worst case size can be computed with meshopt_buildMeshletsBound using min_triangles (*not* max!)
+* meshlet_vertices must contain enough space for all meshlets, worst case is index_count elements (*not* vertex_count!)
+* meshlet_triangles must contain enough space for all meshlets, worst case is index_count elements
 * vertex_positions should have float3 position in the first 12 bytes of each vertex
-* max_vertices, min_triangles and max_triangles must not exceed implementation limits (max_vertices <= 256, max_triangles <= 512; min_triangles <= max_triangles; both min_triangles and max_triangles must be divisible by 4)
-* cone_weight should be set to 0 when cone culling is not used, and a value between 0 and 1 otherwise to balance between cluster size and cone culling efficiency; additionally, cone_weight can be set to a negative value to prioritize axis aligned clusters (for raytracing) instead
+* max_vertices, min_triangles and max_triangles must not exceed implementation limits (max_vertices <= 256, max_triangles <= 512; min_triangles <= max_triangles)
+* cone_weight should be set to 0 when cone culling is not used, and a value between 0 and 1 otherwise to balance between cluster size and cone culling efficiency
 * split_factor should be set to a non-negative value; when greater than 0, clusters that have large bounds may be split unless they are under the min_triangles threshold
 */
 buildMeshletsFlex :: (meshlets: *Meshlet, meshlet_vertices: *u32, meshlet_triangles: *u8, indices: *u32, index_count: u64, vertex_positions: *float, vertex_count: u64, vertex_positions_stride: u64, max_vertices: u64, min_triangles: u64, max_triangles: u64, cone_weight: float, split_factor: float) -> u64 #foreign libmeshoptimizer "meshopt_buildMeshletsFlex";
 /**
-* Experimental: Meshlet builder that produces clusters optimized for raytracing
+* Meshlet builder that produces clusters optimized for raytracing
 * Splits the mesh into a set of meshlets, similarly to meshopt_buildMeshlets, but optimizes cluster subdivision for raytracing and allows to specify minimum and maximum number of triangles per meshlet.
 *
-* meshlets must contain enough space for all meshlets, worst case size can be computed with meshopt_buildMeshletsBound using min_triangles (not max!)
-* meshlet_vertices must contain enough space for all meshlets, worst case size is equal to max_meshlets * max_vertices
-* meshlet_triangles must contain enough space for all meshlets, worst case size is equal to max_meshlets * max_triangles * 3
+* meshlets must contain enough space for all meshlets, worst case size can be computed with meshopt_buildMeshletsBound using min_triangles (*not* max!)
+* meshlet_vertices must contain enough space for all meshlets, worst case is index_count elements (*not* vertex_count!)
+* meshlet_triangles must contain enough space for all meshlets, worst case is index_count elements
 * vertex_positions should have float3 position in the first 12 bytes of each vertex
-* max_vertices, min_triangles and max_triangles must not exceed implementation limits (max_vertices <= 256, max_triangles <= 512; min_triangles <= max_triangles; both min_triangles and max_triangles must be divisible by 4)
+* max_vertices, min_triangles and max_triangles must not exceed implementation limits (max_vertices <= 256, max_triangles <= 512; min_triangles <= max_triangles)
 * fill_weight allows to prioritize clusters that are closer to maximum size at some cost to SAH quality; 0.5 is a safe default
 */
 buildMeshletsSpatial :: (meshlets: *Meshlet, meshlet_vertices: *u32, meshlet_triangles: *u8, indices: *u32, index_count: u64, vertex_positions: *float, vertex_count: u64, vertex_positions_stride: u64, max_vertices: u64, min_triangles: u64, max_triangles: u64, fill_weight: float) -> u64 #foreign libmeshoptimizer "meshopt_buildMeshletsSpatial";
 /**
 * Meshlet optimizer
-* Reorders meshlet vertices and triangles to maximize locality to improve rasterizer throughput
+* Reorders meshlet vertices and triangles to maximize locality which can improve rasterizer throughput or ray tracing performance when using fast-build modes.
 *
-* meshlet_triangles and meshlet_vertices must refer to meshlet triangle and vertex index data; when buildMeshlets* is used, these
-* need to be computed from meshlet's vertex_offset and triangle_offset
+* meshlet_triangles and meshlet_vertices must refer to meshlet data; when buildMeshlets* is used, these need to be computed from meshlet's vertex_offset and triangle_offset
 * triangle_count and vertex_count must not exceed implementation limits (vertex_count <= 256, triangle_count <= 512)
 */
 optimizeMeshlet :: (meshlet_vertices: *u32, meshlet_triangles: *u8, triangle_count: u64, vertex_count: u64) -> void #foreign libmeshoptimizer "meshopt_optimizeMeshlet";
+/**
+* Experimental: Meshlet optimizer
+* Reorders meshlet vertices and triangles to maximize locality, with higher levels resulting in smaller compressed size at the cost of optimization time.
+* At level 0 the result is equivalent to meshopt_optimizeMeshlet; levels >= 1 may rotate triangle corners to improve compression (which can change provoking vertex and affect OMM data).
+*
+* level should be in the range [0, 9] with 0 equivalent to meshopt_optimizeMeshlet and 9 being the slowest; the sweet spot for compression ratio is around 3
+*/
+optimizeMeshletLevel :: (meshlet_vertices: *u32, vertex_count: u64, meshlet_triangles: *u8, triangle_count: u64, level: s32) -> void #foreign libmeshoptimizer "meshopt_optimizeMeshletLevel";
 Bounds :: struct {
     /* bounding sphere, useful for frustum and occlusion culling */
     center:         [3] float;
@@ -573,12 +669,13 @@ Bounds :: struct {
 *
 * vertex_positions should have float3 position in the first 12 bytes of each vertex
 * vertex_count should specify the number of vertices in the entire mesh, not cluster or meshlet
+* indices should have at most 256 unique vertex indices
 * index_count/3 and triangle_count must not exceed implementation limits (<= 512)
 */
 computeClusterBounds :: (indices: *u32, index_count: u64, vertex_positions: *float, vertex_count: u64, vertex_positions_stride: u64) -> Bounds #foreign libmeshoptimizer "meshopt_computeClusterBounds";
 computeMeshletBounds :: (meshlet_vertices: *u32, meshlet_triangles: *u8, triangle_count: u64, vertex_positions: *float, vertex_count: u64, vertex_positions_stride: u64) -> Bounds #foreign libmeshoptimizer "meshopt_computeMeshletBounds";
 /**
-* Experimental: Sphere bounds generator
+* Sphere bounds generator
 * Creates bounding sphere around a set of points or a set of spheres; returns the center and radius of the sphere, with other fields of the result set to 0.
 *
 * positions should have float3 position in the first 12 bytes of each element
@@ -586,15 +683,24 @@ computeMeshletBounds :: (meshlet_vertices: *u32, meshlet_triangles: *u8, triangl
 */
 computeSphereBounds :: (positions: *float, count: u64, positions_stride: u64, radii: *float, radii_stride: u64) -> Bounds #foreign libmeshoptimizer "meshopt_computeSphereBounds";
 /**
-* Experimental: Cluster partitioner
-* Partitions clusters into groups of similar size, prioritizing grouping clusters that share vertices or are close to each other.
+* Experimental: Extract meshlet-local vertex and triangle indices from absolute cluster indices.
+* Fills triangles[] and vertices[] such that vertices[triangles[i]] == indices[i], and returns the number of unique vertices.
 *
-* destination must contain enough space for the resulting partiotion data (cluster_count elements)
+* indices should have at most 256 unique vertex indices
+* index_count/3 must not exceed implementation limits (<= 512)
+*/
+extractMeshletIndices :: (vertices: *u32, triangles: *u8, indices: *u32, index_count: u64) -> u64 #foreign libmeshoptimizer "meshopt_extractMeshletIndices";
+/**
+* Cluster partitioner
+* Partitions clusters into groups of similar size, prioritizing grouping clusters that share vertices or are close to each other.
+* When vertex positions are not provided, only clusters that share vertices will be grouped together, which may result in small partitions for some inputs.
+*
+* destination must contain enough space for the resulting partition data (cluster_count elements)
 * destination[i] will contain the partition id for cluster i, with the total number of partitions returned by the function
 * cluster_indices should have the vertex indices referenced by each cluster, stored sequentially
 * cluster_index_counts should have the number of indices in each cluster; sum of all cluster_index_counts must be equal to total_index_count
-* vertex_positions should have float3 position in the first 12 bytes of each vertex (or can be NULL if not used)
-* target_partition_size is a target size for each partition, in clusters; the resulting partitions may be smaller or larger
+* vertex_positions can be NULL; when it's not NULL, it should have float3 position in the first 12 bytes of each vertex
+* target_partition_size is a target size for each partition, in clusters; the resulting partitions may be smaller or larger (up to target + target/3)
 */
 partitionClusters :: (destination: *u32, cluster_indices: *u32, total_index_count: u64, cluster_index_counts: *u32, cluster_count: u64, vertex_positions: *float, vertex_count: u64, vertex_positions_stride: u64, target_partition_size: u64) -> u64 #foreign libmeshoptimizer "meshopt_partitionClusters";
 /**
@@ -615,7 +721,7 @@ spatialSortRemap :: (destination: *u32, vertex_positions: *float, vertex_count: 
 */
 spatialSortTriangles :: (destination: *u32, indices: *u32, index_count: u64, vertex_positions: *float, vertex_count: u64, vertex_positions_stride: u64) -> void #foreign libmeshoptimizer "meshopt_spatialSortTriangles";
 /**
-* Experimental: Spatial clusterizer
+* Spatial clusterizer
 * Reorders points into clusters optimized for spatial locality, and generates a new index buffer.
 * Ensures the output can be split into cluster_size chunks where each chunk has good positional locality. Only the last chunk will be smaller than cluster_size.
 *
@@ -623,6 +729,46 @@ spatialSortTriangles :: (destination: *u32, indices: *u32, index_count: u64, ver
 * vertex_positions should have float3 position in the first 12 bytes of each vertex
 */
 spatialClusterPoints :: (destination: *u32, vertex_positions: *float, vertex_count: u64, vertex_positions_stride: u64, cluster_size: u64) -> void #foreign libmeshoptimizer "meshopt_spatialClusterPoints";
+/**
+* Experimental: Opacity micromap generator (measure)
+* Computes a subdivision level for each input triangle, as well as deduplicating the triangles that reference the same UVs to reduce rasterization requests.
+* Returns the number of OMM entries.
+*
+* levels and sources must contain enough space for the worst case output (index_count/3 elements, one per resulting OMM entry)
+* levels[i] will contain the subdivision level for entry i, with the total number of entries returned by the function; each entry should be rasterized from triangle index sources[i]
+* omm_indices must contain enough space for the resulting OMM indices (index_count/3 elements, one per triangle)
+* vertex_uvs should have float2 texture coordinate in the first 8 bytes of each vertex
+* max_level specifies the maximum subdivision level (0..12)
+* target_edge can be 0; when >0, triangle subdivision is adaptive and targets target_edge^2 texel area
+*/
+opacityMapMeasure :: (levels: *u8, sources: *u32, omm_indices: *s32, indices: *u32, index_count: u64, vertex_uvs: *float, vertex_count: u64, vertex_uvs_stride: u64, texture_width: u32, texture_height: u32, max_level: s32, target_edge: float) -> u64 #foreign libmeshoptimizer "meshopt_opacityMapMeasure";
+/**
+* Experimental: Opacity micromap generator (rasterize)
+* Rasterizes opacity state for a single triangle entry by sampling the alpha texture, using bilinear filtering and 0.5 alpha cutoff.
+*
+* result should contain enough space for the output opacity data (which can be computed using meshopt_opacityMapEntrySize)
+* level specifies the subdivision level (0..12)
+* states should be 2 for 2-state format (opaque/transparent) and 4 for 4-state format (opaque/transparent/unknown)
+* uv0/uv1/uv2 should refer to a float2 texture coordinate for each triangle corner; note that micromap data is sensitive to the corner order
+* texture_data should point to the alpha channel of the first pixel, encoded as UNORM8
+* texture_stride specifies the distance in bytes between consecutive pixels, e.g. 4 for RGBA input
+* texture_pitch specifies the distance in bytes between consecutive rows, e.g. 4*texture_width for tightly packed RGBA input
+*/
+opacityMapRasterize :: (result: *u8, level: s32, states: s32, uv0: *float, uv1: *float, uv2: *float, texture_data: *u8, texture_stride: u64, texture_pitch: u64, texture_width: u32, texture_height: u32) -> void #foreign libmeshoptimizer "meshopt_opacityMapRasterize";
+opacityMapEntrySize :: (level: s32, states: s32) -> u64 #foreign libmeshoptimizer "meshopt_opacityMapEntrySize";
+/**
+* Experimental: Opacity micromap generator (compact)
+* Compacts and deduplicates opacity data, merging identical micromap entries and replacing micromap states with special indices (-4..-1) when possible.
+* Returns the number of OMM entries after compaction; the data array should be trimmed using the last offset/size.
+*
+* data should contain opacity data for all input/output entries
+* levels should contain subdivision levels for all input/output entries
+* offsets should contain offset into data[] for each entry
+* levels[i] and offsets[i] will be updated with post-compaction level/offset for entry i, with the total number of entries returned by the function
+* omm_indices should contain indices into the original OMM data, and will be updated with a new index or a special index (-4..-1) when possible
+* states should be 2 for 2-state format (opaque/transparent) and 4 for 4-state format (opaque/transparent/unknown)
+*/
+opacityMapCompact :: (data: *u8, data_size: u64, levels: *u8, offsets: *u32, omm_count: u64, omm_indices: *s32, triangle_count: u64, states: s32) -> u64 #foreign libmeshoptimizer "meshopt_opacityMapCompact";
 /**
 * Quantize a float into half-precision (as defined by IEEE-754 fp16) floating point value
 * Generates +-inf for overflow, preserves NaN, flushes denormals to zero, rounds to nearest
@@ -632,7 +778,7 @@ spatialClusterPoints :: (destination: *u32, vertex_positions: *float, vertex_cou
 quantizeHalf :: (v: float) -> u16 #foreign libmeshoptimizer "meshopt_quantizeHalf";
 /**
 * Quantize a float into a floating point value with a limited number of significant mantissa bits, preserving the IEEE-754 fp32 binary representation
-* Generates +-inf for overflow, preserves NaN, flushes denormals to zero, rounds to nearest
+* Preserves infinities/NaN, flushes denormals to zero, rounds to nearest
 * Assumes N is in a valid mantissa precision range, which is 1..23
 */
 quantizeFloat :: (v: float, N: s32) -> float #foreign libmeshoptimizer "meshopt_quantizeFloat";
@@ -653,14 +799,14 @@ setAllocator :: (allocate: #type (unknown0: u64) -> *void #c_call, deallocate: #
 
 #if OS == .WINDOWS {
     libmeshoptimizer :: #library,no_dll "lib/win/libmeshoptimizer";
-}            
+}
 #if OS == .MACOS {
     libmeshoptimizer :: #library,no_dll "lib/macos/libmeshoptimizer";
-}            
+}
 #if OS == .LINUX {
     libmeshoptimizer :: #library,no_dll "lib/linux/libmeshoptimizer";
-}            
+}
 
-#if OS != .WINDOWS { 
-    #library,system,link_always "libc++"; 
+#if OS != .WINDOWS {
+    #library,system,link_always "libc++";
 }
