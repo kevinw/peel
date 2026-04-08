@@ -1,0 +1,4 @@
+interface:
+  display_name: "Jai Shader Workflow"
+  short_description: "Guide Jai transpiler and shader backend work"
+  default_prompt: "Use $jai-shader-transpiler-workflow to implement and validate Jai shader transpiler changes in peel."
