@@ -7,8 +7,13 @@ Draw_Data :: struct {
     num_instances: u32;
 }
 
-graphics_pipeline: Gpu_Pipeline;
-compute_pipeline: Gpu_Pipeline;
+using shaders: struct @init_group {
+    graphics: Shader(fluid_vertex_main, fluid_fragment_main, {
+        cull = .CW,
+        color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
+    });
+    compute: Compute_Shader(fluid_step_compute);
+};
 gpu_arena: Gpu_Arena;
 draw_data: Draw_Data;
 
@@ -41,14 +46,6 @@ fluid_init_state :: (state: *[FLUID_CELL_COUNT] Vector4) {
 }
 
 on_dll_init :: () {
-    raster_desc: Gpu_Raster_Desc = {
-        cull = .CW,
-        color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
-    };
-
-    SHR.gfx_pipeline(*graphics_pipeline, raster_desc, fluid_vertex_main, fluid_fragment_main);
-    SHR.compute_pipeline(*compute_pipeline, fluid_step_compute);
-
     gpu_arena = gpu_make_arena(1024 * 1024 * 12, label = "fluid2d arena");
 
     fluid_state_storage = gpu_alloc_view(*gpu_arena, Vector4, FLUID_CELL_COUNT * 2);
@@ -121,11 +118,9 @@ tick :: () {
     }
 
     main_queue := gpu_get_queue(.MAIN, 0);
-    result=, cmd_buff := gpu_start_command_recording(main_queue);
-    assert(result == .SUCCESS);
+    _, cmd_buff := gpu_start_command_recording(main_queue);
 
-    result = gpu_set_pipeline(cmd_buff, compute_pipeline);
-    assert(result == .SUCCESS, tprint("Fluid2D compute set pipeline failed: %", result));
+    gpu_set_pipeline(cmd_buff, compute.pipeline);
     gpu_dispatch_buffers(cmd_buff, .[fluid_state_storage.gpu, control.gpu], .[(FLUID_CELL_COUNT + 63) / 64, 1, 1]);
 
     ab_buffer_advance(*fluid_state);
@@ -143,12 +138,10 @@ tick :: () {
     });
 
     gpu_set_depth_stencil_state(cmd_buff, {depth_test = .ALWAYS, depth_mode = .NONE,});
-    gpu_set_pipeline(cmd_buff, graphics_pipeline);
+    gpu_set_pipeline(cmd_buff, graphics.pipeline);
 
     using draw_data;
-    draw_result := gpu_draw_instanced_direct(cmd_buff, vertex_params_gpu, num_vertices, num_instances);
-    assert(draw_result == .SUCCESS, tprint("Fluid2D draw failed: %", draw_result));
-
+    gpu_draw_instanced_direct(cmd_buff, vertex_params_gpu, num_vertices, num_instances);
     submit_and_present_with_ui(cmd_buff);
 } @on_tick
 

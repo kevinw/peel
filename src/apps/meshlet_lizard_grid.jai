@@ -21,33 +21,6 @@ Meshlet_Grid_Draw_Batch :: struct {
 }
 
 
-Meshlet_Grid_Params :: struct {
-    camera_vp: Matrix4;
-    frustum_planes: [6]Vector4;
-    eye_position: Vector3;
-    lod_projection_scale: float;
-    lod_radius_threshold: float;
-    lod_metric_power: float;
-    debug_mode: u32;
-    light_dir: Vector3;
-    base_color_factor: Vector4;
-    batch_mesh_index: u32;
-    base_color_texture_index: u32;
-    opacity_texture_index: u32;
-    normal_texture_index: u32;
-    roughness_texture_index: u32;
-    ao_texture_index: u32;
-    alpha_mode: u32;
-    alpha_cutoff: float;
-    sampler_index: u32;
-    batch_first_instance: u32;
-    batch_instance_count: u32;
-    batch_max_meshlet_count: u32;
-    batch_meshlet_chunk_count: u32;
-    batch_object_group_start: u32;
-    debug_flags: u32;
-}
-
 MESHLET_LIZARD_MODEL_PATH :: "models/nerdy+lizard+3d+model.glb";
 MESHLET_LIZARD_INSTANCE_COUNT :: 240;
 MESHLET_LIZARD_GRID_COLS :: 15;
@@ -95,10 +68,7 @@ using app: struct {
     mesh_source: string;
     mesh_grid_limit: u32;
     param_slot_count: s64 = 1;
-    using draw: Meshlet_Grid_Params = {
-        debug_mode = cast(u32) Meshlet_Grid_Debug_Mode.SHADED,
-        debug_flags = 0,
-    };
+    using draw: Meshlet_Grid_Params;
 }
 
 on_dll_init :: () {
@@ -254,12 +224,6 @@ show_ui :: () {
     Text("Max Meshlets / Mesh: %", geo.max_meshlet_count);
     Text("Mesh Grid Limit: %", mesh_grid_limit);
     Checkbox("Auto Orbit", *auto_orbit);
-    debug_mode_value := draw.debug_mode;
-    if RadioButton("Shaded", debug_mode_value == cast(u32) Meshlet_Grid_Debug_Mode.SHADED) draw.debug_mode = cast(u32) Meshlet_Grid_Debug_Mode.SHADED;
-    SameLine();
-    if RadioButton("LODs", debug_mode_value == cast(u32) Meshlet_Grid_Debug_Mode.LODS) draw.debug_mode = cast(u32) Meshlet_Grid_Debug_Mode.LODS;
-    SameLine();
-    if RadioButton("Meshlets", debug_mode_value == cast(u32) Meshlet_Grid_Debug_Mode.MESHLETS) draw.debug_mode = cast(u32) Meshlet_Grid_Debug_Mode.MESHLETS;
     SliderFloat("LOD Screen Radius", *lod_screen_radius, 8.0, 1024.0);
     SliderFloat("LOD Power", *lod_distance_power, 0.5, 2.0);
     Text("RMB look, WASD move, Shift boost");

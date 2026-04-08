@@ -9,8 +9,7 @@ tick :: () {
     if !swapchain_image return;
 
     main_queue := gpu_get_queue(.MAIN, 0);
-    result=, cmd_buff := gpu_start_command_recording(main_queue);
-    assert(result == .SUCCESS);
+    _, cmd_buff := gpu_start_command_recording(main_queue);
 
     gpu_begin_scoped_render_pass(cmd_buff, .{
         color_targets = .[
