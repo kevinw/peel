@@ -1236,7 +1236,7 @@ compute_model_bounds_from_geo :: (geo: *Scene_Geo, model_index: s32) -> Scene_Bo
 Hash_Table :: #import "Hash_Table";
 using,only(Table, table_find, table_reset, table_set) _ :: Hash_Table;
 #load "../tools/blender_exporter/peel_scene_format_bindings.jai";
-IMPORTED_SCENE_CACHE_VERSION : u32 : 21;
+IMPORTED_SCENE_CACHE_VERSION : u32 : 25;
 IMPORTED_SCENE_CACHE_MAGIC : u32 : 0x53474d44; // SGMD
 IMPORTED_SCENE_MESHLET_CACHE_VERSION : u32 : 1;
 IMPORTED_SCENE_MESHLET_CACHE_MAGIC : u32 : 0x4d534744; // MSGD
@@ -2110,7 +2110,7 @@ load_model_into_imported_scene :: (imported: *Imported_Scene, path: string) {
         return;
     }
 
-    load_flags: ai.PostProcessSteps :
+    load_flags: ai.PostProcessSteps =
           .Triangulate | .JoinIdenticalVertices | .ImproveCacheLocality | .OptimizeMeshes
         | .GenUVCoords | .CalcTangentSpace | .FindInvalidData | .FindDegenerates | .RemoveRedundantMaterials
         | .FlipUVs
@@ -2141,7 +2141,7 @@ load_model_into_imported_scene :: (imported: *Imported_Scene, path: string) {
         normal_texture_index := load_material_texture(imported, scene, it, model_dir, path,
             ai.TextureType.[.NORMALS], .NORMAL_MAP, default_texture_index = SCENE_INVALID_TEXTURE_INDEX).texture_index;
         roughness_texture_index := load_material_texture(imported, scene, it, model_dir, path,
-            ai.TextureType.[.DIFFUSE_ROUGHNESS, .UNKNOWN], .DATA_LINEAR, default_texture_index = SCENE_INVALID_TEXTURE_INDEX).texture_index;
+            ai.TextureType.[.GLTF_METALLIC_ROUGHNESS, .DIFFUSE_ROUGHNESS], .DATA_LINEAR, default_texture_index = SCENE_INVALID_TEXTURE_INDEX).texture_index;
         ao_texture_index := load_material_texture(imported, scene, it, model_dir, path,
             ai.TextureType.[.AMBIENT_OCCLUSION, .LIGHTMAP], .DATA_LINEAR, default_texture_index = SCENE_INVALID_TEXTURE_INDEX).texture_index;
         alpha_mode, alpha_cutoff := detect_material_alpha_mode(scene, it, imported.*, base_color_load.texture_index, opacity_texture_index, base_color_load.texture_flags);
@@ -2167,6 +2167,10 @@ load_model_into_imported_scene :: (imported: *Imported_Scene, path: string) {
     scene_meshes := ai.meshes(scene);
     for scene_meshes {
         append_ai_mesh(imported, it, material_start, *node_name_to_index, *mesh_name_to_index);
+    }
+    for base_mesh_index: mesh_start .. mesh_start + scene.mNumMeshes - 1 {
+        optimize_imported_mesh_vertex_fetch(imported, cast(s32) base_mesh_index, allow_compaction = true);
+        build_static_mesh_lods(imported, cast(s32) base_mesh_index);
     }
 
     for anim, anim_index: ai.animations(scene) {
@@ -2336,10 +2340,6 @@ append_ai_mesh :: (
         morph_target_start = morph_target_start,
         morph_target_count = cast(u32) imported.morph_targets.count - morph_target_start,
     });
-
-    mesh_index := cast(s32) imported.meshes.count - 1;
-    optimize_imported_mesh_vertex_fetch(imported, mesh_index, allow_compaction = true);
-    build_static_mesh_lods(imported, mesh_index);
 
     if mesh.mNumAnimMeshes == 0 && ai.to_string(mesh.mName).count > 0 {
         table_set(mesh_name_to_index, ai.to_string(mesh.mName), cast(s32) imported.meshes.count - 1);

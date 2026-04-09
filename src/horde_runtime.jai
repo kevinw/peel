@@ -343,6 +343,7 @@ reset :: (using runtime: *Horde_Runtime, horde_bindings: Horde_Bindings, camera_
     instances = gpu_alloc_view(*gpu_arena, Scene_Instance, max_instance_count);
     draw_params = gpu_alloc_view(*gpu_arena, Scene_Draw_Params_CPU, draw_groups.count);
     indirect_args = gpu_alloc_view(*gpu_arena, Indexed_Indirect_Draw_Args, draw_groups.count);
+    gpu_commit_residency();
 
     for group, group_index: draw_groups {
         mesh := scene_geo.meshes[group.mesh_index];

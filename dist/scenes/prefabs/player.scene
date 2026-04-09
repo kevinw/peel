@@ -1,15 +1,15 @@
 [1]
 scene "Player Prefab" {
-  asset "runner_lizard" {
-    model "./models/Lizard run.glb"
+  asset "player_character" {
+    model "./models/character/character.glb"
   }
 
   node "PlayerBody" {
     position 0 0 0
     rotation_deg 0 0 0
-    scale 4.8 4.8 4.8
-    skinned_mesh_render "runner_lizard"
-    clip "Run"
+    scale 100.8 100.8 100.8
+    skinned_mesh_render "player_character"
+    clip "walk"
     behavior "Player_Controller" {
       autopilot false
       move_speed 4.15

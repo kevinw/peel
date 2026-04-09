@@ -136,6 +136,10 @@ running_lizard_controller: Character_Controller;
 running_lizard_anim: Scene_Anim_State;
 mediapipe_body_anim: Scene_Anim_State;
 running_lizard_clip_index: s32 = -1;
+running_lizard_idle_clip_index: s32 = -1;
+running_lizard_walk_clip_index: s32 = -1;
+running_lizard_jump_clip_index: s32 = -1;
+running_lizard_anim_time: float;
 running_lizard_root: Matrix4 = Matrix4_Identity;
 running_lizard_spawn_position: Vector3;
 running_lizard_spawn_visual_yaw_offset: float = PI;
@@ -145,6 +149,7 @@ running_lizard_ground_y: float = 0.5;
 mediapipe_body_scale: float = 1.0;
 mediapipe_demo_focus: Vector3 = .{0.0, 2.3, -6.2};
 horde_runtime: Horde_Runtime;
+horde_reset_pending: bool;
 scene_static_instances: Gpu_View(Scene_Instance);
 scene_dynamic_instances: Gpu_Frame_View(Scene_Instance);
 scene_static_meshlet_instances: Gpu_View(Model_Scene_Meshlet_Instance);
@@ -631,7 +636,7 @@ tick :: () {
     update(*horde_runtime, dt);
     Physics.tick(dt);
     if horde_runtime.restart_requested {
-        reset_player_and_horde_game();
+        horde_reset_pending = true;
     }
     if physics_gizmos_enabled {
         append_lizard_physics_gizmos();
@@ -716,12 +721,12 @@ tick :: () {
     fill_sky_params(outdoor_rig, current_sky_draw_params.cpu, cam_forward, cam_right, cam_up, proj, shadow_map.light_dir);
 
     running_lizard_root = character_controller_root_matrix(*running_lizard_controller, running_lizard_scale);
+    update_player_animation_state(dt);
     scene_anim_sample(
         *running_lizard_anim,
         *scene_geo,
         running_lizard_clip_index,
-        running_lizard_controller.animation_time,
-        running_lizard_controller.animation_blend);
+        running_lizard_anim_time);
     update_mediapipe_demo_pose(cast(float) time, current_dynamic_instances.cpu);
     running_lizard_model := scene_geo.models[running_lizard_anim.model_index];
     for running_lizard_instances {
@@ -1069,6 +1074,10 @@ tick :: () {
 
     submit_and_present_with_ui(cmd_buff);
     scene_pick.render_this_frame = false;
+    if horde_reset_pending {
+        reset_player_and_horde_game();
+        horde_reset_pending = false;
+    }
 } @on_tick
 
 scene_rebuild_manip_objects :: () {
@@ -1181,6 +1190,10 @@ rebuild_scene_runtime :: () {
     array_reset(*mediapipe_face_instances);
     running_lizard_compiled_root_node_index = -1;
     running_lizard_clip_index = -1;
+    running_lizard_idle_clip_index = -1;
+    running_lizard_walk_clip_index = -1;
+    running_lizard_jump_clip_index = -1;
+    running_lizard_anim_time = 0.0;
     running_lizard_scale = 1.0;
     running_lizard_ground_y = 0.0;
     mediapipe_body_model_index = -1;
@@ -1597,10 +1610,16 @@ init_player_from_compiled_node :: (instances_cpu: *[..]Scene_Instance, total_ski
     assert(node.asset_index >= 0, "Player controller node '%' is missing an asset.", node.name);
     model_index := scene_model_index_for_compiled_asset(node.asset_index);
     assert(model_index >= 0, "Failed to resolve player model '%'.", node.name);
-    clip_name := ifx node.clip_name.count > 0 then node.clip_name else "Run";
-    clip_index := scene_geo_model_clip_index_by_name(*scene_geo, model_index, clip_name);
+    clip_name := ifx node.clip_name.count > 0 then node.clip_name else "walk";
+    running_lizard_walk_clip_index = player_model_clip_index(model_index, .["walk", "Walk", clip_name, "Run", "run"]);
+    running_lizard_idle_clip_index = player_model_clip_index(model_index, .["idle", "Idle", "static", "Static"]);
+    running_lizard_jump_clip_index = player_model_clip_index(model_index, .["jump", "Jump"]);
+    clip_index := running_lizard_idle_clip_index;
+    if clip_index < 0 clip_index = running_lizard_walk_clip_index;
+    if clip_index < 0 clip_index = running_lizard_jump_clip_index;
     if clip_index < 0 clip_index = cast(s32) scene_geo.models[model_index].anim_clip_start;
     running_lizard_clip_index = clip_index;
+    running_lizard_anim_time = 0.0;
     scene_anim_init(*running_lizard_anim, *scene_geo, model_index, clip_index);
 
     start_pos, start_rot_deg, start_scale := decompose_matrix_trs(node.world * compiled_asset_import_matrix(compiled_scene.assets[node.asset_index]));
@@ -1721,6 +1740,7 @@ reset_player_and_horde_game :: () {
         running_lizard_spawn_position,
         visual_yaw_offset = running_lizard_spawn_visual_yaw_offset);
     running_lizard_root = character_controller_root_matrix(*running_lizard_controller, running_lizard_scale);
+    running_lizard_anim_time = 0.0;
     reset(*horde_runtime, .{
         scene_geo = *scene_geo,
         shadow_map = *shadow_map,
@@ -2201,6 +2221,51 @@ clamp_player_camera_above_ground :: (camera: *Editor_Camera) {
     if camera.position.y < min_camera_y {
         camera.position.y = min_camera_y;
     }
+}
+
+player_model_clip_index :: (model_index: s32, names: []string) -> s32 {
+    for names {
+        if !it continue;
+        clip_index := scene_geo_model_clip_index_by_name(*scene_geo, model_index, it);
+        if clip_index >= 0 return clip_index;
+    }
+    return -1;
+}
+
+update_player_animation_state :: (dt: float) {
+    desired_clip := running_lizard_idle_clip_index;
+    grounded := character_controller_is_grounded(*running_lizard_controller);
+    moving := running_lizard_controller.animation_blend > 0.05;
+
+    if !grounded && running_lizard_jump_clip_index >= 0 {
+        desired_clip = running_lizard_jump_clip_index;
+    } else if moving && running_lizard_walk_clip_index >= 0 {
+        desired_clip = running_lizard_walk_clip_index;
+    } else if desired_clip < 0 {
+        desired_clip = running_lizard_walk_clip_index;
+    }
+
+    if desired_clip < 0 {
+        desired_clip = running_lizard_clip_index;
+    }
+
+    if desired_clip != running_lizard_clip_index {
+        running_lizard_clip_index = desired_clip;
+        running_lizard_anim_time = 0.0;
+        if running_lizard_anim.model_index >= 0 {
+            scene_anim_init(*running_lizard_anim, *scene_geo, running_lizard_anim.model_index, running_lizard_clip_index);
+        }
+    }
+
+    rate := 1.0;
+    if running_lizard_clip_index == running_lizard_walk_clip_index {
+        rate = max(0.35, running_lizard_controller.animation_blend) * 1.6;
+    } else if running_lizard_clip_index == running_lizard_jump_clip_index {
+        rate = 1.5;
+    } else if running_lizard_clip_index == running_lizard_idle_clip_index {
+        rate = 0.8;
+    }
+    running_lizard_anim_time += dt * rate;
 }
 
 scene_mouse_world_ray :: (frame: Manip_Frame_Input) -> Vector3, Vector3, bool {

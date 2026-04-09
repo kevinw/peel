@@ -9,8 +9,8 @@ scene "Model Scene" {
   asset "teapot" {
     model "./models/teapot.obj"
   }
-  asset "runner_lizard" {
-    model "./models/Lizard run.glb"
+  asset "player_character" {
+    model "./models/character/character.glb"
   }
   asset "hard_hat" {
     model "./models/hard-hat/source/helm.obj"
