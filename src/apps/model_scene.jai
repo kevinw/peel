@@ -94,40 +94,31 @@ mesh_shader: Mesh_Shader(model_scene_mesh_main, model_scene_meshlet_fragment_mai
     mesh_threads = .[1, 1, 1],
     max_total_threadgroups_per_mesh_grid = 1024,
 }, model_scene_task_main);
+
 grass_shader: Shader(model_scene_grass_vertex_main, model_scene_grass_fragment_main, .{
-    cull = .NONE,
+    cull = .CCW,
     depth_format = .D32_SFLOAT,
-    color_targets = .[
-        .{format = .R16G16B16A16_SFLOAT},
-    ],
+    color_targets = .[ {format = .R16G16B16A16_SFLOAT}, ],
 });
 grass_shadow_shader: Shader(model_scene_grass_shadow_vertex_main, model_scene_grass_shadow_fragment_main, .{
-    cull = .NONE,
+    cull = .CCW,
     depth_format = .D32_SFLOAT,
-    color_targets = .[
-        .{format = .R32_SFLOAT},
-    ],
+    color_targets = .[ {format = .R32_SFLOAT}, ],
 });
 debug_shadow_shader: Shader(model_scene_debug_shadow_vertex_main, model_scene_debug_shadow_fragment_main, .{
     cull = .CW,
     depth_format = .D32_SFLOAT,
-    color_targets = .[
-        .{format = .R16G16B16A16_SFLOAT},
-    ],
+    color_targets = .[ {format = .R16G16B16A16_SFLOAT}, ],
 });
 debug_pick_shader: Shader(model_scene_debug_shadow_vertex_main, model_scene_debug_pick_fragment_main, .{
     cull = .CW,
     depth_format = .D32_SFLOAT,
-    color_targets = .[
-        .{format = .R16G16B16A16_SFLOAT},
-    ],
+    color_targets = .[ {format = .R16G16B16A16_SFLOAT}, ],
 });
 sky_shader: Shader(model_scene_sky_vertex_main, model_scene_sky_fragment_main, .{
     cull = .NONE,
     depth_format = .D32_SFLOAT,
-    color_targets = .[
-        .{format = .R16G16B16A16_SFLOAT},
-    ],
+    color_targets = .[ {format = .R16G16B16A16_SFLOAT}, ],
 });
 gpu_arena: Gpu_Arena;
 scene_geo: Scene_Geo;
@@ -462,7 +453,7 @@ tick :: () {
             SliderFloat("Mesh LOD Power", *lod_distance_power, 0.5, 2.0, "%.2f");
             if CollapsingHeader("Grass") {
                 Checkbox("Render Grass", *render_grass);
-                SliderFloat("Grass Density", *grass_density_scale, 0.25, 3.0, "%.2f");
+                SliderFloat("Grass Density", *grass_density_scale, 0.25, 9.0, "%.2f");
                 SliderFloat("Grass Shadow Density", *grass_shadow_density_scale, 0.0, 2.0, "%.2f");
                 SliderFloat("Grass Fade Start", *grass_fade_start, 1.0, 64.0, "%.1f");
                 SliderFloat("Grass Fade End", *grass_fade_end, 2.0, 96.0, "%.1f");
@@ -713,18 +704,7 @@ tick :: () {
     update(*outdoor_rig, *shadow_map);
     shadow_binding := ifx scene_shadows_enabled then shadow_map_binding(*shadow_map) else Vector4.{0.0, 0.0, 2.0, 0.0};
     prepare_render(*horde_runtime, view_proj, shadow_binding, scene_camera.position, outdoor_rig.sun_strength, outdoor_rig.time_of_day);
-    if cast(float) time >= horde_runtime.debug_next_log_time {
-        using horde_runtime;
-        log("ENEMY_HORDE alive=% visible=% render_instances=% groups=% health=% target=% enabled=%",
-            alive_count,
-            visible_count_debug,
-            render_instance_count_debug,
-            draw_groups.count,
-            player_health,
-            spawn_params.target_alive,
-            spawn_params.enabled);
-        horde_runtime.debug_next_log_time = cast(float) time + 1.0;
-    }
+    maybe_log(*horde_runtime);
 
     fill_sky_params(outdoor_rig, current_sky_draw_params.cpu, cam_forward, cam_right, cam_up, proj, shadow_map.light_dir);
 

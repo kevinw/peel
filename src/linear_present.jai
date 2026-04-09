@@ -19,7 +19,7 @@ Linear_Present_State :: struct {
 
 linear_present_init :: (state: *Linear_Present_State, label := "linear present") -> bool {
     if state == null return false;
-    assert(SHR.init(*linear_present_shader), "Failed to create linear present pipeline.");
+    assert(init(*linear_present_shader), "Failed to create linear present pipeline.");
     state.params = gpu_make_buffer_ring(Linear_Present_Params_CPU, label = tprint("% params", label));
     state.sampler = gpu_create_sampler(.{
         min_filter = .LINEAR,
@@ -77,14 +77,12 @@ linear_present_present :: (cmd_buff: Gpu_Command_Buffer, state: *Linear_Present_
     frame_number: s64 = -1) {
     assert(state != null, "linear_present_present requires a state.");
     params := gpu_buffer_ring_slot(*state.params, frame_number);
-    if params.cpu != null {
-        params.cpu.* = .{
-            scene_texture_index = gpu_texture_view_index(linear_present_current_color_view(state, frame_number)),
-            sampler_index = cast(u32) state.sampler - 1,
-            flip_y = ifx state.flip_y then cast(u32) 1 else cast(u32) 0,
-            exposure = state.exposure,
-        };
-    }
+    params.cpu.* = .{
+        scene_texture_index = gpu_texture_view_index(linear_present_current_color_view(state, frame_number)),
+        sampler_index = cast(u32) state.sampler - 1,
+        flip_y = ifx state.flip_y then cast(u32) 1 else cast(u32) 0,
+        exposure = state.exposure,
+    };
 
     pass_desc := Gpu_Render_Pass_Desc.{
         color_targets = .[.{
@@ -95,7 +93,7 @@ linear_present_present :: (cmd_buff: Gpu_Command_Buffer, state: *Linear_Present_
         }],
     };
     gpu_begin_render_pass(cmd_buff, pass_desc);
-    gpu_set_pipeline(cmd_buff, SHR.pipeline(*linear_present_shader, pass_desc));
+    gpu_set_pipeline(cmd_buff, pipeline(*linear_present_shader, pass_desc));
     gpu_draw_instanced_direct(cmd_buff, params.gpu, 3, 1);
 }
 

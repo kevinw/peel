@@ -176,6 +176,23 @@ Horde_Runtime :: struct {
     draw_groups: [..]Enemy_Draw_Group;
 }
 
+maybe_log :: (using horde_runtime: *Horde_Runtime) {
+#if LOG_HORDE_STATS {
+    if cast(float)time < debug_next_log_time return;
+
+    log("ENEMY_HORDE alive=% visible=% render_instances=% groups=% health=% target=% enabled=%",
+        alive_count,
+        visible_count_debug,
+        render_instance_count_debug,
+        draw_groups.count,
+        player_health,
+        spawn_params.target_alive,
+        spawn_params.enabled);
+    debug_next_log_time = cast(float) time + 1.0;
+}
+}
+
+
 enemy_body_user_data_make :: (enemy_index: s32) -> u64 {
     assert(enemy_index >= 0);
     return cast(u64) (enemy_index + 1);
@@ -316,8 +333,10 @@ reset :: (using runtime: *Horde_Runtime, horde_bindings: Horde_Bindings, camera_
     }
     if render_meshes.count == 0 return;
 
-    //log("ENEMY_HORDE init model=% render_meshes=% collider=% radius=% half_height=% scale=%",
-        //scene_geo.models[mask_model_index].name, render_meshes.count, collider_kind, collider_radius, collider_half_height, model_scale);
+    #if LOG_HORDE_STATS {
+        log("ENEMY_HORDE init model=% render_meshes=% collider=% radius=% half_height=% scale=%",
+            scene_geo.models[mask_model_index].name, render_meshes.count, collider_kind, collider_radius, collider_half_height, model_scale);
+    }
 
     for render_mesh: render_meshes {
         lod_count := 1 + cast(s32) render_mesh.lod_mesh_count;
@@ -1245,3 +1264,4 @@ Scene_File :: #import,file "scene_file.jai";
 Gizmo :: #import "Gizmo";
 Physics :: #import "Physics";
 using JPH :: #import "JoltC";
+LOG_HORDE_STATS :: false;

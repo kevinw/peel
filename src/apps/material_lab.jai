@@ -217,7 +217,7 @@ tick :: () {
     };
 
     {
-        gpu_begin_scoped_render_pass(cmd_buff, scene_pass_desc);
+        gpu_begin_scoped_render_pass(cmd_buff, scene_pass_desc, .COLOR_ATTACHMENT_WRITE, .SHADER_READ);
         gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .LESS, depth_mode = .READ | .WRITE});
         gpu_set_pipeline(cmd_buff, SHR.pipeline(*material_lab_shader, scene_pass_desc));
 
@@ -230,8 +230,7 @@ tick :: () {
                 use_normal_map_flag = 1;
             }
 
-            params := sgpu_frame_param_alloc(*material_lab_draw_params);
-            params.cpu.* = .{
+            params := sgpu_frame_param_alloc(*material_lab_draw_params, {
                 vertices = material_lab_vertices.gpu,
                 indices = material_lab_indices.gpu + cast(Gpu_Ptr) mesh.first_index * size_of(u32),
                 view_proj = view_proj,
@@ -254,7 +253,7 @@ tick :: () {
                 ao_strength = object.ao_strength,
                 normal_strength = object.normal_strength,
                 uv_scale = object.uv_scale,
-            };
+            });
 
             draw_result := gpu_draw_instanced_direct(cmd_buff, params.gpu, mesh.index_count, 1);
             assert(draw_result == .SUCCESS, "material_lab draw failed for object % (%): %", object_index, object.name, draw_result);
