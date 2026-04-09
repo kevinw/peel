@@ -75,7 +75,7 @@ material_lab_objects: [MATERIAL_LAB_OBJ_COUNT]Material_Lab_Object;
 material_lab_gizmo_ctx: Gizmo.Gizmo_Context;
 material_lab_gizmo_render_ctx: Gizmo_Render.Gizmo_Render_Context;
 
-material_lab_debug_mode: ML_Debug_Mode = .LIT;
+constants: Material_Lab_Constants;
 material_lab_use_normal_map := true;
 material_lab_draw_vertex_normals := false;
 material_lab_vertex_normal_length: float = 0.18;
@@ -219,7 +219,7 @@ tick :: () {
     {
         gpu_begin_scoped_render_pass(cmd_buff, scene_pass_desc, .COLOR_ATTACHMENT_WRITE, .SHADER_READ);
         gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .LESS, depth_mode = .READ | .WRITE});
-        gpu_set_pipeline(cmd_buff, SHR.pipeline(*material_lab_shader, scene_pass_desc));
+        gpu_set_pipeline(cmd_buff, pipeline(*material_lab_shader, scene_pass_desc, constants));
 
         for object, object_index: material_lab_objects {
             mesh := material_lab_meshes[object.geometry];
@@ -240,7 +240,6 @@ tick :: () {
                 roughness_index = object.roughness_index,
                 ao_index = object.ao_index,
                 sampler_index = cast(u32) material_lab_sampler - 1,
-                debug_mode = cast(u32)material_lab_debug_mode,
                 use_normal_map = use_normal_map_flag,
                 camera_pos = material_lab_camera.position,
                 metallic = object.metallic,
@@ -436,10 +435,10 @@ init_objects :: () {
         geometry = .FLOOR,
         position = .{0.0, -0.1, 0.0},
         scale = .{1.0, 1.0, 1.0},
-        albedo_index = view_idx(.SNOW_ALBEDO_SRGB),
-        normal_index = view_idx(.SNOW_NORMAL),
-        roughness_index = view_idx(.SNOW_ROUGHNESS),
-        ao_index = view_idx(.SNOW_AO),
+        albedo_index = view_idx(.GROUND_ALBEDO_SRGB),
+        normal_index = view_idx(.GROUND_NORMAL),
+        roughness_index = view_idx(.GROUND_ROUGHNESS),
+        ao_index = view_idx(.GROUND_AO),
         tint = .{0.9, 0.92, 0.96},
         metallic = 0.0,
         roughness_bias = 0.05,
@@ -469,7 +468,7 @@ show_ui :: () {
         Persist.SliderFloat("Light Intensity", *material_lab_light_intensity, 0.5, 20.0, "%.2f");
         Separator();
         Text("Debug View");
-        inspect("Debug Mode", *material_lab_debug_mode);
+        inspect("Debug Mode", *constants.debug_mode);
         Separator();
         Text("Left to right:");
         BulletText("Ground albedo loaded as sRGB");

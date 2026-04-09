@@ -107,7 +107,7 @@ tick :: () {
     };
 
     {
-        gpu_begin_scoped_render_pass(cmd_buff, scene_pass_desc);
+        gpu_begin_scoped_render_pass(cmd_buff, scene_pass_desc, .COLOR_ATTACHMENT_WRITE, .SHADER_READ);
         gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
         gpu_set_pipeline(cmd_buff, SHR.pipeline(*color_space_test_shader, scene_pass_desc));
         gpu_draw_instanced_direct(cmd_buff, params.gpu, 3, 1);

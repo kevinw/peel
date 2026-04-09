@@ -34,7 +34,6 @@ Material_Lab_Params :: struct {
     ao_index: u32;
 
     sampler_index: u32;
-    debug_mode: u32;
     use_normal_map: u32;
     _pad0: u32;
     _pad1: u32;
@@ -57,6 +56,10 @@ Material_Lab_Params :: struct {
     _pad2: float;
 }
 
+Material_Lab_Constants :: struct {
+    debug_mode: ML_Debug_Mode = .LIT;
+} @function_constants
+
 ML_Debug_Mode :: enum u32 {
     LIT :: 0;
     ALBEDO :: 1;
@@ -67,11 +70,10 @@ ML_Debug_Mode :: enum u32 {
     NDOTL :: 6;
 }
 
-
 Material_Lab_Params_CPU :: CPU_Struct(Material_Lab_Params);
 
 
-material_lab_vertex_main :: (using in: Material_Lab_Vertex_In, params: *Material_Lab_Params) -> Material_Lab_Vertex_Out {
+material_lab_vertex_main :: (using in: Material_Lab_Vertex_In, params: *Material_Lab_Params, constants: Material_Lab_Constants) -> Material_Lab_Vertex_Out {
     using out: Material_Lab_Vertex_Out;
     idx := params.indices[vertex_id];
     vertex := params.vertices[idx];
@@ -94,7 +96,7 @@ material_lab_vertex_main :: (using in: Material_Lab_Vertex_In, params: *Material
     return out;
 } @vertex_shader
 
-material_lab_fragment_main :: (using in: Material_Lab_Fragment_In, params: *Material_Lab_Params) -> Vector4 @SV_Target0 {
+material_lab_fragment_main :: (using in: Material_Lab_Fragment_In, params: *Material_Lab_Params, using constants: Material_Lab_Constants) -> Vector4 @SV_Target0 {
     uv_tiled := uv * params.uv_scale;
 
     albedo_tex := sample_2d(params.albedo_index, params.sampler_index, uv_tiled).xyz;
@@ -145,7 +147,7 @@ material_lab_fragment_main :: (using in: Material_Lab_Fragment_In, params: *Mate
     color += albedo * 0.08 * ao;
     color += params.base_color_tint * params.emissive_strength;
 
-    if cast(ML_Debug_Mode)params.debug_mode == {
+    if debug_mode == {
     case .ALBEDO; return .{albedo.x, albedo.y, albedo.z, 1.0};
     case .WORLD_NORMAL; return .{base_n.x * 0.5 + 0.5, base_n.y * 0.5 + 0.5, base_n.z * 0.5 + 0.5, 1.0};
     case .NORMAL; return .{N.x * 0.5 + 0.5, N.y * 0.5 + 0.5, N.z * 0.5 + 0.5, 1.0};
