@@ -102,3 +102,5 @@ dist/empty_window.dylib
 dist/color_space_test
 dist/color_space_test.dylib
 dist/dynamic_graphics_pipeline_test
+dist/material_lab
+dist/material_lab.dylib

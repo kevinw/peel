@@ -558,11 +558,7 @@ model_scene_fragment_main :: (using in: Model_Scene_Fragment_In, params: *Scene_
         T := normalize(Vector3.{tangent.x, tangent.y, tangent.z});
         B := normalize(cross(N, T)) * tangent.w;
         n_sample := sample_2d(material.normal_texture_index, material.sampler_index, uv);
-        n_ts := Vector3.{
-            n_sample.x * 2.0 - 1.0,
-            n_sample.y * 2.0 - 1.0,
-            n_sample.z * 2.0 - 1.0,
-        };
+        n_ts := decode_bc5_normal(n_sample);
         N = normalize(T * n_ts.x + B * n_ts.y + N * n_ts.z);
     }
     if material.ao_texture_index != SCENE_INVALID_TEXTURE_INDEX {
@@ -637,7 +633,7 @@ ground_fragment_main :: (using in: Ground_Fragment_In, params: *Ground_Draw_Para
     }
     bitangent := normalize(cross(N, tangent));
     n_sample := sample_2d(params.normal_texture_index, params.sampler_index, uv);
-    n_ts := Vector3.{n_sample.x * 2.0 - 1.0, n_sample.y * 2.0 - 1.0, n_sample.z * 2.0 - 1.0};
+    n_ts := decode_bc5_normal(n_sample);
     N = normalize(tangent * n_ts.x + bitangent * n_ts.y + N * max(n_ts.z, 0.0));
 
     sun_dir := normalize(-params.light_dir);

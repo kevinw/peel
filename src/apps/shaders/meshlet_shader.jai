@@ -416,7 +416,7 @@ fragment_main :: (
         T := normalize(tangent.xyz);
         B := normalize(cross(N, T)) * tangent.w;
         n_sample := sample_2d(params.normal_texture_index, params.sampler_index, uv);
-        n_ts := n_sample * 2.0 - 1.0;
+        n_ts := decode_bc5_normal(n_sample);
         N = normalize(T * n_ts.x + B * n_ts.y + N * n_ts.z);
     }
 

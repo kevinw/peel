@@ -156,11 +156,7 @@ pbr_fragment_main :: (using in: PBR_Fragment_In, params: *PBR_Params) -> Vector4
     }
     bitangent := cross(base_n, tangent);
 
-    normal_map := normalize(Vector3.{
-        normal_tex.x * 2.0 - 1.0,
-        normal_tex.y * 2.0 - 1.0,
-        normal_tex.z * 2.0 - 1.0,
-    });
+    normal_map := decode_bc5_normal(normal_tex);
     N := normalize(tangent * normal_map.x + bitangent * normal_map.y + base_n * normal_map.z);
 
     disp_height := disp_tex.x * 2.0 - 1.0;

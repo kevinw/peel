@@ -306,5 +306,5 @@ build_geometry :: () {
 #import "stb_image";
 #import "ImGui";
 Input :: #import "Input";
-#load "procedural_geometry.jai";
+#import "Procedural_Geometry";
 #load "shaders/pbr_shader.jai";
