@@ -24,12 +24,20 @@
     "command": "jai ~/src/peel/build.jai - src/apps/cel_shading.jai -run -dll"
   },
   {
+    "label": "color_space_test",
+    "command": "jai ~/src/peel/build.jai - src/apps/color_space_test.jai -run -dll"
+  },
+  {
     "label": "crowd_nav",
     "command": "jai ~/src/peel/build.jai - src/apps/crowd_nav.jai -run -dll"
   },
   {
     "label": "decal_painter",
     "command": "jai ~/src/peel/build.jai - src/apps/decal_painter.jai -run -dll"
+  },
+  {
+    "label": "dynamic_graphics_pipeline_test",
+    "command": "jai ~/src/peel/build.jai - src/apps/dynamic_graphics_pipeline_test.jai -run -dll"
   },
   {
     "label": "empty_window",

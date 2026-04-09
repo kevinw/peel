@@ -99,3 +99,6 @@ dist/blender_scene.dylib
 *.peelscene
 dist/empty_window
 dist/empty_window.dylib
+dist/color_space_test
+dist/color_space_test.dylib
+dist/dynamic_graphics_pipeline_test

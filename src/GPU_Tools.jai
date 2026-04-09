@@ -312,7 +312,7 @@ smooth_yaw_towards :: (current: float, target: float, dt: float, turn_speed: flo
     return current + step_sign * max_step;
 }
 
-load_texture_rgba8 :: (path: string) -> Gpu_Texture, Gpu_Texture_View {
+load_texture_rgba8_with_format :: (path: string, format: Format) -> Gpu_Texture, Gpu_Texture_View {
     width, height, num_channels: s32 = 0;
     pixels := stbi_load(temp_c_string(path), *width, *height, *num_channels, 4);
     defer stbi_image_free(pixels);
@@ -320,7 +320,7 @@ load_texture_rgba8 :: (path: string) -> Gpu_Texture, Gpu_Texture_View {
     assert(pixels != null && width > 0 && height > 0, tprint("Failed to load texture: %", path));
     texture_result, texture := gpu_create_texture(.{
         dimensions = .[cast(u32) width, cast(u32) height, 1],
-        format = .R8G8B8A8_UNORM,
+        format = format,
         usage = .SAMPLED | .TRANSFER_DST,
     });
 
@@ -335,8 +335,26 @@ load_texture_rgba8 :: (path: string) -> Gpu_Texture, Gpu_Texture_View {
     return texture, view;
 }
 
+load_texture_rgba8 :: (path: string) -> Gpu_Texture, Gpu_Texture_View {
+    texture, view := load_texture_rgba8_with_format(path, .R8G8B8A8_UNORM);
+    return texture, view;
+}
+
+load_texture_rgba8_srgb :: (path: string) -> Gpu_Texture, Gpu_Texture_View {
+    texture, view := load_texture_rgba8_with_format(path, .R8G8B8A8_SRGB);
+    return texture, view;
+}
+
 load_sampled_texture_rgba8 :: (path: string) -> Sampled_Texture {
     texture, view := load_texture_rgba8(path);
+    return .{
+        texture = texture,
+        view = view,
+    };
+}
+
+load_sampled_texture_rgba8_srgb :: (path: string) -> Sampled_Texture {
+    texture, view := load_texture_rgba8_srgb(path);
     return .{
         texture = texture,
         view = view,

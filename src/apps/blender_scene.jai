@@ -566,32 +566,12 @@ cycle_hdri_selection :: (delta: s32) {
 hdri_cache_path_for_source :: (source_path: string, modtime: Apollo_Time, size: s64) -> string {
     key_source := tprint("hdri|cmgen-v2|sky2048|ibl128|%|%|%:%", source_path, size, modtime.low, modtime.high);
     key_hash := Hash.fnv1a_hash(key_source.data, key_source.count);
-    cache_dir := tprint("%/.build/texture_cache/hdri", find_workspace_root());
+    cache_dir := cache_subdir_path(".build/texture_cache/hdri");
     return tprint("%/%", cache_dir, key_hash);
 }
 
 resolve_cmgen_executable :: () -> string {
-    tool_name := "cmgen";
-    result, stdout, stderr, timeout_reached := Process_Module.run_command(
-        "which",
-        tool_name,
-        capture_and_return_output = true,
-        working_directory = find_workspace_root(),
-        timeout_ms = 2000);
-    if !timeout_reached && result.type == .EXITED && result.exit_code == 0 {
-        trimmed := String.trim(stdout);
-        if trimmed.count != 0 && file_exists(trimmed) {
-            if stdout.count != 0 free(stdout);
-            if stderr.count != 0 free(stderr);
-            return copy_string(trimmed);
-        }
-    }
-    if stdout.count != 0 free(stdout);
-    if stderr.count != 0 free(stderr);
-
-    bundled := tprint("%/.build/tools/filament/v1.70.2/filament/bin/cmgen", find_workspace_root());
-    if file_exists(bundled) return copy_string(bundled);
-    return "";
+    return cache_resolve_executable("cmgen", ".build/tools/filament/v1.70.2/filament/bin/cmgen");
 }
 
 ensure_hdri_cache :: (source_path: string) -> bool, HDRI_Cache_Assets {
@@ -633,7 +613,7 @@ ensure_hdri_cache :: (source_path: string) -> bool, HDRI_Cache_Assets {
         "--size=2048",
         source_path,
         capture_and_return_output = true,
-        working_directory = find_workspace_root(),
+        working_directory = cache_workspace_root(),
         timeout_ms = 300000);
 
     if timeout_reached || result.type != .EXITED || result.exit_code != 0 {
@@ -656,7 +636,7 @@ ensure_hdri_cache :: (source_path: string) -> bool, HDRI_Cache_Assets {
         tprint("--ibl-dfg=%", dfg_path),
         source_path,
         capture_and_return_output = true,
-        working_directory = find_workspace_root(),
+        working_directory = cache_workspace_root(),
         timeout_ms = 300000);
     free(cmgen);
 

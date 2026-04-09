@@ -172,12 +172,19 @@ Scene_Anim_Clip :: struct {
     morph_channel_count: u32;
 }
 
+Texture_Content_Class :: enum u32 {
+    COLOR_SRGB;
+    DATA_LINEAR;
+    NORMAL_MAP;
+}
+
 Imported_Texture :: struct {
     key: string;
+    cache_path: string;
     width: u32;
     height: u32;
-    pixels: [..]u8;
     has_alpha: bool;
+    builtin_white: bool;
 }
 
 Imported_Scene :: struct {
@@ -204,10 +211,16 @@ Imported_Scene :: struct {
     models: [..]Scene_Model;
 }
 
+Imported_Scene_Geometry_Asset_Ref :: struct {
+    root_mesh_index: u32;
+    asset_hash: u64;
+}
+
 Imported_Scene_Cache_Metadata :: struct {
     materials: [..]Scene_Material;
     textures: [..]Imported_Texture;
     meshes: [..]Scene_Mesh;
+    geometry_asset_refs: [..]Imported_Scene_Geometry_Asset_Ref;
     nodes: [..]Scene_Node;
     node_names: [..]string;
     node_bind_transforms: [..]Scene_Node_Transform;
@@ -285,10 +298,7 @@ scene_geo_init_from_imported :: (using geo: *Scene_Geo, imported: *Imported_Scen
     }
 
     for it: imported.textures {
-        assert(it.width > 0 && it.height > 0 && it.pixels.count >= cast(s64) it.width * cast(s64) it.height * 4,
-            "Imported texture invalid: key=% width=% height=% pixels=%.",
-            it.key, it.width, it.height, it.pixels.count);
-        texture, view := create_texture_from_rgba8(it.pixels, it.width, it.height);
+        texture, view := create_texture_from_imported_texture(it);
         array_add(*textures, texture);
         array_add(*texture_views, view);
         array_add(*texture_keys, copy_string(it.key));
@@ -521,7 +531,7 @@ imported_scene_deinit :: (using scene: *Imported_Scene) {
     array_free(materials);
     for textures {
         if it.key.count != 0 free(it.key);
-        array_free(it.pixels);
+        if it.cache_path.count != 0 free(it.cache_path);
     }
     array_free(textures);
     array_free(meshes);
@@ -555,7 +565,7 @@ imported_scene_load_cached :: (scene: *Imported_Scene, model_paths: []string, re
         if ok {
             loaded, parse_ok := imported_scene_deserialize(scene, data);
             free(data);
-            if parse_ok && loaded {
+            if parse_ok && loaded && imported_scene_texture_cache_ready(scene.*) {
                 log("loaded from cache %", cache_path);
                 return;
             }
@@ -633,42 +643,232 @@ meshlet_asset_cache_recipe_hash :: () -> u64 {
     return imported_scene_meshlet_cache_recipe_hash();
 }
 
-meshlet_asset_cache_path :: (imported: *Imported_Scene, mesh_index: s32) -> string {
-    assert(mesh_index >= 0 && mesh_index < imported.meshes.count, "Invalid mesh index %", mesh_index);
-    mesh := imported.meshes[mesh_index];
+Imported_Geometry_Asset_Metadata :: struct {
+    meshes: []Scene_Mesh;
+}
 
-    local_indices := NewArray(mesh.index_count, u32);
-    defer array_free(local_indices);
-    for local_index: 0..cast(s64) mesh.index_count-1 {
-        local_indices[local_index] = imported.indices[mesh.first_index + local_index] - mesh.base_vertex;
+geometry_asset_recipe_hash :: () -> u64 {
+    builder: String_Builder;
+    builder.allocator = temp;
+    append(*builder, tprint("v%|", GEOMETRY_ASSET_CACHE_VERSION));
+    append(*builder, tprint("import_recipe=%|", imported_scene_recipe_hash()));
+    append(*builder, tprint("vertex_schema=%|", geo_cache_type_hash(type_info(Scene_Vertex))));
+    key := builder_to_string(*builder,, temp);
+    return fnv1a_hash(key.data, key.count);
+}
+
+geometry_asset_cache_path :: (asset_hash: u64) -> string {
+    cache_dir := cache_subdir_path(".build/geometry_asset_cache");
+    return tprint("%/geometry_asset_%.bin", cache_dir, asset_hash);
+}
+
+collect_lod_child_mask :: (imported: *Imported_Scene) -> []bool {
+    is_lod_child := NewArray(imported.meshes.count, bool);
+    for mesh: imported.meshes {
+        for lod_offset: 0..cast(s64) mesh.lod_mesh_count-1 {
+            is_lod_child[mesh.lod_mesh_start + cast(u32) lod_offset] = true;
+        }
+    }
+    return is_lod_child;
+}
+
+mesh_is_geometry_asset_root :: (imported: *Imported_Scene, mesh_index: s32, is_lod_child: []bool) -> bool {
+    if mesh_index < 0 || mesh_index >= imported.meshes.count return false;
+    if is_lod_child[mesh_index] return false;
+    mesh := imported.meshes[mesh_index];
+    if mesh.skin_bone_count != 0 return false;
+    if mesh.morph_target_count != 0 return false;
+    return true;
+}
+
+build_geometry_asset_hash :: (imported: *Imported_Scene, root_mesh_index: s32) -> u64 {
+    variant_indices := collect_mesh_asset_variant_indices(imported, root_mesh_index);
+    defer array_free(variant_indices);
+    hash := geometry_asset_recipe_hash();
+    for variant_indices {
+        mesh := imported.meshes[it];
+        hash = fnv1a_hash(cast(u64) mesh.vertex_count, hash);
+        hash = fnv1a_hash(cast(u64) mesh.index_count, hash);
+        hash = fnv1a_hash(imported.vertices.data + mesh.base_vertex, cast(s64) mesh.vertex_count * size_of(Scene_Vertex), hash);
+        local_indices := NewArray(mesh.index_count, u32);
+        for local_index: 0..cast(s64) mesh.index_count-1 {
+            local_indices[local_index] = imported.indices[mesh.first_index + local_index] - mesh.base_vertex;
+        }
+        hash = fnv1a_hash(local_indices.data, cast(s64) mesh.index_count * size_of(u32), hash);
+        array_free(local_indices);
+    }
+    return hash;
+}
+
+build_geometry_asset_local_data :: (
+    imported: *Imported_Scene,
+    root_mesh_index: s32,
+) -> [..]Scene_Mesh, [..]Scene_Vertex, [..]u32 {
+    variant_indices := collect_mesh_asset_variant_indices(imported, root_mesh_index);
+    defer array_free(variant_indices);
+    local_meshes: [..]Scene_Mesh;
+    local_vertices: [..]Scene_Vertex;
+    local_indices: [..]u32;
+
+    for variant_mesh_index: variant_indices {
+        mesh := imported.meshes[variant_mesh_index];
+        local_mesh := mesh;
+        local_mesh.base_vertex = cast(u32) local_vertices.count;
+        local_mesh.first_index = cast(u32) local_indices.count;
+        for vertex_i: 0..cast(s64) mesh.vertex_count-1 {
+            array_add(*local_vertices, imported.vertices[mesh.base_vertex + vertex_i]);
+        }
+        for index_i: 0..cast(s64) mesh.index_count-1 {
+            global_index := imported.indices[mesh.first_index + index_i];
+            array_add(*local_indices, global_index - mesh.base_vertex + local_mesh.base_vertex);
+        }
+        array_add(*local_meshes, local_mesh);
     }
 
+    if local_meshes.count > 0 {
+        local_meshes[0].lod_mesh_start = ifx local_meshes[0].lod_mesh_count > 0 then cast(u32) 1 else 0;
+        for lod_i: 1..local_meshes.count-1 {
+            local_meshes[lod_i].lod_mesh_start = 0;
+            local_meshes[lod_i].lod_mesh_count = 0;
+        }
+    }
+    return local_meshes, local_vertices, local_indices;
+}
+
+load_or_build_geometry_asset_cached :: (
+    imported: *Imported_Scene,
+    root_mesh_index: s32,
+) -> [..]Scene_Mesh, [..]Scene_Vertex, [..]u32, bool {
+    asset_hash := build_geometry_asset_hash(imported, root_mesh_index);
+    cache_path := geometry_asset_cache_path(asset_hash);
+    local_meshes: [..]Scene_Mesh;
+    local_vertices: [..]Scene_Vertex;
+    local_indices: [..]u32;
+
+    if file_exists(cache_path) {
+        data, ok := File.read_entire_file(cache_path);
+        if ok {
+            loaded, parse_ok := geometry_asset_cache_deserialize(data, *local_meshes, *local_vertices, *local_indices);
+            free(data);
+            if parse_ok && loaded {
+                return local_meshes, local_vertices, local_indices, true;
+            }
+            array_free(local_meshes);
+            array_free(local_vertices);
+            array_free(local_indices);
+        }
+    }
+
+    local_meshes, local_vertices, local_indices = build_geometry_asset_local_data(imported, root_mesh_index);
+    cache_blob: [..]u8;
+    cache_blob.allocator = context.allocator;
+    serialize_ok := geometry_asset_cache_serialize(*cache_blob, local_meshes, local_vertices, local_indices);
+    assert(serialize_ok, "Failed to serialize geometry asset cache for mesh %.", root_mesh_index);
+    if cache_blob.count > 0 {
+        _ = File.write_entire_file(cache_path, cache_blob.data, cache_blob.count);
+    }
+    array_free(cache_blob);
+    return local_meshes, local_vertices, local_indices, false;
+}
+
+load_geometry_asset_cached_by_hash :: (
+    asset_hash: u64,
+    local_meshes: *[..]Scene_Mesh,
+    local_vertices: *[..]Scene_Vertex,
+    local_indices: *[..]u32,
+) -> bool {
+    cache_path := geometry_asset_cache_path(asset_hash);
+    if !file_exists(cache_path) return false;
+    data, ok := File.read_entire_file(cache_path);
+    if !ok return false;
+    loaded, parse_ok := geometry_asset_cache_deserialize(data, local_meshes, local_vertices, local_indices);
+    free(data);
+    return loaded && parse_ok;
+}
+
+geometry_asset_cache_serialize :: (
+    builder: *[..]u8,
+    local_meshes: []Scene_Mesh,
+    local_vertices: []Scene_Vertex,
+    local_indices: []u32,
+) -> bool {
+    cache_put(builder, GEOMETRY_ASSET_CACHE_MAGIC);
+    cache_put(builder, GEOMETRY_ASSET_CACHE_VERSION);
+    cache_put(builder, geometry_asset_recipe_hash());
+    cache_put(builder, geo_cache_type_hash(type_info(Scene_Vertex)));
+    if !cache_put_scene_vertices_encoded(builder, local_vertices) return false;
+    if !cache_put_scene_indices_encoded(builder, local_indices) return false;
+    metadata := Imported_Geometry_Asset_Metadata.{meshes = local_meshes};
+    return geo_cache_put_reflected(builder, *metadata, type_info(Imported_Geometry_Asset_Metadata));
+}
+
+geometry_asset_cache_deserialize :: (
+    source_in: string,
+    local_meshes: *[..]Scene_Mesh,
+    local_vertices: *[..]Scene_Vertex,
+    local_indices: *[..]u32,
+) -> bool, bool {
+    source := source_in;
+    magic: u32;
+    version: u32;
+    if !cache_get(*source, *magic) return false, false;
+    if !cache_get(*source, *version) return false, false;
+    if magic != GEOMETRY_ASSET_CACHE_MAGIC || version != GEOMETRY_ASSET_CACHE_VERSION return false, false;
+    recipe_hash: u64;
+    if !cache_get(*source, *recipe_hash) return false, false;
+    if recipe_hash != geometry_asset_recipe_hash() return false, false;
+    vertex_schema_hash: u64;
+    if !cache_get(*source, *vertex_schema_hash) return false, false;
+    if vertex_schema_hash != geo_cache_type_hash(type_info(Scene_Vertex)) return false, false;
+    if !cache_get_scene_vertices_encoded(*source, local_vertices) return false, false;
+    if !cache_get_scene_indices_encoded(*source, local_indices) return false, false;
+    metadata: Imported_Geometry_Asset_Metadata;
+    if !geo_cache_get_reflected(*source, *metadata, type_info(Imported_Geometry_Asset_Metadata)) return false, false;
+    local_meshes.allocator = context.allocator;
+    array_resize(local_meshes, metadata.meshes.count);
+    memcpy(local_meshes.data, metadata.meshes.data, cast(s64) metadata.meshes.count * size_of(Scene_Mesh));
+    array_free(metadata.meshes);
+    return true, source.count == 0;
+}
+
+meshlet_asset_cache_path :: (imported: *Imported_Scene, root_mesh_index: s32) -> string {
+    assert(root_mesh_index >= 0 && root_mesh_index < imported.meshes.count, "Invalid mesh index %", root_mesh_index);
+    variant_indices := collect_mesh_asset_variant_indices(imported, root_mesh_index);
+    defer array_free(variant_indices);
     hash := meshlet_asset_cache_recipe_hash();
     hash = fnv1a_hash(cast(u64) geo_cache_type_hash(type_info(Scene_Vertex)), hash);
-    hash = fnv1a_hash(cast(u64) mesh.vertex_count, hash);
-    hash = fnv1a_hash(cast(u64) mesh.index_count, hash);
-    hash = fnv1a_hash(imported.vertices.data + mesh.base_vertex, cast(s64) mesh.vertex_count * size_of(Scene_Vertex), hash);
-    hash = fnv1a_hash(local_indices.data, cast(s64) mesh.index_count * size_of(u32), hash);
+    hash = fnv1a_hash(cast(u64) variant_indices.count, hash);
+    for variant_indices {
+        mesh := imported.meshes[it];
+        hash = fnv1a_hash(cast(u64) mesh.vertex_count, hash);
+        hash = fnv1a_hash(cast(u64) mesh.index_count, hash);
+        hash = fnv1a_hash(imported.vertices.data + mesh.base_vertex, cast(s64) mesh.vertex_count * size_of(Scene_Vertex), hash);
+        local_indices := NewArray(mesh.index_count, u32);
+        for local_index: 0..cast(s64) mesh.index_count-1 {
+            local_indices[local_index] = imported.indices[mesh.first_index + local_index] - mesh.base_vertex;
+        }
+        hash = fnv1a_hash(local_indices.data, cast(s64) mesh.index_count * size_of(u32), hash);
+        array_free(local_indices);
+    }
 
-    cache_dir := tprint("%/.build/mesh_asset_cache", find_workspace_root_for_cache());
-    File.make_directory_if_it_does_not_exist(cache_dir, true);
+    cache_dir := cache_subdir_path(".build/mesh_asset_cache");
     return tprint("%/meshlet_asset_%.bin", cache_dir, hash);
 }
 
 meshlet_asset_cache_serialize :: (
     builder: *[..]u8,
+    meshlet_meshes: []Scene_Meshlet_Mesh,
     meshlets: []Scene_Meshlet,
     meshlet_vertices: []u32,
     meshlet_triangles: []u32,
     meshlet_bounds: []Vector4,
-    bounds_center_radius: Vector4,
     max_meshlet_count: u32,
 ) -> bool {
     cache_put(builder, MESHLET_ASSET_CACHE_MAGIC);
     cache_put(builder, MESHLET_ASSET_CACHE_VERSION);
     cache_put(builder, meshlet_asset_cache_recipe_hash());
-    cache_put(builder, bounds_center_radius);
     cache_put(builder, max_meshlet_count);
+    cache_put_array(builder, meshlet_meshes);
     cache_put_array(builder, meshlet_bounds);
     meshlet_count_u32 := cast(u32) meshlets.count;
     cache_put(builder, meshlet_count_u32);
@@ -713,11 +913,11 @@ meshlet_asset_cache_serialize :: (
 
 meshlet_asset_cache_deserialize :: (
     source_in: string,
+    meshlet_meshes: *[..]Scene_Meshlet_Mesh,
     meshlets: *[..]Scene_Meshlet,
     meshlet_vertices: *[..]u32,
     meshlet_triangles: *[..]u32,
     meshlet_bounds: *[..]Vector4,
-    bounds_center_radius: *Vector4,
     max_meshlet_count: *u32,
 ) -> bool, bool {
     source := source_in;
@@ -729,8 +929,8 @@ meshlet_asset_cache_deserialize :: (
     recipe_hash: u64;
     if !cache_get(*source, *recipe_hash) return false, false;
     if recipe_hash != meshlet_asset_cache_recipe_hash() return false, false;
-    if !cache_get(*source, bounds_center_radius) return false, false;
     if !cache_get(*source, max_meshlet_count) return false, false;
+    if !cache_get_array(*source, meshlet_meshes) return false, false;
     if !cache_get_array(*source, meshlet_bounds) return false, false;
 
     meshlet_count: u32;
@@ -929,45 +1129,70 @@ build_scene_meshlets_cached :: (
     max_meshlet_count: u32;
     cache_hits: s64;
     cache_misses: s64;
+    is_lod_child := NewArray(imported.meshes.count, bool);
+    defer array_free(is_lod_child);
     array_resize(*meshlet_meshes, imported.meshes.count);
 
-    for mesh_src, mesh_index: imported.meshes {
-        asset_meshlets, asset_meshlet_vertices, asset_meshlet_triangles, asset_meshlet_bounds, bounds_center_radius, asset_max_meshlet_count, loaded_from_cache :=
+    for mesh: imported.meshes {
+        for lod_offset: 0..cast(s64) mesh.lod_mesh_count-1 {
+            is_lod_child[mesh.lod_mesh_start + cast(u32) lod_offset] = true;
+        }
+    }
+
+    for _, mesh_index: imported.meshes {
+        if is_lod_child[mesh_index] continue;
+        asset_meshlet_meshes, asset_meshlets, asset_meshlet_vertices, asset_meshlet_triangles, asset_meshlet_bounds, asset_max_meshlet_count, loaded_from_cache :=
             load_or_build_meshlet_asset_cached(imported, cast(s32) mesh_index);
         if loaded_from_cache {
             cache_hits += 1;
         } else {
             cache_misses += 1;
         }
+        variant_indices := collect_mesh_asset_variant_indices(imported, cast(s32) mesh_index);
+        assert(variant_indices.count == asset_meshlet_meshes.count, "Meshlet asset variant mismatch for mesh %: expected %, got %.", mesh_index, variant_indices.count, asset_meshlet_meshes.count);
 
-        meshlet_mesh := *meshlet_meshes[mesh_index];
-        meshlet_mesh.bounds_center_radius = bounds_center_radius;
-        meshlet_mesh.meshlet_start = cast(u32) meshlets.count;
-        meshlet_mesh.meshlet_count = cast(u32) asset_meshlets.count;
+        for variant_mesh_index, variant_i: variant_indices {
+            scene_meshlet_mesh := asset_meshlet_meshes[variant_i];
+            scene_meshlet_mesh.meshlet_start = cast(u32) meshlets.count;
+            scene_meshlet_mesh.meshlet_count = asset_meshlet_meshes[variant_i].meshlet_count;
+            scene_mesh := imported.meshes[variant_mesh_index];
 
-        vertex_offset_base := cast(u32) meshlet_vertices.count;
-        triangle_offset_base := cast(u32) meshlet_triangles.count;
-        for asset_meshlets {
-            array_add(*meshlets, .{
-                vertex_offset = vertex_offset_base + it.vertex_offset,
-                triangle_offset = triangle_offset_base + it.triangle_offset,
-                vertex_count = it.vertex_count,
-                triangle_count = it.triangle_count,
-            });
+            variant_start := asset_meshlet_meshes[variant_i].meshlet_start;
+            variant_end := variant_start + asset_meshlet_meshes[variant_i].meshlet_count;
+            if variant_end > variant_start {
+                for asset_meshlet_i: cast(s64) variant_start .. cast(s64) variant_end - 1 {
+                    asset_meshlet := asset_meshlets[asset_meshlet_i];
+                    scene_vertex_offset := cast(u32) meshlet_vertices.count;
+                    scene_triangle_offset := cast(u32) meshlet_triangles.count;
+                    for vertex_i: 0..cast(s64) asset_meshlet.vertex_count-1 {
+                        array_add(*meshlet_vertices, asset_meshlet_vertices[asset_meshlet.vertex_offset + vertex_i] + scene_mesh.base_vertex);
+                    }
+                    for tri_i: 0..cast(s64) asset_meshlet.triangle_count-1 {
+                        array_add(*meshlet_triangles, asset_meshlet_triangles[asset_meshlet.triangle_offset + tri_i]);
+                    }
+                    array_add(*meshlets, .{
+                        vertex_offset = scene_vertex_offset,
+                        triangle_offset = scene_triangle_offset,
+                        vertex_count = asset_meshlet.vertex_count,
+                        triangle_count = asset_meshlet.triangle_count,
+                    });
+                }
+                for bound_i: cast(s64) variant_start .. cast(s64) variant_end - 1 {
+                    array_add(*meshlet_bounds, asset_meshlet_bounds[bound_i]);
+                }
+            }
+            meshlet_meshes[variant_mesh_index] = scene_meshlet_mesh;
         }
-        for asset_meshlet_vertices array_add(*meshlet_vertices, it + mesh_src.base_vertex);
-        for asset_meshlet_triangles array_add(*meshlet_triangles, it);
-        for asset_meshlet_bounds array_add(*meshlet_bounds, it);
 
         max_meshlet_count = max(max_meshlet_count, asset_max_meshlet_count);
-        meshlet_meshes[mesh_index] = meshlet_mesh;
-
+        array_free(variant_indices);
+        array_free(asset_meshlet_meshes);
         array_free(asset_meshlets);
         array_free(asset_meshlet_vertices);
         array_free(asset_meshlet_triangles);
         array_free(asset_meshlet_bounds);
     }
-    log("scene mesh assets: % loaded, % built, % total", cache_hits, cache_misses, imported.meshes.count);
+    log("scene mesh assets: % loaded, % built, % total", cache_hits, cache_misses, cache_hits + cache_misses);
     return meshlet_meshes, meshlets, meshlet_vertices, meshlet_triangles, meshlet_bounds, max_meshlet_count;
 }
 
@@ -1017,6 +1242,8 @@ IMPORTED_SCENE_MESHLET_CACHE_VERSION : u32 : 1;
 IMPORTED_SCENE_MESHLET_CACHE_MAGIC : u32 : 0x4d534744; // MSGD
 MESHLET_ASSET_CACHE_VERSION : u32 : 2;
 MESHLET_ASSET_CACHE_MAGIC : u32 : 0x4d534841; // MSHA
+GEOMETRY_ASSET_CACHE_VERSION : u32 : 1;
+GEOMETRY_ASSET_CACHE_MAGIC : u32 : 0x47534148; // GSAH
 SCENE_GEO_MESHLET_ENCODE_LEVEL : s32 : 3;
 
 STATIC_MESH_LOD_TARGET_RATIOS :: float.[0.18, 0.02, 0.002];
@@ -1042,8 +1269,7 @@ imported_scene_cache_path :: (model_paths: []string, resolved_model_paths: []str
     }
     key_source := builder_to_string(*builder,, temp);
     hash := fnv1a_hash(key_source.data, key_source.count);
-    cache_dir := tprint("%/.build/model_cache", find_workspace_root_for_cache());
-    File.make_directory_if_it_does_not_exist(cache_dir, true);
+    cache_dir := cache_subdir_path(".build/model_cache");
     return tprint("%/scene_geo_%.bin", cache_dir, hash);
 }
 
@@ -1052,14 +1278,23 @@ imported_scene_meshlet_cache_path :: (model_paths: []string, resolved_model_path
 }
 
 imported_scene_serialize :: (builder: *[..]u8, scene: Imported_Scene) -> bool {
+    metadata: Imported_Scene_Cache_Metadata;
+    inline_vertices: [..]Scene_Vertex;
+    inline_indices: [..]u32;
+    metadata, inline_vertices, inline_indices = build_imported_scene_cache_payload(scene);
+    defer {
+        array_free(metadata.geometry_asset_refs);
+        array_free(inline_vertices);
+        array_free(inline_indices);
+    }
+
     cache_put(builder, IMPORTED_SCENE_CACHE_MAGIC);
     cache_put(builder, IMPORTED_SCENE_CACHE_VERSION);
     cache_put(builder, imported_scene_recipe_hash());
     cache_put(builder, geo_cache_type_hash(type_info(Imported_Scene_Cache_Metadata)));
     cache_put(builder, geo_cache_type_hash(type_info(Scene_Vertex)));
-    if !cache_put_scene_vertices_encoded(builder, scene.vertices) return false;
-    if !cache_put_scene_indices_encoded(builder, scene.indices) return false;
-    metadata := imported_scene_cache_metadata_from_scene(scene);
+    if !cache_put_scene_vertices_encoded(builder, inline_vertices) return false;
+    if !cache_put_scene_indices_encoded(builder, inline_indices) return false;
     return geo_cache_put_reflected(builder, *metadata, type_info(Imported_Scene_Cache_Metadata));
 }
 
@@ -1092,6 +1327,11 @@ imported_scene_deserialize :: (scene: *Imported_Scene, source_in: string) -> boo
     metadata: Imported_Scene_Cache_Metadata;
     if !geo_cache_get_reflected(*source, *metadata, type_info(Imported_Scene_Cache_Metadata)) return false, false;
     imported_scene_apply_cache_metadata(scene, metadata);
+    if !imported_scene_patch_geometry_assets(scene, metadata) {
+        array_free(metadata.geometry_asset_refs);
+        return false, false;
+    }
+    array_free(metadata.geometry_asset_refs);
     return true, source.count == 0;
 }
 
@@ -1136,10 +1376,59 @@ imported_scene_cache_metadata_from_scene :: (scene: Imported_Scene) -> Imported_
     };
 }
 
+build_imported_scene_cache_payload :: (scene: Imported_Scene) -> Imported_Scene_Cache_Metadata, [..]Scene_Vertex, [..]u32 {
+    metadata := imported_scene_cache_metadata_from_scene(scene);
+    is_lod_child := collect_lod_child_mask(*scene);
+    defer array_free(is_lod_child);
+
+    inline_vertices: [..]Scene_Vertex;
+    inline_indices: [..]u32;
+
+    for mesh_index: 0..scene.meshes.count-1 {
+        mesh_index_s32 := cast(s32) mesh_index;
+        if mesh_is_geometry_asset_root(*scene, mesh_index_s32, is_lod_child) {
+            asset_hash := build_geometry_asset_hash(*scene, mesh_index_s32);
+            array_add(*metadata.geometry_asset_refs, .{
+                root_mesh_index = cast(u32) mesh_index_s32,
+                asset_hash = asset_hash,
+            });
+
+            asset_meshes: [..]Scene_Mesh;
+            asset_vertices: [..]Scene_Vertex;
+            asset_indices: [..]u32;
+            asset_meshes, asset_vertices, asset_indices, _ = load_or_build_geometry_asset_cached(*scene, mesh_index_s32);
+            array_free(asset_meshes);
+            array_free(asset_vertices);
+            array_free(asset_indices);
+            continue;
+        }
+
+        if is_lod_child[mesh_index] continue;
+
+        mesh := scene.meshes[mesh_index];
+        patched_mesh := mesh;
+        patched_mesh.base_vertex = cast(u32) inline_vertices.count;
+        patched_mesh.first_index = cast(u32) inline_indices.count;
+
+        for vertex_i: 0..cast(s64) mesh.vertex_count-1 {
+            array_add(*inline_vertices, scene.vertices[mesh.base_vertex + vertex_i]);
+        }
+        for index_i: 0..cast(s64) mesh.index_count-1 {
+            global_index := scene.indices[mesh.first_index + index_i];
+            array_add(*inline_indices, global_index - mesh.base_vertex + patched_mesh.base_vertex);
+        }
+
+        metadata.meshes[mesh_index] = patched_mesh;
+    }
+
+    return metadata, inline_vertices, inline_indices;
+}
+
 imported_scene_apply_cache_metadata :: (scene: *Imported_Scene, metadata: Imported_Scene_Cache_Metadata) {
     scene.materials = metadata.materials;
     scene.textures = metadata.textures;
     scene.meshes = metadata.meshes;
+    // geometry_asset_refs are consumed during cache load patch-up and do not live on Imported_Scene
     scene.nodes = metadata.nodes;
     scene.node_names = metadata.node_names;
     scene.node_bind_transforms = metadata.node_bind_transforms;
@@ -1156,6 +1445,56 @@ imported_scene_apply_cache_metadata :: (scene: *Imported_Scene, metadata: Import
     scene.anim_morph_channels = metadata.anim_morph_channels;
     scene.anim_clips = metadata.anim_clips;
     scene.models = metadata.models;
+}
+
+imported_scene_patch_geometry_assets :: (
+    scene: *Imported_Scene,
+    metadata: Imported_Scene_Cache_Metadata,
+) -> bool {
+    for asset_ref: metadata.geometry_asset_refs {
+        variant_indices := collect_mesh_asset_variant_indices(scene, cast(s32) asset_ref.root_mesh_index);
+
+        asset_meshes: [..]Scene_Mesh;
+        asset_vertices: [..]Scene_Vertex;
+        asset_indices: [..]u32;
+        if !load_geometry_asset_cached_by_hash(asset_ref.asset_hash, *asset_meshes, *asset_vertices, *asset_indices) {
+            array_free(variant_indices);
+            array_free(asset_meshes);
+            array_free(asset_vertices);
+            array_free(asset_indices);
+            return false;
+        }
+
+        if asset_meshes.count != variant_indices.count {
+            array_free(variant_indices);
+            array_free(asset_meshes);
+            array_free(asset_vertices);
+            array_free(asset_indices);
+            return false;
+        }
+
+        vertex_base := cast(u32) scene.vertices.count;
+        index_base := cast(u32) scene.indices.count;
+        for asset_vertices array_add(*scene.vertices, it);
+        for asset_indices array_add(*scene.indices, it + vertex_base);
+
+        for asset_mesh, variant_i: asset_meshes {
+            patched_mesh := asset_mesh;
+            patched_mesh.base_vertex += vertex_base;
+            patched_mesh.first_index += index_base;
+            original_mesh := scene.meshes[variant_indices[variant_i]];
+            patched_mesh.lod_mesh_start = original_mesh.lod_mesh_start;
+            patched_mesh.lod_mesh_count = original_mesh.lod_mesh_count;
+            scene.meshes[variant_indices[variant_i]] = patched_mesh;
+        }
+
+        array_free(asset_meshes);
+        array_free(asset_vertices);
+        array_free(asset_indices);
+        array_free(variant_indices);
+    }
+
+    return true;
 }
 
 cache_put_scene_vertices_encoded :: (builder: *[..]u8, vertices: []Scene_Vertex) -> bool {
@@ -1584,7 +1923,7 @@ ensure_blend_scene_sidecar :: (blend_path: string) -> string {
     }
 
     if !output_exists || output_modtime < blend_modtime {
-        workspace_root := find_workspace_root_for_cache();
+        workspace_root := cache_workspace_root();
         export_script := tprint("%/tools/blender_exporter/export_blend.sh", workspace_root);
         assert(file_exists(export_script), "Missing Blender export script: %", export_script);
 
@@ -1796,15 +2135,15 @@ load_model_into_imported_scene :: (imported: *Imported_Scene, path: string) {
     scene_materials: []*ai.Material = .{ scene.mNumMaterials, scene.mMaterials };
     for scene_materials {
         base_color_load := load_material_texture(imported, scene, it, model_dir, path,
-            ai.TextureType.[.BASE_COLOR, .DIFFUSE], default_texture_index = 0);
+            ai.TextureType.[.BASE_COLOR, .DIFFUSE], .COLOR_SRGB, default_texture_index = 0);
         opacity_texture_index := load_material_texture(imported, scene, it, model_dir, path,
-            ai.TextureType.[.OPACITY], default_texture_index = SCENE_INVALID_TEXTURE_INDEX).texture_index;
+            ai.TextureType.[.OPACITY], .DATA_LINEAR, default_texture_index = SCENE_INVALID_TEXTURE_INDEX).texture_index;
         normal_texture_index := load_material_texture(imported, scene, it, model_dir, path,
-            ai.TextureType.[.NORMALS], default_texture_index = SCENE_INVALID_TEXTURE_INDEX).texture_index;
+            ai.TextureType.[.NORMALS], .NORMAL_MAP, default_texture_index = SCENE_INVALID_TEXTURE_INDEX).texture_index;
         roughness_texture_index := load_material_texture(imported, scene, it, model_dir, path,
-            ai.TextureType.[.DIFFUSE_ROUGHNESS, .UNKNOWN], default_texture_index = SCENE_INVALID_TEXTURE_INDEX).texture_index;
+            ai.TextureType.[.DIFFUSE_ROUGHNESS, .UNKNOWN], .DATA_LINEAR, default_texture_index = SCENE_INVALID_TEXTURE_INDEX).texture_index;
         ao_texture_index := load_material_texture(imported, scene, it, model_dir, path,
-            ai.TextureType.[.AMBIENT_OCCLUSION, .LIGHTMAP], default_texture_index = SCENE_INVALID_TEXTURE_INDEX).texture_index;
+            ai.TextureType.[.AMBIENT_OCCLUSION, .LIGHTMAP], .DATA_LINEAR, default_texture_index = SCENE_INVALID_TEXTURE_INDEX).texture_index;
         alpha_mode, alpha_cutoff := detect_material_alpha_mode(scene, it, imported.*, base_color_load.texture_index, opacity_texture_index, base_color_load.texture_flags);
         array_add(*imported.materials, .{
             base_color_factor = .{1.0, 1.0, 1.0, 1.0},
@@ -2386,26 +2725,85 @@ build_single_mesh_meshlets :: (
     return meshlets, meshlet_vertices, packed_meshlet_triangles, meshlet_bounds, bounds_center_radius, max_meshlet_count;
 }
 
+collect_mesh_asset_variant_indices :: (imported: *Imported_Scene, root_mesh_index: s32) -> [..]u32 {
+    variant_indices: [..]u32;
+    variant_indices.allocator = context.allocator;
+    array_add(*variant_indices, cast(u32) root_mesh_index);
+    root_mesh := imported.meshes[root_mesh_index];
+    for lod_offset: 0..cast(s64) root_mesh.lod_mesh_count-1 {
+        array_add(*variant_indices, root_mesh.lod_mesh_start + cast(u32) lod_offset);
+    }
+    return variant_indices;
+}
+
+build_meshlet_asset_variants :: (
+    imported: *Imported_Scene,
+    root_mesh_index: s32,
+) -> [..]Scene_Meshlet_Mesh, [..]Scene_Meshlet, [..]u32, [..]u32, [..]Vector4, u32 {
+    variant_indices := collect_mesh_asset_variant_indices(imported, root_mesh_index);
+    defer array_free(variant_indices);
+
+    asset_meshlet_meshes: [..]Scene_Meshlet_Mesh;
+    asset_meshlets: [..]Scene_Meshlet;
+    asset_meshlet_vertices: [..]u32;
+    asset_meshlet_triangles: [..]u32;
+    asset_meshlet_bounds: [..]Vector4;
+    max_meshlet_count: u32;
+    array_resize(*asset_meshlet_meshes, variant_indices.count);
+
+    for variant_mesh_index, variant_i: variant_indices {
+        variant_meshlets, variant_vertices, variant_triangles, variant_bounds, bounds_center_radius, variant_max_meshlet_count :=
+            build_single_mesh_meshlets(imported, cast(s32) variant_mesh_index);
+
+        asset_meshlet_mesh := *asset_meshlet_meshes[variant_i];
+        asset_meshlet_mesh.bounds_center_radius = bounds_center_radius;
+        asset_meshlet_mesh.meshlet_start = cast(u32) asset_meshlets.count;
+        asset_meshlet_mesh.meshlet_count = cast(u32) variant_meshlets.count;
+        max_meshlet_count = max(max_meshlet_count, variant_max_meshlet_count);
+
+        for variant_meshlets {
+            array_add(*asset_meshlets, .{
+                vertex_offset = cast(u32) asset_meshlet_vertices.count + it.vertex_offset,
+                triangle_offset = cast(u32) asset_meshlet_triangles.count + it.triangle_offset,
+                vertex_count = it.vertex_count,
+                triangle_count = it.triangle_count,
+            });
+        }
+        for variant_vertices array_add(*asset_meshlet_vertices, it);
+        for variant_triangles array_add(*asset_meshlet_triangles, it);
+        for variant_bounds array_add(*asset_meshlet_bounds, it);
+        asset_meshlet_meshes[variant_i] = asset_meshlet_mesh;
+
+        array_free(variant_meshlets);
+        array_free(variant_vertices);
+        array_free(variant_triangles);
+        array_free(variant_bounds);
+    }
+
+    return asset_meshlet_meshes, asset_meshlets, asset_meshlet_vertices, asset_meshlet_triangles, asset_meshlet_bounds, max_meshlet_count;
+}
+
 load_or_build_meshlet_asset_cached :: (
     imported: *Imported_Scene,
-    mesh_index: s32,
-) -> [..]Scene_Meshlet, [..]u32, [..]u32, [..]Vector4, Vector4, u32, bool {
-    cache_path := meshlet_asset_cache_path(imported, mesh_index);
+    root_mesh_index: s32,
+) -> [..]Scene_Meshlet_Mesh, [..]Scene_Meshlet, [..]u32, [..]u32, [..]Vector4, u32, bool {
+    cache_path := meshlet_asset_cache_path(imported, root_mesh_index);
+    meshlet_meshes: [..]Scene_Meshlet_Mesh;
     meshlets: [..]Scene_Meshlet;
     meshlet_vertices: [..]u32;
     meshlet_triangles: [..]u32;
     meshlet_bounds: [..]Vector4;
-    bounds_center_radius: Vector4;
     max_meshlet_count: u32;
 
     if file_exists(cache_path) {
         data, ok := File.read_entire_file(cache_path);
         if ok {
-            loaded, parse_ok := meshlet_asset_cache_deserialize(data, *meshlets, *meshlet_vertices, *meshlet_triangles, *meshlet_bounds, *bounds_center_radius, *max_meshlet_count);
+            loaded, parse_ok := meshlet_asset_cache_deserialize(data, *meshlet_meshes, *meshlets, *meshlet_vertices, *meshlet_triangles, *meshlet_bounds, *max_meshlet_count);
             free(data);
             if parse_ok && loaded {
-                return meshlets, meshlet_vertices, meshlet_triangles, meshlet_bounds, bounds_center_radius, max_meshlet_count, true;
+                return meshlet_meshes, meshlets, meshlet_vertices, meshlet_triangles, meshlet_bounds, max_meshlet_count, true;
             }
+            array_free(meshlet_meshes);
             array_free(meshlets);
             array_free(meshlet_vertices);
             array_free(meshlet_triangles);
@@ -2413,17 +2811,17 @@ load_or_build_meshlet_asset_cached :: (
         }
     }
 
-    meshlets, meshlet_vertices, meshlet_triangles, meshlet_bounds, bounds_center_radius, max_meshlet_count =
-        build_single_mesh_meshlets(imported, mesh_index);
+    meshlet_meshes, meshlets, meshlet_vertices, meshlet_triangles, meshlet_bounds, max_meshlet_count =
+        build_meshlet_asset_variants(imported, root_mesh_index);
     cache_blob: [..]u8;
     cache_blob.allocator = context.allocator;
-    serialize_ok := meshlet_asset_cache_serialize(*cache_blob, meshlets, meshlet_vertices, meshlet_triangles, meshlet_bounds, bounds_center_radius, max_meshlet_count);
-    assert(serialize_ok, "Failed to serialize meshlet asset cache for mesh %.", mesh_index);
+    serialize_ok := meshlet_asset_cache_serialize(*cache_blob, meshlet_meshes, meshlets, meshlet_vertices, meshlet_triangles, meshlet_bounds, max_meshlet_count);
+    assert(serialize_ok, "Failed to serialize meshlet asset cache for mesh %.", root_mesh_index);
     if cache_blob.count > 0 {
         _ = File.write_entire_file(cache_path, cache_blob.data, cache_blob.count);
     }
     array_free(cache_blob);
-    return meshlets, meshlet_vertices, meshlet_triangles, meshlet_bounds, bounds_center_radius, max_meshlet_count, false;
+    return meshlet_meshes, meshlets, meshlet_vertices, meshlet_triangles, meshlet_bounds, max_meshlet_count, false;
 }
 
 build_scene_meshlets :: (
@@ -2757,6 +3155,7 @@ load_material_texture :: (
     model_dir: string,
     model_path: string,
     texture_types: []ai.TextureType,
+    content_class: Texture_Content_Class,
     default_texture_index: u32,
 ) -> Texture_Load_Result {
     for texture_types {
@@ -2770,7 +3169,7 @@ load_material_texture :: (
         resolved := resolve_assimp_texture_key(scene, model_dir, model_path, ai.to_string(path));
         defer if resolved.count != 0 free(resolved);
         return .{
-            texture_index = get_or_load_texture(imported, scene, resolved, ai.to_string(path)),
+            texture_index = get_or_load_texture(imported, scene, resolved, ai.to_string(path), content_class),
             map_mode_u = map_mode,
             map_mode_v = map_mode,
             texture_flags = flags_from_material_texture(material, it),
@@ -2823,17 +3222,132 @@ resolve_assimp_texture_key :: (scene: *ai.Scene, model_dir: string, model_path: 
     return copy_string(String.path_join(model_dir, normalized_path));
 }
 
-get_or_load_texture :: (imported: *Imported_Scene, scene: *ai.Scene, resolved_key: string, assimp_path: string) -> u32 {
+get_or_load_texture :: (imported: *Imported_Scene, scene: *ai.Scene, resolved_key: string, assimp_path: string, content_class: Texture_Content_Class) -> u32 {
+    cache_identity := tprint("%|class=%", resolved_key, content_class);
     for imported.textures {
-        if it.key == resolved_key return cast(u32) it_index;
+        if it.key == cache_identity return cast(u32) it_index;
     }
 
-    texture := load_scene_texture(scene, resolved_key, assimp_path);
+    texture := load_scene_texture(scene, cache_identity, resolved_key, assimp_path, content_class);
     array_add(*imported.textures, texture);
     return cast(u32) imported.textures.count - 1;
 }
 
-load_scene_texture :: (scene: *ai.Scene, resolved_key: string, assimp_path: string) -> Imported_Texture {
+SCENE_TEXTURE_CACHE_VERSION :: 3;
+
+texture_cache_default_options :: (content_class: Texture_Content_Class) -> Texture_Cache_Options {
+    if content_class == {
+    case .COLOR_SRGB; return .{format = .BC7_SRGB, uastc_quality = "medium"};
+    case .DATA_LINEAR; return .{format = .BC7_UNORM, uastc_quality = "medium"};
+    case .NORMAL_MAP; return .{format = .BC5_UNORM, uastc_quality = "medium", normal_mode = true};
+    }
+    return .{format = .BC7_UNORM, uastc_quality = "medium"};
+}
+
+texture_sidecar_path :: (source_path: string) -> string {
+    return tprint("%.peeltex", source_path);
+}
+
+parse_bool_text :: (value: string, fallback: bool) -> bool {
+    lowered := String.to_lower_copy(String.trim(value));
+    if lowered == {
+    case "1"; #through;
+    case "true"; #through;
+    case "yes"; #through;
+    case "on"; return true;
+    case "0"; #through;
+    case "false"; #through;
+    case "no"; #through;
+    case "off"; return false;
+    }
+    return fallback;
+}
+
+parse_texture_cache_sidecar :: (source_path: string, defaults: Texture_Cache_Options) -> Texture_Cache_Options, string {
+    sidecar_path := texture_sidecar_path(source_path);
+    if !file_exists(sidecar_path) return defaults, "";
+
+    text, ok := File.read_entire_file(sidecar_path, zero_terminated = false, log_errors = true);
+    if !ok return defaults, "";
+
+    options := defaults;
+    lines := String.split(text, #char "\n");
+    defer array_free(lines);
+    for line_raw: lines {
+        line := String.trim(line_raw);
+        if line.count == 0 continue;
+        if line[0] == #char "#" continue;
+
+        eq := String.find_index_from_left(line, #char "=");
+        if eq <= 0 continue;
+        key := String.to_lower_copy(String.trim(String.slice(line, 0, eq)));
+        value := String.to_lower_copy(String.trim(String.slice(line, eq + 1, line.count - (eq + 1))));
+
+        if key == {
+        case "format";
+            if value == {
+            case "bc7_srgb"; options.format = .BC7_SRGB;
+            case "bc7_unorm"; options.format = .BC7_UNORM;
+            case "bc5_unorm"; options.format = .BC5_UNORM;
+            case "rgba8_srgb"; options.format = .RGBA8_SRGB;
+            case "rgba8_unorm"; options.format = .RGBA8_UNORM;
+            }
+        case "mips"; #through;
+        case "generate_mips";
+            options.generate_mips = parse_bool_text(value, options.generate_mips);
+        case "normal_mode";
+            options.normal_mode = parse_bool_text(value, options.normal_mode);
+        case "uastc_quality";
+            if value == {
+            case "fast"; #through;
+            case "medium"; #through;
+            case "slow"; #through;
+            case "faster"; #through;
+            case "slower"; #through;
+            case "etc1s"; #through;
+            case "exhaustive";
+                options.uastc_quality = value;
+            }
+        }
+    }
+
+    return options, text;
+}
+
+texture_cache_key_for_source :: (
+    source_identity: string,
+    modtime: Apollo_Time,
+    size: u64,
+    options: Texture_Cache_Options,
+    sidecar_text: string,
+) -> u64 {
+    key := tprint("scene_geo_texture|v%|%|%|%:%|fmt=%|mips=%|normal=%|quality=%|sidecar=%",
+        SCENE_TEXTURE_CACHE_VERSION,
+        source_identity,
+        size,
+        modtime.low, modtime.high,
+        options.format,
+        options.generate_mips,
+        options.normal_mode,
+        options.uastc_quality,
+        sidecar_text);
+    return fnv1a_hash(key.data, key.count);
+}
+
+scene_texture_cache_path :: (cache_hash: u64) -> string {
+    cache_dir := cache_subdir_path(".build/texture_cache/scene_geo");
+    return tprint("%/%.ktx2", cache_dir, cache_hash);
+}
+
+load_scene_texture :: (scene: *ai.Scene, cache_identity: string, resolved_key: string, assimp_path: string, content_class: Texture_Content_Class) -> Imported_Texture {
+    defaults := texture_cache_default_options(content_class);
+    options := defaults;
+    sidecar_text := "";
+    if assimp_path.count == 0 || assimp_path[0] != #char "*" {
+        options, sidecar_text = parse_texture_cache_sidecar(resolved_key, defaults);
+    }
+    defer if sidecar_text.count != 0 free(sidecar_text);
+
     if assimp_path.count > 0 && assimp_path[0] == #char "*" {
         embedded := ai.GetEmbeddedTexture(scene, cast(*u8) assimp_path.data);
         assert(embedded != null, "Embedded texture % not found.", assimp_path);
@@ -2843,35 +3357,85 @@ load_scene_texture :: (scene: *ai.Scene, resolved_key: string, assimp_path: stri
             pixels := stbi_load_from_memory(cast(*u8) embedded.pcData, cast(s32) embedded.mWidth, *width, *height, *channels, 4);
             defer stbi_image_free(pixels);
             assert(pixels != null && width > 0 && height > 0, "Failed to decode embedded texture %", assimp_path);
-            rgba := copy_bytes(cast([]u8) .{count = width * height * 4, data = pixels});
-            return .{key = copy_string(resolved_key), width = cast(u32) width, height = cast(u32) height, pixels = rgba, has_alpha = texture_pixels_have_alpha(rgba)};
+            rgba := cast([]u8) .{count = width * height * 4, data = pixels};
+            cache_hash := texture_cache_key_for_source(cache_identity, .{0, 0}, fnv1a_hash(rgba.data, rgba.count), options, sidecar_text);
+            cache_path := scene_texture_cache_path(cache_hash);
+            cache_ok := ensure_ktx_texture_cache_from_rgba8(cache_identity, rgba, cast(u32) width, cast(u32) height, cache_path, .{
+                format = options.format,
+                generate_mips = false,
+                normal_mode = options.normal_mode,
+                uastc_quality = options.uastc_quality,
+            }, "scene_geo");
+            assert(cache_ok, "Failed to build embedded texture cache for %", cache_identity);
+            return .{
+                key = copy_string(cache_identity),
+                cache_path = copy_string(cache_path),
+                width = cast(u32) width,
+                height = cast(u32) height,
+                has_alpha = texture_pixels_have_alpha(rgba),
+            };
         }
 
         raw_pixels := cast(*u8) embedded.pcData;
         byte_count := cast(s64) embedded.mWidth * cast(s64) embedded.mHeight * 4;
         rgba := bgra_to_rgba(.{count = byte_count, data = raw_pixels});
-        return .{key = copy_string(resolved_key), width = embedded.mWidth, height = embedded.mHeight, pixels = rgba, has_alpha = texture_pixels_have_alpha(rgba)};
+        defer array_free(rgba);
+        cache_hash := texture_cache_key_for_source(cache_identity, .{0, 0}, fnv1a_hash(rgba.data, rgba.count), options, sidecar_text);
+        cache_path := scene_texture_cache_path(cache_hash);
+        cache_ok := ensure_ktx_texture_cache_from_rgba8(cache_identity, rgba, embedded.mWidth, embedded.mHeight, cache_path, .{
+            format = options.format,
+            generate_mips = false,
+            normal_mode = options.normal_mode,
+            uastc_quality = options.uastc_quality,
+        }, "scene_geo");
+        assert(cache_ok, "Failed to build embedded BGRA texture cache for %", cache_identity);
+        return .{
+            key = copy_string(cache_identity),
+            cache_path = copy_string(cache_path),
+            width = embedded.mWidth,
+            height = embedded.mHeight,
+            has_alpha = texture_pixels_have_alpha(rgba),
+        };
     }
 
     width, height, channels: s32 = 0;
     pixels := stbi_load(temp_c_string(resolved_key), *width, *height, *channels, 4);
     defer stbi_image_free(pixels);
     assert(pixels != null && width > 0 && height > 0, "Failed to load texture %", resolved_key);
-    rgba := copy_bytes(cast([]u8) .{count = width * height * 4, data = pixels});
-    return .{key = copy_string(resolved_key), width = cast(u32) width, height = cast(u32) height, pixels = rgba, has_alpha = texture_pixels_have_alpha(rgba)};
+    rgba := cast([]u8) .{count = width * height * 4, data = pixels};
+    modtime, size, exists := file_modtime_and_size(resolved_key);
+    assert(exists, "Texture source disappeared during import: %", resolved_key);
+    cache_hash := texture_cache_key_for_source(resolved_key, modtime, cast(u64) size, options, sidecar_text);
+    cache_path := scene_texture_cache_path(cache_hash);
+    cache_ok := ensure_ktx_texture_cache_from_file(resolved_key, cache_path, options, "scene_geo");
+    assert(cache_ok, "Failed to build texture cache for %", resolved_key);
+    return .{
+        key = copy_string(cache_identity),
+        cache_path = copy_string(cache_path),
+        width = cast(u32) width,
+        height = cast(u32) height,
+        has_alpha = texture_pixels_have_alpha(rgba),
+    };
 }
 
 imported_scene_create_default_white_texture :: (imported: *Imported_Scene) {
-    pixels: [..]u8;
-    pixels.allocator = context.allocator;
-    array_add(*pixels, 255, 255, 255, 255);
     array_add(*imported.textures, .{
         key = copy_string("__white__"),
+        cache_path = "",
         width = 1,
         height = 1,
-        pixels = pixels,
         has_alpha = false,
+        builtin_white = true,
     });
+}
+
+imported_scene_texture_cache_ready :: (scene: Imported_Scene) -> bool {
+    for scene.textures {
+        if it.builtin_white continue;
+        if it.cache_path.count == 0 return false;
+        if !file_exists(it.cache_path) return false;
+    }
+    return true;
 }
 
 SCENE_ALPHA_MODE_OPAQUE :: 0;
@@ -2936,6 +3500,68 @@ detect_material_alpha_mode :: (
     if material_property_key_contains(material, "alpha") return SCENE_ALPHA_MODE_MASK, alpha_cutoff;
 
     return SCENE_ALPHA_MODE_MASK, alpha_cutoff;
+}
+
+scene_geo_format_from_ktx_pixel_format :: (pixel_format: MTLPixelFormat) -> Format {
+    if pixel_format == {
+    case .RGBA8Unorm; return .R8G8B8A8_UNORM;
+    case .RGBA8Unorm_sRGB; return .R8G8B8A8_SRGB;
+    case .BC5_RGUnorm; return .BC5_UNORM_BLOCK;
+    case .BC7_RGBAUnorm; return .BC7_UNORM_BLOCK;
+    case .BC7_RGBAUnorm_sRGB; return .BC7_SRGB_BLOCK;
+    }
+    assert(false, "Unhandled KTX pixel format for scene texture cache: %", pixel_format);
+    return .UNDEFINED;
+}
+
+create_texture_from_ktx_2d :: (path: string) -> Gpu_Texture, Gpu_Texture_View {
+    file_bytes, read_ok := File.read_entire_file(path, zero_terminated = false, log_errors = true);
+    assert(read_ok, "scene_geo: failed reading KTX cache %", path);
+    defer free(file_bytes);
+
+    descriptor_ok, descriptor := ktx_load_descriptor(file_bytes, verbose = false);
+    defer array_free(descriptor.levels);
+    assert(descriptor_ok, "scene_geo: failed parsing KTX cache %", path);
+    assert(descriptor.faceCount == 1, "scene_geo: expected 2D texture cache, got faceCount=% for %", descriptor.faceCount, path);
+    assert(descriptor.levels.count > 0, "scene_geo: KTX cache has no mip levels: %", path);
+
+    result, texture := gpu_create_texture(.{
+        dimensions = .[cast(u32) descriptor.pixelWidth, cast(u32) descriptor.pixelHeight, 1],
+        format = scene_geo_format_from_ktx_pixel_format(descriptor.pixelFormat),
+        mip_count = cast(u8) descriptor.levels.count,
+        usage = .SAMPLED | .TRANSFER_DST,
+    });
+    assert(result == .SUCCESS && texture != 0, "scene_geo: texture creation failed for %: %", path, result);
+
+    for descriptor.levels {
+        gpu_copy_to_texture_layout(
+            texture,
+            file_bytes.data + it.fileOffset,
+            cast(u32) it.size.width,
+            cast(u32) max(it.size.height, 1),
+            1,
+            it.bytesPerRow,
+            it.bytesPerImage,
+            cast(u32) it_index,
+            0);
+    }
+
+    view := gpu_texture_view(texture);
+    assert(view != 0, "scene_geo: texture view creation failed for %", path);
+    return texture, view;
+}
+
+create_texture_from_imported_texture :: (texture: Imported_Texture) -> Gpu_Texture, Gpu_Texture_View {
+    if texture.builtin_white {
+        pixels := u8.[255, 255, 255, 255];
+        white_texture, white_view := create_texture_from_rgba8(cast([]u8) pixels, 1, 1);
+        return white_texture, white_view;
+    }
+
+    assert(texture.cache_path.count != 0, "Imported texture cache path missing for %", texture.key);
+    assert(file_exists(texture.cache_path), "Imported texture cache missing for %: %", texture.key, texture.cache_path);
+    cached_texture, cached_view := create_texture_from_ktx_2d(texture.cache_path);
+    return cached_texture, cached_view;
 }
 
 create_texture_from_rgba8 :: (pixels: []u8, width: u32, height: u32) -> Gpu_Texture, Gpu_Texture_View {
@@ -3034,9 +3660,9 @@ scene_geo_get_or_create_sampler :: (geo: *Scene_Geo, mode_u: Gpu_Sampler_Desc.Ad
     sampler := gpu_create_sampler(.{
         min_filter = .LINEAR,
         mag_filter = .LINEAR,
-        mip_filter = .NEAREST,
+        mip_filter = .LINEAR,
         min_lod = 0.0,
-        max_lod = 0.0,
+        max_lod = 1000.0,
         address_mode_u = mode_u,
         address_mode_v = mode_v,
         address_mode_w = .CLAMP_TO_EDGE,
@@ -3068,24 +3694,7 @@ String :: #import "String";
 File :: #import "File";
 #import "File_Utilities";
 #import "Hash";
+#import "KTX_Header";
 meshopt :: #import "meshoptimizer";
 #import "Math";
-Process_Module :: #import "Process";
 #import "stb_image";
-
-find_workspace_root_for_cache :: () -> string {
-    cwd := get_working_directory();
-    probe := cwd;
-
-    while probe.count != 0 {
-        if file_exists(tprint("%/build.jai", probe)) return probe;
-        parent := String.path_strip_filename(probe);
-        if parent.count != 0 && parent[parent.count-1] == "/" {
-            parent.count -= 1;
-        }
-        if parent == probe break;
-        probe = parent;
-    }
-
-    return cwd;
-}

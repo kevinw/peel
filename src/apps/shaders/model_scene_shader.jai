@@ -1,5 +1,6 @@
 #import "Jai-Shader-Transpiler";
 #import "Jai-Shader-Transpiler/modules/ShaderFuncs";
+#import "Jai-Shader-Transpiler/modules/ShaderLib";
 #import "Math";
 
 SCENE_ALPHA_MODE_OPAQUE :: 0;
@@ -140,6 +141,40 @@ Model_Scene_Sky_Vertex_Out :: struct {
 Model_Scene_Sky_Fragment_In :: struct {
     uv: Vector2;
 }
+
+Model_Scene_Present_Params :: struct {
+    scene_texture_index: u32;
+    sampler_index: u32;
+    _pad0: u32;
+    _pad1: u32;
+    exposure: float;
+}
+
+Model_Scene_Present_Fragment_In :: struct {
+    uv: Vector2;
+}
+
+model_scene_tonemap :: (x: float, exposure: float) -> float {
+    hdr := x * max(exposure, 0.001);
+    mapped := (hdr * (2.51 * hdr + 0.03)) / (hdr * (2.43 * hdr + 0.59) + 0.14);
+    return clamp(mapped, 0.0, 1.0);
+}
+
+model_scene_linear_to_srgb :: (x: float) -> float {
+    if x <= 0.0031308 return 12.92 * x;
+    return 1.055 * pow(x, 1.0 / 2.4) - 0.055;
+}
+
+model_scene_present_fragment_main :: (using input: Model_Scene_Present_Fragment_In, params: *Model_Scene_Present_Params) -> Vector4 @SV_Target0 {
+    uv.y = 1.0 - uv.y;
+    color := sample_2d(params.scene_texture_index, params.sampler_index, uv).xyz;
+    return .{
+        model_scene_linear_to_srgb(model_scene_tonemap(color.x, params.exposure)),
+        model_scene_linear_to_srgb(model_scene_tonemap(color.y, params.exposure)),
+        model_scene_linear_to_srgb(model_scene_tonemap(color.z, params.exposure)),
+        1.0,
+    };
+} @fragment_shader
 
 Ground_Vertex_In :: struct {
     vertex_id: u32; @SV_VertexID

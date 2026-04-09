@@ -356,6 +356,108 @@ shader_hot_reload_ensure_function_constant_variant_generation :: (base: *Shader_
     shader_hot_reload_reset_function_constant_variants(base);
 }
 
+shader_hot_reload_raster_desc_is_dynamic :: (raster_desc: Gpu_Raster_Desc) -> bool {
+    return raster_desc.derive_attachment_formats_from_render_pass;
+}
+
+shader_hot_reload_attachment_layout_from_raster_desc :: (raster_desc: Gpu_Raster_Desc) -> Shader_Attachment_Layout_Key {
+    key: Shader_Attachment_Layout_Key;
+    key.sample_count = raster_desc.sample_count;
+    key.color_target_count = cast(u8) min(raster_desc.color_targets.count, 8);
+    key.depth_format = raster_desc.depth_format;
+    key.stencil_format = raster_desc.stencil_format;
+    for i: 0..cast(s64) key.color_target_count-1 {
+        key.color_formats[i] = raster_desc.color_targets[i].format;
+    }
+    return key;
+}
+
+shader_hot_reload_attachment_layout_equals :: (a: Shader_Attachment_Layout_Key, b: Shader_Attachment_Layout_Key) -> bool {
+    if a.sample_count != b.sample_count return false;
+    if a.color_target_count != b.color_target_count return false;
+    if a.depth_format != b.depth_format return false;
+    if a.stencil_format != b.stencil_format return false;
+    for i: 0..7 {
+        if a.color_formats[i] != b.color_formats[i] return false;
+    }
+    return true;
+}
+
+shader_hot_reload_hash_attachment_layout :: (key: Shader_Attachment_Layout_Key) -> u64 {
+    FNV_OFFSET :: cast(u64) 14695981039346656037;
+    FNV_PRIME  :: cast(u64) 1099511628211;
+
+    mix_byte :: (hash: u64, value: u8) -> u64 {
+        return (hash ^ cast(u64) value) * FNV_PRIME;
+    }
+
+    mix_u32 :: (hash: u64, value: u32) -> u64 {
+        hash = mix_byte(hash, cast(u8) ( value        & 0xFF));
+        hash = mix_byte(hash, cast(u8) ((value >>  8) & 0xFF));
+        hash = mix_byte(hash, cast(u8) ((value >> 16) & 0xFF));
+        hash = mix_byte(hash, cast(u8) ((value >> 24) & 0xFF));
+        return hash;
+    }
+
+    hash := FNV_OFFSET;
+    hash = mix_byte(hash, key.sample_count);
+    hash = mix_byte(hash, key.color_target_count);
+    hash = mix_u32(hash, cast(u32) key.depth_format);
+    hash = mix_u32(hash, cast(u32) key.stencil_format);
+    for key.color_formats {
+        hash = mix_u32(hash, cast(u32) it);
+    }
+    return hash;
+}
+
+shader_hot_reload_hash_graphics_variant_key :: (layout: Shader_Attachment_Layout_Key, constants_bytes: []u8) -> u64 {
+    hash := shader_hot_reload_hash_attachment_layout(layout);
+    if constants_bytes.count != 0 {
+        constants_hash := Hash.fnv1a_hash(constants_bytes.data, constants_bytes.count);
+        hash = hash ~ constants_hash;
+    }
+    return hash;
+}
+
+shader_hot_reload_resolve_dynamic_raster_desc :: (logical_raster_desc: Gpu_Raster_Desc, pass_desc: Gpu_Render_Pass_Desc) -> (Gpu_Raster_Desc, bool) {
+    resolved := logical_raster_desc;
+    if !logical_raster_desc.derive_attachment_formats_from_render_pass return resolved, true;
+
+    push_allocator(cpu_allocator);
+    color_targets := NewArray(pass_desc.color_targets.count, Color_Target);
+    for pass_desc.color_targets {
+        if it.view == 0 return .{}, false;
+        format, ok := gpu_texture_view_format(it.view);
+        if !ok || format == .UNDEFINED return .{}, false;
+        color_targets[it_index] = .{format = format};
+    }
+
+    resolved.color_targets = color_targets;
+    resolved.derive_attachment_formats_from_render_pass = false;
+
+    if resolved.depth_format == .UNDEFINED && pass_desc.depth_target.view != 0 {
+        depth_format, ok := gpu_texture_view_format(pass_desc.depth_target.view);
+        if !ok || depth_format == .UNDEFINED return .{}, false;
+        resolved.depth_format = depth_format;
+    }
+    if resolved.stencil_format == .UNDEFINED && pass_desc.stencil_target.view != 0 {
+        stencil_format, ok := gpu_texture_view_format(pass_desc.stencil_target.view);
+        if !ok || stencil_format == .UNDEFINED return .{}, false;
+        resolved.stencil_format = stencil_format;
+    }
+
+    return resolved, true;
+}
+
+shader_hot_reload_release_dynamic_raster_desc :: (logical_raster_desc: Gpu_Raster_Desc, resolved_raster_desc: *Gpu_Raster_Desc) {
+    if resolved_raster_desc == null return;
+    if !logical_raster_desc.derive_attachment_formats_from_render_pass return;
+    if resolved_raster_desc.color_targets.count != 0 && resolved_raster_desc.color_targets.data != null {
+        free(resolved_raster_desc.color_targets.data,, allocator = cpu_allocator);
+    }
+    resolved_raster_desc.color_targets = .{};
+}
+
 shader_hot_reload_swap_pipeline_handle :: (pipeline: *Gpu_Pipeline, new_pipeline: Gpu_Pipeline) -> bool {
     if !pipeline || new_pipeline == 0 return false;
     old_pipeline := pipeline.*;
@@ -536,10 +638,12 @@ shader_hot_reload_get_or_create_graphics_pipeline_variant :: (
     shader_hot_reload_ensure_function_constant_variant_generation(base);
 
     constants_bytes: []u8 = .{count = size_of(T), data = cast(*u8) constants};
-    key_hash := Hash.fnv1a_hash(constants_bytes.data, constants_bytes.count);
+    attachment_layout := shader_hot_reload_attachment_layout_from_raster_desc(raster_desc);
+    key_hash := shader_hot_reload_hash_graphics_variant_key(attachment_layout, constants_bytes);
 
     for base.function_constant_variants {
         if it.key_hash != key_hash continue;
+        if !shader_hot_reload_attachment_layout_equals(it.attachment_layout, attachment_layout) continue;
         if shader_hot_reload_constants_equal(it.constants_bytes, constants_bytes) return it.pipeline;
     }
 
@@ -553,6 +657,44 @@ shader_hot_reload_get_or_create_graphics_pipeline_variant :: (
     array_add(*base.function_constant_variants, .{
         key_hash = key_hash,
         constants_bytes = stored_bytes,
+        attachment_layout = attachment_layout,
+        pipeline = new_pipeline,
+    });
+    gpu_commit_residency();
+    return new_pipeline;
+}
+
+shader_hot_reload_get_or_create_graphics_pipeline_variant_no_constants :: (
+    base: *Shader_Base,
+    source: []u8,
+    shader_meta: JTS.Shader_Meta,
+    raster_desc: Gpu_Raster_Desc
+) -> Gpu_Pipeline {
+    assert(base != null);
+    shader_hot_reload_ensure_function_constant_variant_generation(base);
+
+    attachment_layout := shader_hot_reload_attachment_layout_from_raster_desc(raster_desc);
+    empty_constants: []u8;
+    key_hash := shader_hot_reload_hash_graphics_variant_key(attachment_layout, empty_constants);
+
+    for base.function_constant_variants {
+        if it.key_hash != key_hash continue;
+        if !shader_hot_reload_attachment_layout_equals(it.attachment_layout, attachment_layout) continue;
+        if it.constants_bytes.count == 0 return it.pipeline;
+    }
+
+    reload := shader_hot_reload_current_ctx();
+    new_pipeline := shader_hot_reload_create_graphics_pipeline_for_entry(reload, shader_meta.entry_id, raster_desc);
+    if new_pipeline == 0 && source.count > 0 {
+        new_pipeline = gpu_create_graphics_pipeline(source, raster_desc);
+    }
+
+    assert(new_pipeline != 0, "Graphics pipeline creation failed for entry '%'.", shader_meta.entry_id);
+    if new_pipeline == 0 return 0;
+
+    array_add(*base.function_constant_variants, .{
+        key_hash = key_hash,
+        attachment_layout = attachment_layout,
         pipeline = new_pipeline,
     });
     gpu_commit_residency();
@@ -569,10 +711,12 @@ shader_hot_reload_get_or_create_mesh_pipeline_variant :: (
     shader_hot_reload_ensure_function_constant_variant_generation(base);
 
     constants_bytes: []u8 = .{count = size_of(T), data = cast(*u8) constants};
-    key_hash := Hash.fnv1a_hash(constants_bytes.data, constants_bytes.count);
+    attachment_layout := shader_hot_reload_attachment_layout_from_raster_desc(desc.raster_desc);
+    key_hash := shader_hot_reload_hash_graphics_variant_key(attachment_layout, constants_bytes);
 
     for base.function_constant_variants {
         if it.key_hash != key_hash continue;
+        if !shader_hot_reload_attachment_layout_equals(it.attachment_layout, attachment_layout) continue;
         if shader_hot_reload_constants_equal(it.constants_bytes, constants_bytes) return it.pipeline;
     }
 
@@ -585,6 +729,43 @@ shader_hot_reload_get_or_create_mesh_pipeline_variant :: (
     array_add(*base.function_constant_variants, .{
         key_hash = key_hash,
         constants_bytes = stored_bytes,
+        attachment_layout = attachment_layout,
+        pipeline = new_pipeline,
+    });
+    gpu_commit_residency();
+    return new_pipeline;
+}
+
+shader_hot_reload_get_or_create_mesh_pipeline_variant_no_constants :: (
+    base: *Shader_Base,
+    shader: JTS.Transpiled_Mesh_Pipeline,
+    desc: Gpu_Mesh_Pipeline_Desc
+) -> Gpu_Pipeline {
+    assert(base != null);
+    shader_hot_reload_ensure_function_constant_variant_generation(base);
+
+    attachment_layout := shader_hot_reload_attachment_layout_from_raster_desc(desc.raster_desc);
+    empty_constants: []u8;
+    key_hash := shader_hot_reload_hash_graphics_variant_key(attachment_layout, empty_constants);
+
+    for base.function_constant_variants {
+        if it.key_hash != key_hash continue;
+        if !shader_hot_reload_attachment_layout_equals(it.attachment_layout, attachment_layout) continue;
+        if it.constants_bytes.count == 0 return it.pipeline;
+    }
+
+    reload := shader_hot_reload_current_ctx();
+    new_pipeline := shader_hot_reload_create_mesh_pipeline_for_entry(reload, shader.meta.entry_id, shader_hot_reload_mesh_desc_from_gpu_desc(desc));
+    if new_pipeline == 0 && (desc.mesh_shader.count > 0 && desc.pixel_shader.count > 0) {
+        new_pipeline = gpu_create_mesh_pipeline(desc);
+    }
+
+    assert(new_pipeline != 0, "Mesh pipeline creation failed for entry '%'.", shader.meta.entry_id);
+    if new_pipeline == 0 return 0;
+
+    array_add(*base.function_constant_variants, .{
+        key_hash = key_hash,
+        attachment_layout = attachment_layout,
         pipeline = new_pipeline,
     });
     gpu_commit_residency();
@@ -899,4 +1080,3 @@ shader_hot_reload_entry_id_tail_after_target :: (entry_id: string) -> string {
     }
     return "";
 }
-

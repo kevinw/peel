@@ -50,13 +50,11 @@ Ground_Draw_Params_CPU     :: CPU_Struct(Ground_Draw_Params);
 Model_Scene_Sky_Params_CPU :: CPU_Struct(Model_Scene_Sky_Params);
 Grass_Shadow_Params_CPU    :: CPU_Struct(Grass_Shadow_Params);
 Model_Scene_Meshlet_Params_CPU :: CPU_Struct(Model_Scene_Meshlet_Params);
-
-
 graphics_shader: Shader(model_scene_vertex_main, model_scene_fragment_main, .{
     cull = .CW,
     depth_format = .D32_SFLOAT,
     color_targets = .[
-        .{format = .B8G8R8A8_UNORM},
+        .{format = .R16G16B16A16_SFLOAT},
     ],
 });
 pick_shader: Shader(model_scene_vertex_main, model_scene_pick_fragment_main, .{
@@ -70,7 +68,7 @@ ground_shader: Shader(ground_vertex_main, ground_fragment_main, .{
     cull = .CW,
     depth_format = .D32_SFLOAT,
     color_targets = .[
-        .{format = .B8G8R8A8_UNORM},
+        .{format = .R16G16B16A16_SFLOAT},
     ],
 });
 ground_shadow_shader: Shader(ground_shadow_vertex_main, ground_shadow_fragment_main, .{
@@ -90,8 +88,7 @@ shadow_shader: Shader(model_scene_shadow_vertex_main, model_scene_shadow_fragmen
 mesh_shader: Mesh_Shader(model_scene_mesh_main, model_scene_meshlet_fragment_main, .{
     raster_desc = .{
         cull = .CW,
-        depth_format = .D32_SFLOAT,
-        color_targets = .[ .{format = .B8G8R8A8_UNORM}, ],
+        derive_attachment_formats_from_render_pass = true,
     },
     task_threads = .[1, 1, 1],
     mesh_threads = .[1, 1, 1],
@@ -101,7 +98,7 @@ grass_shader: Shader(model_scene_grass_vertex_main, model_scene_grass_fragment_m
     cull = .NONE,
     depth_format = .D32_SFLOAT,
     color_targets = .[
-        .{format = .B8G8R8A8_UNORM},
+        .{format = .R16G16B16A16_SFLOAT},
     ],
 });
 grass_shadow_shader: Shader(model_scene_grass_shadow_vertex_main, model_scene_grass_shadow_fragment_main, .{
@@ -115,21 +112,21 @@ debug_shadow_shader: Shader(model_scene_debug_shadow_vertex_main, model_scene_de
     cull = .CW,
     depth_format = .D32_SFLOAT,
     color_targets = .[
-        .{format = .B8G8R8A8_UNORM},
+        .{format = .R16G16B16A16_SFLOAT},
     ],
 });
 debug_pick_shader: Shader(model_scene_debug_shadow_vertex_main, model_scene_debug_pick_fragment_main, .{
     cull = .CW,
     depth_format = .D32_SFLOAT,
     color_targets = .[
-        .{format = .B8G8R8A8_UNORM},
+        .{format = .R16G16B16A16_SFLOAT},
     ],
 });
 sky_shader: Shader(model_scene_sky_vertex_main, model_scene_sky_fragment_main, .{
     cull = .NONE,
     depth_format = .D32_SFLOAT,
     color_targets = .[
-        .{format = .B8G8R8A8_UNORM},
+        .{format = .R16G16B16A16_SFLOAT},
     ],
 });
 gpu_arena: Gpu_Arena;
@@ -169,6 +166,7 @@ scene_meshes_gpu: Gpu_View(Scene_Mesh);
 scene_depth: Texture_Ring;
 scene_depth_w: u32;
 scene_depth_h: u32;
+scene_present: Linear_Present_State;
 ground_vertices: Gpu_View(Scene_Vertex);
 ground_indices: Gpu_View(u32);
 ground_instance: Gpu_Buffer_Ring(Scene_Instance);
@@ -259,6 +257,7 @@ lod_distance_power: float = 1.18;
 orbit_yaw: float = 0.0;
 orbit_pitch: float = -0.32;
 orbit_distance: float = 8.5;
+PLAYER_CAMERA_GROUND_CLEARANCE :: 0.15;
 orbit_prev_mouse: Vector2;
 orbit_have_prev_mouse: bool;
 left_was_down: bool;
@@ -308,6 +307,7 @@ on_dll_init :: () {
     assert(SHR.init(*debug_shadow_shader), "Failed to create model_scene debug shadow pipeline.");
     assert(SHR.init(*debug_pick_shader), "Failed to create model_scene debug pick pipeline.");
     assert(SHR.init(*sky_shader), "Failed to create model_scene sky pipeline.");
+    assert(linear_present_init(*scene_present, "model scene present"), "Failed to initialize model_scene present state.");
     shadow_map_init(*shadow_map);
     sky_draw_params = gpu_make_buffer_ring(Model_Scene_Sky_Params_CPU, label = "model scene sky params");
     debug_pick_params = gpu_make_buffer_ring(Scene_Draw_Params_CPU, label = "model scene debug pick params");
@@ -326,6 +326,7 @@ on_dll_init :: () {
     _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
     if dims_ok && win_w > 0 && win_h > 0 {
         ensure_scene_depth_target(cast(u32) win_w, cast(u32) win_h);
+        assert(linear_present_ensure_color_target(*scene_present, cast(u32) win_w, cast(u32) win_h), "Failed to create model_scene color target.");
         ensure_scene_pick_target(cast(u32) win_w, cast(u32) win_h);
     }
 
@@ -350,6 +351,8 @@ on_unload :: () {
     Gizmo.deinit(*gizmo_ctx);
     gpu_delete(*debug_pick_params);
     gpu_delete(*sky_draw_params);
+    linear_present_deinit(*scene_present);
+    linear_present_shutdown_shader();
     gpu_delete(*sky_shader.pipeline);
     gpu_delete(*debug_pick_shader.pipeline);
     gpu_delete(*debug_shadow_shader.pipeline);
@@ -425,6 +428,7 @@ tick :: () {
     mx, my, mouse_ok := get_mouse_pointer_position(true);
     if dims_ok && win_w > 0 && win_h > 0 {
         ensure_scene_depth_target(cast(u32) win_w, cast(u32) win_h);
+        assert(linear_present_ensure_color_target(*scene_present, cast(u32) win_w, cast(u32) win_h), "Failed to create model_scene color target.");
     }
 
     io := ImGui.GetIO();
@@ -680,6 +684,7 @@ tick :: () {
         orbit_dir := Vector3.{ sin(orbit_yaw) * cos(orbit_pitch), sin(orbit_pitch), -cos(orbit_yaw) * cos(orbit_pitch) };
         normalize(*orbit_dir, fallback = .{0.0, -0.25, 1.0});
         scene_camera.position = player_focus - orbit_dir * orbit_distance;
+        clamp_player_camera_above_ground(*scene_camera);
         editor_camera_set_look_at(*scene_camera, player_focus);
     }
 
@@ -909,7 +914,7 @@ tick :: () {
     }
 
     {
-        gpu_begin_scoped_render_pass(cmd_buff, .{
+        main_pass_desc := Gpu_Render_Pass_Desc.{
             depth_target = .{
                 view = texture_ring_current_view(*scene_depth),
                 load_op = .CLEAR,
@@ -921,13 +926,14 @@ tick :: () {
             },
             color_targets = .[
                 .{
-                    view = swapchain_image,
+                    view = linear_present_current_color_view(*scene_present),
                     load_op = .CLEAR,
                     store_op = .STORE,
-                    clear_color._float = .[0.01, 0.01, 0.015, 1.0],
+                    clear_color._float = .[0.0, 0.0, 0.0, 1.0],
                 },
             ],
-        }, .COLOR_ATTACHMENT_WRITE, .COLOR_ATTACHMENT_WRITE);
+        };
+        gpu_begin_scoped_render_pass(cmd_buff, main_pass_desc, .COLOR_ATTACHMENT_WRITE, .SHADER_READ);
         gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
         gpu_set_pipeline(cmd_buff, sky_shader.pipeline);
         if current_sky_draw_params.cpu != null {
@@ -959,7 +965,7 @@ tick :: () {
                 flags = meshlet_flags,
             };
 
-            gpu_set_pipeline(cmd_buff, SHR.pipeline(*mesh_shader, mesh_constants));
+            gpu_set_pipeline(cmd_buff, SHR.pipeline(*mesh_shader, main_pass_desc, mesh_constants));
             object_group_start: u32;
             while object_group_start < total_object_groups {
                 draw_object_group_count := min(max_object_groups_per_draw, total_object_groups - object_group_start);
@@ -1043,6 +1049,8 @@ tick :: () {
             gpu_draw_instanced_direct(cmd_buff, current_debug_pick_params.gpu, 6, 1);
         }
     }
+
+    linear_present_present(cmd_buff, *scene_present, swapchain_image);
 
     if horde_runtime.player_health <= 0.0 {
         using ImGui;
@@ -1467,8 +1475,11 @@ clear_scene_runtime_resources :: () {
     }
 
     gpu_delete(*scene_depth);
+    gpu_delete(*scene_present.color);
     scene_depth_w = 0;
     scene_depth_h = 0;
+    scene_present.color_w = 0;
+    scene_present.color_h = 0;
     deinit(*scene_pick);
 
     gpu_delete(*ground_ao_texture_view);
@@ -2185,6 +2196,13 @@ compiled_node_is_under_player_root :: (node_index: s32) -> bool {
     return false;
 }
 
+clamp_player_camera_above_ground :: (camera: *Editor_Camera) {
+    min_camera_y := ground_height_at(active_ground, camera.position.x, camera.position.z) + PLAYER_CAMERA_GROUND_CLEARANCE;
+    if camera.position.y < min_camera_y {
+        camera.position.y = min_camera_y;
+    }
+}
+
 scene_mouse_world_ray :: (frame: Manip_Frame_Input) -> Vector3, Vector3, bool {
     if !frame.mouse_valid {
         log("SCENE_PLACE ray failed: mouse invalid");
@@ -2239,7 +2257,7 @@ ground_plane_desc: Scene_File.Scene_Procedural_Ground_Desc;
 
 init_ground_plane :: (ground: Scene_File.Scene_Procedural_Ground_Desc) {
     ground_plane_desc = ground;
-    ground_texture, ground_texture_view = load_texture_rgba8(ground.base_color_path);
+    ground_texture, ground_texture_view = load_texture_rgba8_srgb(ground.base_color_path);
     ground_normal_texture, ground_normal_texture_view = load_texture_rgba8(ground.normal_path);
     ground_roughness_texture, ground_roughness_texture_view = load_texture_rgba8(ground.roughness_path);
     ground_ao_texture, ground_ao_texture_view = load_texture_rgba8(ground.ao_path);
@@ -2497,6 +2515,7 @@ mesh_max_meshlet_count :: (mesh_index: u32) -> u32 {
 
 #load "../character_controller.jai";
 #load "../SGPU_App_Common.jai";
+#load "../linear_present.jai";
 #load "../editor_camera.jai";
 #load "../ui/manip.jai";
 #load "../ui/toggle_widget.jai";

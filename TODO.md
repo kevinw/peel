@@ -1,4 +1,7 @@
 # TODO
+- blender_exporter: skip export for invisbile objects
+- collect list of external tools like 'ktx' and 'cmgen' and vendor them in tools/mac_arm64/
+- memory leak in model_scene?
 - figure out why MTL_HUD_ENABLED=1 crashes (by binary search? with empty window?)
 - make a shader live reload test mode on by default which reloads shaders at startup by touching files, or by simulating their being updated
 - make sure @on_unload tears down all gpu_free_arenas

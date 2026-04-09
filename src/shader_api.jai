@@ -1,6 +1,15 @@
+Shader_Attachment_Layout_Key :: struct {
+    sample_count: u8;
+    color_target_count: u8;
+    depth_format: Format;
+    stencil_format: Format;
+    color_formats: [8] Format;
+}
+
 Shader_Function_Constant_Variant :: struct {
     key_hash: u64;
     constants_bytes: []u8;
+    attachment_layout: Shader_Attachment_Layout_Key;
     pipeline: Gpu_Pipeline;
 }
 
@@ -138,6 +147,24 @@ pipeline :: (using shader: *Shader) -> Gpu_Pipeline {
     return shader.pipeline;
 }
 
+pipeline :: (using shader: *Shader, pass_desc: Gpu_Render_Pass_Desc, loc: Source_Code_Location = #caller_location) -> Gpu_Pipeline #expand {
+    #insert #run,stallable -> string {
+        vertex_name :: #procedure_name(Vertex_Function);
+        fragment_name :: #procedure_name(Fragment_Function);
+        source_expr, meta_expr, constants_expr, ok := JTS.get_transpiled2_named_exprs_with_constants(vertex_name, fragment_name, loc);
+        if !ok {
+            compiler_report("Shader hot reload graphics helper requires direct vertex/fragment procedure identifiers.", loc=loc);
+            return "return 0;";
+        }
+        function_constants_type_expr := pick_function_constants_type_expr("", loc, Vertex_Function, Fragment_Function);
+        if function_constants_type_expr.count != 0 {
+            default_constants_expr := JTS.default_pair_function_constants_expr_from_procs(Vertex_Function, Fragment_Function, loc);
+            return graphics_render_pass_variant_code(source_expr, meta_expr, default_constants_expr);
+        }
+        return graphics_render_pass_variant_code(source_expr, meta_expr);
+    };
+}
+
 pipeline :: (using shader: *Shader, constants: $T, loc: Source_Code_Location = #caller_location) -> Gpu_Pipeline #expand {
     #insert #run,stallable -> string {
         vertex_name :: #procedure_name(Vertex_Function);
@@ -152,8 +179,54 @@ pipeline :: (using shader: *Shader, constants: $T, loc: Source_Code_Location = #
     };
 }
 
+pipeline :: (using shader: *Shader, pass_desc: Gpu_Render_Pass_Desc, constants: $T, loc: Source_Code_Location = #caller_location) -> Gpu_Pipeline #expand {
+    #insert #run,stallable -> string {
+        vertex_name :: #procedure_name(Vertex_Function);
+        fragment_name :: #procedure_name(Fragment_Function);
+        source_expr, meta_expr, ok := JTS.get_transpiled2_named_exprs(vertex_name, fragment_name, loc);
+        if !ok {
+            compiler_report("Shader hot reload graphics helper requires direct vertex/fragment procedure identifiers.", loc=loc);
+            return "return 0;";
+        }
+        return graphics_render_pass_variant_with_constants_code(source_expr, meta_expr);
+    };
+}
+
 pipeline :: (using mesh_shader: *Mesh_Shader) -> Gpu_Pipeline {
     return mesh_shader.pipeline;
+}
+
+pipeline :: (using mesh_shader: *Mesh_Shader, pass_desc: Gpu_Render_Pass_Desc, loc: Source_Code_Location = #caller_location) -> Gpu_Pipeline #expand {
+    #insert #run,stallable -> string {
+        mesh_name :: #procedure_name(Mesh_Function);
+        fragment_name :: #procedure_name(Fragment_Function);
+        function_constants_type_expr := pick_function_constants_type_expr("", loc, Task_Function, Mesh_Function, Fragment_Function);
+
+        if Task_Function != null {
+            task_name :: #procedure_name(Task_Function);
+            bundle_expr, meta_expr, constants_expr, ok := JTS.get_transpiled_task_mesh_pipeline_named_exprs_with_constants(task_name, mesh_name, fragment_name, loc);
+            if !ok {
+                compiler_report("Shader hot reload mesh helper requires direct task/mesh/fragment procedure identifiers.", loc=loc);
+                return "return 0;";
+            }
+            if function_constants_type_expr.count != 0 {
+                default_constants_expr := JTS.default_mesh_function_constants_expr_from_procs(Task_Function, Mesh_Function, Fragment_Function, loc);
+                return shader_api_mesh_render_pass_variant_code(bundle_expr, meta_expr, default_constants_expr);
+            }
+            return shader_api_mesh_render_pass_variant_code(bundle_expr, meta_expr);
+        }
+
+        bundle_expr, meta_expr, constants_expr, ok := JTS.get_transpiled_mesh_pipeline_named_exprs_with_constants(mesh_name, fragment_name, loc);
+        if !ok {
+            compiler_report("Shader hot reload mesh helper requires direct mesh/fragment procedure identifiers.", loc=loc);
+            return "return 0;";
+        }
+        if function_constants_type_expr.count != 0 {
+            default_constants_expr := JTS.default_mesh_function_constants_expr_from_procs(Mesh_Function, Fragment_Function, loc);
+            return shader_api_mesh_render_pass_variant_code(bundle_expr, meta_expr, default_constants_expr);
+        }
+        return shader_api_mesh_render_pass_variant_code(bundle_expr, meta_expr);
+    };
 }
 
 pipeline :: (using mesh_shader: *Mesh_Shader, constants: $Constants_Struct, loc: Source_Code_Location = #caller_location) -> Gpu_Pipeline #expand {
@@ -177,6 +250,30 @@ pipeline :: (using mesh_shader: *Mesh_Shader, constants: $Constants_Struct, loc:
             return "return 0;";
         }
         return shader_api_mesh_variant_code(bundle_expr, meta_expr);
+    };
+}
+
+pipeline :: (using mesh_shader: *Mesh_Shader, pass_desc: Gpu_Render_Pass_Desc, constants: $Constants_Struct, loc: Source_Code_Location = #caller_location) -> Gpu_Pipeline #expand {
+    #insert #run,stallable -> string {
+        mesh_name :: #procedure_name(Mesh_Function);
+        fragment_name :: #procedure_name(Fragment_Function);
+
+        if Task_Function != null {
+            task_name :: #procedure_name(Task_Function);
+            bundle_expr, meta_expr, ok := JTS.get_transpiled_task_mesh_pipeline_named_exprs(task_name, mesh_name, fragment_name, loc);
+            if !ok {
+                compiler_report("Shader hot reload mesh helper requires direct task/mesh/fragment procedure identifiers.", loc=loc);
+                return "return 0;";
+            }
+            return shader_api_mesh_render_pass_variant_with_constants_code(bundle_expr, meta_expr);
+        }
+
+        bundle_expr, meta_expr, ok := JTS.get_transpiled_mesh_pipeline_named_exprs(mesh_name, fragment_name, loc);
+        if !ok {
+            compiler_report("Shader hot reload mesh helper requires direct mesh/fragment procedure identifiers.", loc=loc);
+            return "return 0;";
+        }
+        return shader_api_mesh_render_pass_variant_with_constants_code(bundle_expr, meta_expr);
     };
 }
 
@@ -273,6 +370,11 @@ graphics_init_code :: (
         return tprint(#string END
 G :: #import,file "%";
 shader_source, shader_meta := %, %;
+if shader_hot_reload_raster_desc_is_dynamic(raster_desc) {
+    shader.pipeline = 0;
+    shader_hot_reload_reset_function_constant_variants(cast(*Shader_Base) shader);
+    return true;
+}
 default_constants := %;
 new_pipeline := create_graphics_pipeline_with_function_constants(cast([]u8) shader_source, shader_meta, raster_desc, *default_constants);
 assert(new_pipeline != 0, "Graphics pipeline creation with function constants failed for '%', '%'.");
@@ -287,6 +389,11 @@ END, path_to_shader_module, source_expr, meta_expr, default_constants_expr, vert
     return tprint(#string END
 G :: #import,file "%";
 shader_source, shader_meta := %, %;
+if shader_hot_reload_raster_desc_is_dynamic(raster_desc) {
+    shader.pipeline = 0;
+    shader_hot_reload_reset_function_constant_variants(cast(*Shader_Base) shader);
+    return true;
+}
 assert(shader_meta.entry_id.count > 0, "Missing shader hot-reload entry id for graphics shaders '%', '%'.");
 ok := shader_hot_reload_create_and_register_graphics_pipeline_with_entry_id(shader_meta.entry_id, *shader.pipeline, cast([]u8) shader_source, raster_desc);
 if ok shader_hot_reload_reset_function_constant_variants(cast(*Shader_Base) shader);
@@ -303,6 +410,11 @@ graphics_init_with_constants_code :: (
     return tprint(#string END
 G :: #import,file "%";
 shader_source, shader_meta := %, %;
+if shader_hot_reload_raster_desc_is_dynamic(raster_desc) {
+    shader.pipeline = 0;
+    shader_hot_reload_reset_function_constant_variants(cast(*Shader_Base) shader);
+    return true;
+}
 new_pipeline := create_graphics_pipeline_with_function_constants(cast([]u8) shader_source, shader_meta, raster_desc, *constants);
 assert(new_pipeline != 0, "Graphics pipeline creation with function constants failed for '%', '%'.");
 shader.pipeline = new_pipeline;
@@ -322,6 +434,74 @@ graphics_variant_code :: (
     G :: #import,file "%";
     shader_source, shader_meta := %, %;
     return shader_hot_reload_get_or_create_graphics_pipeline_variant(cast(*Shader_Base) shader, cast([]u8) shader_source, shader_meta, raster_desc, *constants);
+}
+END, path_to_shader_module, source_expr, meta_expr);
+}
+
+graphics_render_pass_variant_code :: (
+    source_expr: string,
+    meta_expr: string,
+    default_constants_expr: string = "",
+) -> string #compile_time {
+    if default_constants_expr.count != 0 {
+        return tprint(#string END
+{
+    G :: #import,file "%";
+    shader_source, shader_meta := %, %;
+    resolved_raster_desc := raster_desc;
+    resolved_dynamic_raster_desc := false;
+    if shader_hot_reload_raster_desc_is_dynamic(raster_desc) {
+        dynamic_raster_desc, ok := shader_hot_reload_resolve_dynamic_raster_desc(raster_desc, pass_desc);
+        assert(ok, "Could not resolve dynamic render-target layout for graphics shader.");
+        resolved_raster_desc = dynamic_raster_desc;
+        resolved_dynamic_raster_desc = true;
+    }
+    default_constants := %;
+    result := shader_hot_reload_get_or_create_graphics_pipeline_variant(cast(*Shader_Base) shader, cast([]u8) shader_source, shader_meta, resolved_raster_desc, *default_constants);
+    if resolved_dynamic_raster_desc shader_hot_reload_release_dynamic_raster_desc(raster_desc, *resolved_raster_desc);
+    return result;
+}
+END, path_to_shader_module, source_expr, meta_expr, default_constants_expr);
+    }
+
+    return tprint(#string END
+{
+    G :: #import,file "%";
+    shader_source, shader_meta := %, %;
+    resolved_raster_desc := raster_desc;
+    resolved_dynamic_raster_desc := false;
+    if shader_hot_reload_raster_desc_is_dynamic(raster_desc) {
+        dynamic_raster_desc, ok := shader_hot_reload_resolve_dynamic_raster_desc(raster_desc, pass_desc);
+        assert(ok, "Could not resolve dynamic render-target layout for graphics shader.");
+        resolved_raster_desc = dynamic_raster_desc;
+        resolved_dynamic_raster_desc = true;
+    }
+    result := shader_hot_reload_get_or_create_graphics_pipeline_variant_no_constants(cast(*Shader_Base) shader, cast([]u8) shader_source, shader_meta, resolved_raster_desc);
+    if resolved_dynamic_raster_desc shader_hot_reload_release_dynamic_raster_desc(raster_desc, *resolved_raster_desc);
+    return result;
+}
+END, path_to_shader_module, source_expr, meta_expr);
+}
+
+graphics_render_pass_variant_with_constants_code :: (
+    source_expr: string,
+    meta_expr: string,
+) -> string #compile_time {
+    return tprint(#string END
+{
+    G :: #import,file "%";
+    shader_source, shader_meta := %, %;
+    resolved_raster_desc := raster_desc;
+    resolved_dynamic_raster_desc := false;
+    if shader_hot_reload_raster_desc_is_dynamic(raster_desc) {
+        dynamic_raster_desc, ok := shader_hot_reload_resolve_dynamic_raster_desc(raster_desc, pass_desc);
+        assert(ok, "Could not resolve dynamic render-target layout for graphics shader.");
+        resolved_raster_desc = dynamic_raster_desc;
+        resolved_dynamic_raster_desc = true;
+    }
+    result := shader_hot_reload_get_or_create_graphics_pipeline_variant(cast(*Shader_Base) shader, cast([]u8) shader_source, shader_meta, resolved_raster_desc, *constants);
+    if resolved_dynamic_raster_desc shader_hot_reload_release_dynamic_raster_desc(raster_desc, *resolved_raster_desc);
+    return result;
 }
 END, path_to_shader_module, source_expr, meta_expr);
 }
@@ -369,6 +549,11 @@ shader_api_mesh_init_code :: (
         if default_constants_expr.count != 0 {
             return tprint(#string END
 %
+if shader_hot_reload_raster_desc_is_dynamic(mesh_desc.raster_desc) {
+    mesh_shader.pipeline = 0;
+    shader_hot_reload_reset_function_constant_variants(cast(*Shader_Base) mesh_shader);
+    return true;
+}
 default_constants := %;
 assert(shader_bundle.meta.entry_id.count > 0, "Missing shader hot-reload entry id for task+mesh pipeline shaders '%', '%', '%'.");
 ok := shader_hot_reload_create_and_register_mesh_pipeline_with_entry_id(shader_bundle.meta.entry_id, *mesh_shader.pipeline, shader_bundle, mesh_desc, *default_constants);
@@ -378,6 +563,11 @@ END, binding_code, default_constants_expr, task_name, mesh_name, fragment_name, 
         }
         return tprint(#string END
 %
+if shader_hot_reload_raster_desc_is_dynamic(mesh_desc.raster_desc) {
+    mesh_shader.pipeline = 0;
+    shader_hot_reload_reset_function_constant_variants(cast(*Shader_Base) mesh_shader);
+    return true;
+}
 assert(shader_bundle.meta.entry_id.count > 0, "Missing shader hot-reload entry id for task+mesh pipeline shaders '%', '%', '%'.");
 ok := shader_hot_reload_create_and_register_mesh_pipeline_with_entry_id(shader_bundle.meta.entry_id, *mesh_shader.pipeline, shader_bundle, mesh_desc);
 if ok shader_hot_reload_reset_function_constant_variants(cast(*Shader_Base) mesh_shader);
@@ -388,6 +578,11 @@ END, binding_code, task_name, mesh_name, fragment_name, task_name, mesh_name, fr
     if default_constants_expr.count != 0 {
         return tprint(#string END
 %
+if shader_hot_reload_raster_desc_is_dynamic(mesh_desc.raster_desc) {
+    mesh_shader.pipeline = 0;
+    shader_hot_reload_reset_function_constant_variants(cast(*Shader_Base) mesh_shader);
+    return true;
+}
 default_constants := %;
 assert(shader_bundle.meta.entry_id.count > 0, "Missing shader hot-reload entry id for mesh pipeline shaders '%', '%'.");
 ok := shader_hot_reload_create_and_register_mesh_pipeline_with_entry_id(shader_bundle.meta.entry_id, *mesh_shader.pipeline, shader_bundle, mesh_desc, *default_constants);
@@ -398,6 +593,11 @@ END, binding_code, default_constants_expr, mesh_name, fragment_name, mesh_name, 
 
     return tprint(#string END
 %
+if shader_hot_reload_raster_desc_is_dynamic(mesh_desc.raster_desc) {
+    mesh_shader.pipeline = 0;
+    shader_hot_reload_reset_function_constant_variants(cast(*Shader_Base) mesh_shader);
+    return true;
+}
 assert(shader_bundle.meta.entry_id.count > 0, "Missing shader hot-reload entry id for mesh pipeline shaders '%', '%'.");
 ok := shader_hot_reload_create_and_register_mesh_pipeline_with_entry_id(shader_bundle.meta.entry_id, *mesh_shader.pipeline, shader_bundle, mesh_desc);
 if ok shader_hot_reload_reset_function_constant_variants(cast(*Shader_Base) mesh_shader);
@@ -416,6 +616,11 @@ mesh_init_with_constants_code :: (
     if task_name.count != 0 {
         return tprint(#string END
 %
+if shader_hot_reload_raster_desc_is_dynamic(mesh_desc.raster_desc) {
+    mesh_shader.pipeline = 0;
+    shader_hot_reload_reset_function_constant_variants(cast(*Shader_Base) mesh_shader);
+    return true;
+}
 assert(shader_bundle.meta.entry_id.count > 0, "Missing shader hot-reload entry id for task+mesh pipeline shaders '%', '%', '%'.");
 ok := shader_hot_reload_create_and_register_mesh_pipeline_with_entry_id(shader_bundle.meta.entry_id, *mesh_shader.pipeline, shader_bundle, mesh_desc, *constants);
 if ok shader_hot_reload_reset_function_constant_variants(cast(*Shader_Base) mesh_shader);
@@ -425,6 +630,11 @@ END, binding_code, task_name, mesh_name, fragment_name, task_name, mesh_name, fr
 
     return tprint(#string END
 %
+if shader_hot_reload_raster_desc_is_dynamic(mesh_desc.raster_desc) {
+    mesh_shader.pipeline = 0;
+    shader_hot_reload_reset_function_constant_variants(cast(*Shader_Base) mesh_shader);
+    return true;
+}
 assert(shader_bundle.meta.entry_id.count > 0, "Missing shader hot-reload entry id for mesh pipeline shaders '%', '%'.");
 ok := shader_hot_reload_create_and_register_mesh_pipeline_with_entry_id(shader_bundle.meta.entry_id, *mesh_shader.pipeline, shader_bundle, mesh_desc, *constants);
 if ok shader_hot_reload_reset_function_constant_variants(cast(*Shader_Base) mesh_shader);
@@ -441,6 +651,73 @@ shader_api_mesh_variant_code :: (
 {
     %
     return shader_hot_reload_get_or_create_mesh_pipeline_variant(cast(*Shader_Base) mesh_shader, shader_bundle, mesh_desc, *constants);
+}
+END, binding_code);
+}
+
+shader_api_mesh_render_pass_variant_code :: (
+    bundle_expr: string,
+    meta_expr: string,
+    default_constants_expr: string = "",
+) -> string #compile_time {
+    binding_code := mesh_bundle_binding_code(bundle_expr, meta_expr);
+    if default_constants_expr.count != 0 {
+        return tprint(#string END
+{
+    %
+    resolved_mesh_desc := mesh_desc;
+    resolved_dynamic_raster_desc := false;
+    if shader_hot_reload_raster_desc_is_dynamic(mesh_desc.raster_desc) {
+        resolved_raster_desc, ok := shader_hot_reload_resolve_dynamic_raster_desc(mesh_desc.raster_desc, pass_desc);
+        assert(ok, "Could not resolve dynamic render-target layout for mesh shader.");
+        resolved_mesh_desc.raster_desc = resolved_raster_desc;
+        resolved_dynamic_raster_desc = true;
+    }
+    default_constants := %;
+    result := shader_hot_reload_get_or_create_mesh_pipeline_variant(cast(*Shader_Base) mesh_shader, shader_bundle, resolved_mesh_desc, *default_constants);
+    if resolved_dynamic_raster_desc shader_hot_reload_release_dynamic_raster_desc(mesh_desc.raster_desc, *resolved_mesh_desc.raster_desc);
+    return result;
+}
+END, binding_code, default_constants_expr);
+    }
+
+    return tprint(#string END
+{
+    %
+    resolved_mesh_desc := mesh_desc;
+    resolved_dynamic_raster_desc := false;
+    if shader_hot_reload_raster_desc_is_dynamic(mesh_desc.raster_desc) {
+        resolved_raster_desc, ok := shader_hot_reload_resolve_dynamic_raster_desc(mesh_desc.raster_desc, pass_desc);
+        assert(ok, "Could not resolve dynamic render-target layout for mesh shader.");
+        resolved_mesh_desc.raster_desc = resolved_raster_desc;
+        resolved_dynamic_raster_desc = true;
+    }
+    result := shader_hot_reload_get_or_create_mesh_pipeline_variant_no_constants(cast(*Shader_Base) mesh_shader, shader_bundle, resolved_mesh_desc);
+    if resolved_dynamic_raster_desc shader_hot_reload_release_dynamic_raster_desc(mesh_desc.raster_desc, *resolved_mesh_desc.raster_desc);
+    return result;
+}
+END, binding_code);
+}
+
+shader_api_mesh_render_pass_variant_with_constants_code :: (
+    bundle_expr: string,
+    meta_expr: string,
+) -> string #compile_time {
+    binding_code := mesh_bundle_binding_code(bundle_expr, meta_expr);
+    return tprint(#string END
+{
+    %
+    resolved_mesh_desc := mesh_desc;
+    resolved_dynamic_raster_desc := false;
+    if shader_hot_reload_raster_desc_is_dynamic(mesh_desc.raster_desc) {
+        resolved_raster_desc, ok := shader_hot_reload_resolve_dynamic_raster_desc(mesh_desc.raster_desc, pass_desc);
+        assert(ok, "Could not resolve dynamic render-target layout for mesh shader.");
+        resolved_mesh_desc.raster_desc = resolved_raster_desc;
+        resolved_dynamic_raster_desc = true;
+    }
+    result := shader_hot_reload_get_or_create_mesh_pipeline_variant(cast(*Shader_Base) mesh_shader, shader_bundle, resolved_mesh_desc, *constants);
+    if resolved_dynamic_raster_desc shader_hot_reload_release_dynamic_raster_desc(mesh_desc.raster_desc, *resolved_mesh_desc.raster_desc);
+    return result;
 }
 END, binding_code);
 }

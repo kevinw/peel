@@ -658,6 +658,8 @@ using,only(Shader, Compute_Shader, Mesh_Shader, init) _ :: SHR;
     }
 }
 Env_Vars :: #import "Env_Vars";
+#load "asset_cache_tools.jai";
+#load "ktx_texture_cache.jai";
 #load "GPU_Tools.jai";
 #load "inspiration_board.jai";
 #if !SINGLE_BINARY {

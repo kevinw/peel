@@ -291,6 +291,9 @@ ktx2_load_from_memory :: (file_bytes: string, verbose: bool) -> bool, Image_Desc
 
     VK_FORMAT_ASTC_6x6_SRGB_BLOCK :: 166;
     VK_FORMAT_ASTC_4x4_SRGB_BLOCK :: 158;
+    VK_FORMAT_BC5_UNORM_BLOCK     :: 141;
+    VK_FORMAT_BC7_UNORM_BLOCK     :: 145;
+    VK_FORMAT_BC7_SRGB_BLOCK      :: 146;
     VK_FORMAT_R8G8B8A8_UNORM :: 37;
     VK_FORMAT_R8G8B8A8_SRGB :: 43;
 
@@ -303,6 +306,21 @@ ktx2_load_from_memory :: (file_bytes: string, verbose: bool) -> bool, Image_Desc
             compressed = true;
         case VK_FORMAT_ASTC_4x4_SRGB_BLOCK;
             pixelFormat = .ASTC_4x4_LDR;
+            pixels_per_block = 4;
+            bytesPerPixel = 1;
+            compressed = true;
+        case VK_FORMAT_BC5_UNORM_BLOCK;
+            pixelFormat = .BC5_RGUnorm;
+            pixels_per_block = 4;
+            bytesPerPixel = 1;
+            compressed = true;
+        case VK_FORMAT_BC7_UNORM_BLOCK;
+            pixelFormat = .BC7_RGBAUnorm;
+            pixels_per_block = 4;
+            bytesPerPixel = 1;
+            compressed = true;
+        case VK_FORMAT_BC7_SRGB_BLOCK;
+            pixelFormat = .BC7_RGBAUnorm_sRGB;
             pixels_per_block = 4;
             bytesPerPixel = 1;
             compressed = true;

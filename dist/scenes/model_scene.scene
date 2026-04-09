@@ -9,9 +9,6 @@ scene "Model Scene" {
   asset "teapot" {
     model "./models/teapot.obj"
   }
-  asset "hero_lizard" {
-    model "./models/nerdy+lizard+3d+model.glb"
-  }
   asset "runner_lizard" {
     model "./models/Lizard run.glb"
   }
@@ -48,12 +45,6 @@ scene "Model Scene" {
       roughness "./textures/Ground104_1K-JPG/Ground104_1K-JPG_Roughness.jpg"
       ao "./textures/Ground104_1K-JPG/Ground104_1K-JPG_AmbientOcclusion.jpg"
     }
-  }
-  node "Hero Lizard" {
-    position 4.9 0 -5.6
-    rotation_deg 0 180 0
-    scale 5 5 5
-    mesh_render "hero_lizard"
   }
   node "Player" {
     position -6.8 0 -9.5
