@@ -316,8 +316,8 @@ reset :: (using runtime: *Horde_Runtime, horde_bindings: Horde_Bindings, camera_
     }
     if render_meshes.count == 0 return;
 
-    log("ENEMY_HORDE init model=% render_meshes=% collider=% radius=% half_height=% scale=%",
-        scene_geo.models[mask_model_index].name, render_meshes.count, collider_kind, collider_radius, collider_half_height, model_scale);
+    //log("ENEMY_HORDE init model=% render_meshes=% collider=% radius=% half_height=% scale=%",
+        //scene_geo.models[mask_model_index].name, render_meshes.count, collider_kind, collider_radius, collider_half_height, model_scale);
 
     for render_mesh: render_meshes {
         lod_count := 1 + cast(s32) render_mesh.lod_mesh_count;
@@ -380,6 +380,9 @@ reset :: (using runtime: *Horde_Runtime, horde_bindings: Horde_Bindings, camera_
 do_ui :: (using runtime: *Horde_Runtime) {
     #import "ImGui";
     Persist :: #import,file "ui/persist_controls.jai";
+
+
+    if !CollapsingHeader("Horde", .None) return;
 
     ImGui.Checkbox("Enemy Direct Draw", *direct_draw_debug);
     ImGui.Checkbox("Auto Fire", *auto_fire_params.enabled);

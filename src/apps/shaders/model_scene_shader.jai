@@ -6,6 +6,27 @@
 SCENE_ALPHA_MODE_OPAQUE :: 0;
 SCENE_ALPHA_MODE_MASK   :: 1;
 
+Model_Scene_Debug_Mode :: enum u32 {
+    SHADED;
+    ALBEDO;
+    LODS;
+    CHUNKS;
+    MESHLETS;
+}
+
+Model_Scene_Meshlet_Flags :: enum_flags u32 {
+    HAS_SHADOWS          :: 1 << 0;
+    HAS_LODS             :: 1 << 1;
+    HAS_MORPHS           :: 1 << 2;
+    HAS_SKINNING         :: 1 << 3;
+    DISABLE_FRUSTUM_CULL :: 1 << 4;
+}
+
+Model_Scene_Meshlet_Constants :: struct {
+    flags: Model_Scene_Meshlet_Flags = .HAS_SHADOWS | .HAS_LODS | .HAS_MORPHS | .HAS_SKINNING;
+    debug_mode: Model_Scene_Debug_Mode = .SHADED;
+} @function_constants
+
 Scene_Instance :: struct {
     world: Matrix4;
     tint: Vector4;
@@ -496,7 +517,7 @@ model_scene_sky_color :: (view_dir: Vector3, sun_dir: Vector3, sun_strength: flo
 model_scene_apply_atmosphere :: (color: Vector3, world_pos: Vector3, camera_pos: Vector3, sun_dir: Vector3) -> Vector3 {
     view_vec := world_pos - camera_pos;
     dist := sqrt(max(dot(view_vec, view_vec), 0.0));
-    fog := 1.0 - exp(-dist * 0.028);
+    fog := 1.0 - exp(-dist * 0.012);
     fog = clamp(fog, 0.0, 0.7);
     view_dir := normalize(view_vec);
     sky_col := model_scene_sky_base_color(view_dir, sun_dir);
@@ -541,7 +562,7 @@ scene_encode_object_id :: (object_id: u32) -> Vector4 {
     return .{r, g, b, a};
 }
 
-model_scene_fragment_main :: (using in: Model_Scene_Fragment_In, params: *Scene_Draw_Params) -> Vector4 @SV_Target0 {
+model_scene_fragment_main :: (using in: Model_Scene_Fragment_In, params: *Scene_Draw_Params, using constants: Model_Scene_Meshlet_Constants) -> Vector4 @SV_Target0 {
     material := params.materials[params.material_index];
     tex := sample_2d(material.base_color_texture_index, material.sampler_index, uv);
     alpha := scene_material_alpha(material, uv, tint.w);
@@ -551,6 +572,7 @@ model_scene_fragment_main :: (using in: Model_Scene_Fragment_In, params: *Scene_
         tex.y * material.base_color_factor.y * tint.y,
         tex.z * material.base_color_factor.z * tint.z,
     };
+    if debug_mode == .ALBEDO return .{base_rgb.x, base_rgb.y, base_rgb.z, alpha};
     N := normalize(normal);
     ao := 1.0;
     roughness := 0.82;
@@ -616,9 +638,10 @@ ground_vertex_main :: (using in: Ground_Vertex_In, params: *Ground_Draw_Params) 
     return out;
 } @vertex_shader
 
-ground_fragment_main :: (using in: Ground_Fragment_In, params: *Ground_Draw_Params) -> Vector4 @SV_Target0 {
+ground_fragment_main :: (using in: Ground_Fragment_In, params: *Ground_Draw_Params, constants: Model_Scene_Meshlet_Constants) -> Vector4 @SV_Target0 {
     tex := sample_2d(params.base_color_texture_index, params.sampler_index, uv);
     base_rgb := Vector3.{tex.x, tex.y, tex.z};
+    if constants.debug_mode == .ALBEDO return .{base_rgb.x, base_rgb.y, base_rgb.z, 1.0};
     ao := sample_2d(params.ao_texture_index, params.sampler_index, uv).x;
     roughness := sample_2d(params.roughness_texture_index, params.sampler_index, uv).x;
 

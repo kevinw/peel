@@ -255,6 +255,7 @@ show_shadow_debug: bool;
 show_pick_debug: bool;
 control_mode: enum { Player; Editor; } = .Player;
 outdoor_rig: Outdoor_Rig = .{};
+graphics_shader_constants: Model_Scene_Meshlet_Constants;
 mesh_shader_constants: Model_Scene_Meshlet_Constants;
 mesh_grid_limit: u32;
 lod_screen_radius: float = 420.0;
@@ -301,7 +302,7 @@ on_dll_init :: () {
     Physics.init();
     Physics.debug_draw_enabled = false;
 
-    assert(SHR.init(*graphics_shader), "Failed to create model_scene graphics pipeline.");
+    assert(SHR.init(*graphics_shader, graphics_shader_constants), "Failed to create model_scene graphics pipeline.");
     assert(SHR.init(*pick_shader), "Failed to create model_scene pick pipeline.");
     assert(SHR.init(*ground_shader), "Failed to create model_scene ground pipeline.");
     assert(SHR.init(*ground_shadow_shader), "Failed to create model_scene ground shadow pipeline.");
@@ -457,16 +458,18 @@ tick :: () {
             if Checkbox("Physics Gizmos", *physics_gizmos_enabled) {
                 Physics.debug_draw_enabled = physics_gizmos_enabled;
             }
-            Checkbox("Render Grass", *render_grass);
             SliderFloat("Mesh LOD Screen Radius", *lod_screen_radius, 8.0, 1024.0, "%.1f");
             SliderFloat("Mesh LOD Power", *lod_distance_power, 0.5, 2.0, "%.2f");
-            SliderFloat("Grass Density", *grass_density_scale, 0.25, 3.0, "%.2f");
-            SliderFloat("Grass Shadow Density", *grass_shadow_density_scale, 0.0, 2.0, "%.2f");
-            SliderFloat("Grass Fade Start", *grass_fade_start, 1.0, 64.0, "%.1f");
-            SliderFloat("Grass Fade End", *grass_fade_end, 2.0, 96.0, "%.1f");
-            SliderFloat("Grass Far Shade", *grass_far_shade_start, 1.0, 96.0, "%.1f");
-            SliderFloat("Grass Shadow Fade Start", *grass_shadow_fade_start, 1.0, 64.0, "%.1f");
-            SliderFloat("Grass Shadow Fade End", *grass_shadow_fade_end, 2.0, 96.0, "%.1f");
+            if CollapsingHeader("Grass") {
+                Checkbox("Render Grass", *render_grass);
+                SliderFloat("Grass Density", *grass_density_scale, 0.25, 3.0, "%.2f");
+                SliderFloat("Grass Shadow Density", *grass_shadow_density_scale, 0.0, 2.0, "%.2f");
+                SliderFloat("Grass Fade Start", *grass_fade_start, 1.0, 64.0, "%.1f");
+                SliderFloat("Grass Fade End", *grass_fade_end, 2.0, 96.0, "%.1f");
+                SliderFloat("Grass Far Shade", *grass_far_shade_start, 1.0, 96.0, "%.1f");
+                SliderFloat("Grass Shadow Fade Start", *grass_shadow_fade_start, 1.0, 64.0, "%.1f");
+                SliderFloat("Grass Shadow Fade End", *grass_shadow_fade_end, 2.0, 96.0, "%.1f");
+            }
             Checkbox("Scene Shadows", *scene_shadows_enabled);
             do_ui(*horde_runtime);
             if Checkbox("Mediapipe Body Casts Shadows", *mediapipe_body_casts_shadows) {
@@ -477,6 +480,11 @@ tick :: () {
             }
             Checkbox("Show Shadow Debug", *show_shadow_debug);
             Checkbox("Show Pick Debug", *show_pick_debug);
+            albedo_debug := graphics_shader_constants.debug_mode == .ALBEDO;
+            if Checkbox("Albedo Debug", *albedo_debug) {
+                graphics_shader_constants.debug_mode = ifx albedo_debug then .ALBEDO else .SHADED;
+                mesh_shader_constants.debug_mode = ifx albedo_debug then .ALBEDO else .SHADED;
+            }
             do_ui(*outdoor_rig);
             if Button("Focus Mediapipe Demo") {
                 control_mode = .Editor;
@@ -945,7 +953,7 @@ tick :: () {
             gpu_draw_instanced_direct(cmd_buff, current_sky_draw_params.gpu, 6, 1);
         }
         gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .LESS, depth_mode = .READ | .WRITE});
-        gpu_set_pipeline(cmd_buff, ground_shader.pipeline);
+        gpu_set_pipeline(cmd_buff, pipeline(*ground_shader, graphics_shader_constants));
         gpu_draw_instanced_direct(cmd_buff, current_ground_draw_params.gpu, ground_index_count, 1);
         if render_grass && current_grass_draw_params.cpu != null && grass_instance_count > 0 {
             gpu_set_pipeline(cmd_buff, grass_shader.pipeline);
@@ -968,6 +976,7 @@ tick :: () {
             if animated_batch_index >= 0 meshlet_flags |= .HAS_SKINNING;
             mesh_constants := Model_Scene_Meshlet_Constants.{
                 flags = meshlet_flags,
+                debug_mode = mesh_shader_constants.debug_mode,
             };
 
             gpu_set_pipeline(cmd_buff, SHR.pipeline(*mesh_shader, main_pass_desc, mesh_constants));
@@ -1034,8 +1043,9 @@ tick :: () {
                 object_group_start += draw_object_group_count;
             }
         }
-        gpu_set_pipeline(cmd_buff, graphics_shader.pipeline);
-        draw_main(*horde_runtime, cmd_buff, graphics_shader.pipeline);
+        graphics_pipeline := SHR.pipeline(*graphics_shader, graphics_shader_constants);
+        gpu_set_pipeline(cmd_buff, graphics_pipeline);
+        draw_main(*horde_runtime, cmd_buff, graphics_pipeline);
 
         should_draw_gizmos := physics_gizmos_enabled || control_mode == .Editor || horde_runtime.projectile_active_count > 0 || horde_runtime.spider_active_count > 0 || horde_runtime.powerup_active_count > 0;
         if should_draw_gizmos {

@@ -1,18 +1,5 @@
 #load "meshlet_common.jai";
 
-Model_Scene_Meshlet_Flags :: enum_flags u32 {
-    HAS_SHADOWS          :: 1 << 0;
-    HAS_LODS             :: 1 << 1;
-    HAS_MORPHS           :: 1 << 2;
-    HAS_SKINNING         :: 1 << 3;
-    DISABLE_FRUSTUM_CULL :: 1 << 4;
-}
-
-Model_Scene_Meshlet_Constants :: struct {
-    flags: Model_Scene_Meshlet_Flags = .HAS_SHADOWS | .HAS_LODS | .HAS_MORPHS | .HAS_SKINNING;
-    debug_mode: Meshlet_Grid_Debug_Mode = .SHADED;
-} @function_constants
-
 Model_Scene_Meshlet_Instance :: struct {
     world: Matrix4;
     tint: Vector4;
@@ -402,7 +389,7 @@ model_scene_meshlet_fragment_main :: (
 ) -> Vector4 @SV_Target0 {
     alpha := model_scene_meshlet_alpha(params, uv, tint.w);
     if params.alpha_mode == SCENE_ALPHA_MODE_MASK && alpha < params.alpha_cutoff discard();
-    if debug_mode != .SHADED {
+    if debug_mode != .SHADED && debug_mode != .ALBEDO {
         return .{color.x, color.y, color.z, 1.0};
     }
 
@@ -412,6 +399,7 @@ model_scene_meshlet_fragment_main :: (
         tex.y * params.base_color_factor.y * tint.y,
         tex.z * params.base_color_factor.z * tint.z,
     };
+    if debug_mode == .ALBEDO return .{base_rgb.x, base_rgb.y, base_rgb.z, alpha};
     N := normalize(normal);
     ao := 1.0;
     roughness := 0.82;

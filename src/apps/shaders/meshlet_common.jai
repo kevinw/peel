@@ -6,6 +6,7 @@ TASK_EMIT_MESHLET_COUNT : u32 : 64;
 
 Meshlet_Grid_Debug_Mode :: enum u32 {
     SHADED;
+    ALBEDO;
     LODS;
     CHUNKS;
     MESHLETS;
