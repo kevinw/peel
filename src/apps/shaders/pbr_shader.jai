@@ -1,4 +1,5 @@
 #import "Jai-Shader-Transpiler";
+#import "Jai-Shader-Transpiler/modules/ShaderLib";
 #import "Jai-Shader-Transpiler/modules/ShaderFuncs";
 #import "Math";
 

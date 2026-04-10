@@ -33,7 +33,7 @@ PBR_Geometry :: enum s64 {
 }
 
 shader: Shader(pbr_vertex_main, pbr_fragment_main, {
-    cull = .CW,
+    cull = .CCW,
     depth_format = .D32_SFLOAT,
     color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
 }); @init
@@ -116,7 +116,7 @@ on_dll_init :: () {
         resolution_y = 720.0,
         time = 0.0,
         displacement_strength = 0.18,
-        uv_scale = 5.0,
+        uv_scale = 0.35,
     };
 
     draw_data = .{
@@ -146,7 +146,7 @@ tick :: () {
     if app_ui_enabled {
         if ImGui.Begin("PBR") {
             ImGui.Text("RMB look, WASDQE move");
-            ImGui.SliderFloat("Texture Scale", *pbr_params.cpu.uv_scale, 0.25, 12.0);
+            ImGui.SliderFloat("Texture Scale", *pbr_params.cpu.uv_scale, 0.05, 3.0);
             ImGui.Separator();
             ImGui.Text("Geometry");
             if ImGui.RadioButton("Sphere", pbr_geometry == .SPHERE) pbr_geometry = .SPHERE; ImGui.SameLine();
