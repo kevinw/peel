@@ -47,6 +47,17 @@ Powerup_Params :: struct {
     world_margin: float = 5.0;
 }
 
+Pillar_Params :: struct {
+    enabled: bool = true;
+    count: s32 = 5;
+    interact_radius: float = 1.8;
+    fill_duration: float = 7.0;
+    world_margin: float = 8.0;
+    base_radius: float = 0.52;
+    min_height: float = 2.3;
+    max_height: float = 3.8;
+}
+
 Spider_Leg_Runtime :: struct {
     planted_pos: Vector3;
     target_pos: Vector3;
@@ -91,6 +102,15 @@ Powerup_Runtime :: struct {
     position: Vector3;
 }
 
+Pillar_Runtime :: struct {
+    active: bool;
+    _pad0: [3]u8;
+    radius: float;
+    height: float;
+    progress_t: float;
+    position: Vector3;
+}
+
 Enemy_Render_Mesh :: struct {
     node_index: s32;
     base_mesh_index: u32;
@@ -128,6 +148,7 @@ Horde_Runtime :: struct {
     spawn_params: Enemy_Spawn_Params = .{};
     auto_fire_params: Auto_Fire_Params = .{};
     powerup_params: Powerup_Params = .{};
+    pillar_params: Pillar_Params = .{};
     player_health: float = 100.0;
     bonus_bullets: s32;
     spawn_accumulator: float;
@@ -165,6 +186,7 @@ Horde_Runtime :: struct {
     render_instance_count_debug: s32;
     projectile_active_count: s32;
     powerup_active_count: s32;
+    pillar_active_count: s32;
     debug_next_log_time: float;
 
     direct_draw_debug: bool = true;
@@ -172,6 +194,7 @@ Horde_Runtime :: struct {
     enemies: [..]Enemy_Runtime;
     projectiles: [..]Projectile_Runtime;
     powerups: [..]Powerup_Runtime;
+    pillars: [..]Pillar_Runtime;
     render_meshes: [..]Enemy_Render_Mesh;
     draw_groups: [..]Enemy_Draw_Group;
 }
@@ -224,6 +247,7 @@ clear :: (using runtime: *Horde_Runtime) {
     array_reset(*enemies);
     array_reset(*projectiles);
     array_reset(*powerups);
+    array_reset(*pillars);
     array_reset(*render_meshes);
     array_reset(*draw_groups);
     runtime.* = {};
@@ -233,6 +257,7 @@ deinit :: (using runtime: *Horde_Runtime) {
     array_free(enemies);
     array_free(projectiles);
     array_free(powerups);
+    array_free(pillars);
     array_free(render_meshes);
     array_free(draw_groups);
     clear(runtime);
@@ -246,6 +271,7 @@ reset :: (using runtime: *Horde_Runtime, horde_bindings: Horde_Bindings, camera_
     preserved_spawn_params := spawn_params;
     preserved_auto_fire_params := auto_fire_params;
     preserved_powerup_params := powerup_params;
+    preserved_pillar_params := pillar_params;
     preserved_direct_draw_debug := direct_draw_debug;
     preserved_spider_move_height := spider_move_height;
     preserved_spider_leg_thickness := spider_leg_thickness;
@@ -265,6 +291,7 @@ reset :: (using runtime: *Horde_Runtime, horde_bindings: Horde_Bindings, camera_
     spawn_params = preserved_spawn_params;
     auto_fire_params = preserved_auto_fire_params;
     powerup_params = preserved_powerup_params;
+    pillar_params = preserved_pillar_params;
     direct_draw_debug = preserved_direct_draw_debug;
     spider_move_height = preserved_spider_move_height;
     spider_leg_thickness = preserved_spider_leg_thickness;
@@ -277,11 +304,6 @@ reset :: (using runtime: *Horde_Runtime, horde_bindings: Horde_Bindings, camera_
     death_reset_delay = max(0.25, preserved_death_reset_delay);
     death_reset_t = death_reset_delay;
     bindings = horde_bindings;
-    enemies.allocator = allocator;
-    projectiles.allocator = allocator;
-    powerups.allocator = allocator;
-    render_meshes.allocator = allocator;
-    draw_groups.allocator = allocator;
 
     scene_geo := horde_bindings.scene_geo;
     mask_model_index = scene_geo_model_index_by_name(scene_geo, "mask");
@@ -315,6 +337,8 @@ reset :: (using runtime: *Horde_Runtime, horde_bindings: Horde_Bindings, camera_
     for *projectiles it.* = .{};
     array_resize(*powerups, powerup_max_count);
     for *powerups it.* = .{};
+    array_resize(*pillars, max(cast(s64) 0, pillar_params.count));
+    for *pillars it.* = .{};
 
     model := scene_geo.models[mask_model_index];
     for node_index: model.node_start .. model.node_start + model.node_count - 1 {
@@ -394,6 +418,9 @@ reset :: (using runtime: *Horde_Runtime, horde_bindings: Horde_Bindings, camera_
     }
 
     PhysicsSystem_OptimizeBroadPhase(Physics.physics.system);
+
+    init_pillars(runtime);
+}
 }
 
 do_ui :: (using runtime: *Horde_Runtime) {
@@ -406,6 +433,7 @@ do_ui :: (using runtime: *Horde_Runtime) {
     ImGui.Checkbox("Enemy Direct Draw", *direct_draw_debug);
     ImGui.Checkbox("Auto Fire", *auto_fire_params.enabled);
     ImGui.Checkbox("Powerups", *powerup_params.enabled);
+    ImGui.Checkbox("Pillars", *pillar_params.enabled);
     {
         using spawn_params;
         ImGui.Checkbox("Enemy Horde", *spawn_params.enabled);
@@ -420,6 +448,9 @@ do_ui :: (using runtime: *Horde_Runtime) {
     Persist.SliderFloat("Burst Spacing", *auto_fire_params.burst_spacing, 0.02, 0.4, "%.2f");
 
     Persist.SliderFloat("Powerup Spawn Rate", *powerup_params.spawn_rate, 0.0, 1.0, "%.2f/s");
+    Persist.SliderInt("Pillar Count", *pillar_params.count, 0, 16, "%d");
+    Persist.SliderFloat("Pillar Radius", *pillar_params.interact_radius, 0.8, 3.5, "%.2f");
+    Persist.SliderFloat("Pillar Fill Time", *pillar_params.fill_duration, 1.0, 15.0, "%.1fs");
     Separator();
     ImGui.Text("Player Health: %.1f", player_health);
     ImGui.Text("Bonus Bullets: %", bonus_bullets);
@@ -427,6 +458,7 @@ do_ui :: (using runtime: *Horde_Runtime) {
     ImGui.Text("Spiders: %", spider_active_count);
     ImGui.Text("Projectiles: %", projectile_active_count);
     ImGui.Text("Powerups: %", powerup_active_count);
+    ImGui.Text("Pillars: %", pillar_active_count);
     ImGui.Text("Survival Time: %.1fs", game_time);
 }
 
@@ -442,6 +474,7 @@ update :: (runtime: *Horde_Runtime, dt: float) {
     runtime.game_time += dt;
     update_enemies(runtime, dt);
     update_powerups(runtime, dt);
+    update_pillars(runtime, dt);
     update_projectiles_pre_physics(runtime, dt);
 }
 
@@ -583,6 +616,8 @@ draw_debug :: (using runtime: *Horde_Runtime, gizmo_ctx: *Gizmo.Gizmo_Context) {
         color.w = 0.95;
         Gizmo.draw_sphere(gizmo_ctx, it.position, it.radius, color = color, thickness = 2.0, segments = 16);
     }
+
+    draw_pillar_debug(runtime, gizmo_ctx);
 
     spider_color := Vector4.{0.02, 0.02, 0.025, 0.96};
     spider_leg_color := Vector4.{0.01, 0.01, 0.01, 0.9};
@@ -961,6 +996,32 @@ update_enemies :: (using runtime: *Horde_Runtime, dt: float) {
 }
 
 #scope_file
+update_pillars :: (using runtime: *Horde_Runtime, dt: float) {
+    pillar_active_count = 0;
+    if pillars.count == 0 return;
+
+    fill_duration := max(0.1, pillar_params.fill_duration);
+    player_pos := character_controller_position(bindings.player_controller);
+    player_charge_pos := player_pos + .{0.0, 0.95, 0.0};
+    for *pillars {
+        if !it.active continue;
+        charge_center := it.position + .{0.0, it.height * 0.5, 0.0};
+        interact_distance := pillar_params.interact_radius + it.radius;
+        if length(player_charge_pos - charge_center) <= interact_distance {
+            it.progress_t = min(1.0, it.progress_t + dt / fill_duration);
+            if it.progress_t >= 1.0 {
+                it.active = false;
+                bonus_bullets += 1;
+                continue;
+            }
+        } else {
+            it.progress_t = max(0.0, it.progress_t - dt / (fill_duration * 1.5));
+        }
+        pillar_active_count += 1;
+    }
+}
+
+#scope_file
 update_powerups :: (using runtime: *Horde_Runtime, dt: float) {
     powerup_active_count = 0;
     player_pos := character_controller_position(bindings.player_controller);
@@ -1002,6 +1063,113 @@ update_powerups :: (using runtime: *Horde_Runtime, dt: float) {
         };
         powerups_to_spawn -= 1;
         powerup_active_count += 1;
+    }
+}
+
+#scope_file
+init_pillars :: (runtime: *Horde_Runtime) {
+    if runtime.pillars.count == 0 return;
+    for *runtime.pillars it.* = .{};
+    runtime.pillar_active_count = 0;
+    if !runtime.pillar_params.enabled return;
+
+    ground_half_x := max(6.0, runtime.bindings.ground.size_x * 0.5 - runtime.pillar_params.world_margin);
+    ground_half_z := max(6.0, runtime.bindings.ground.size_z * 0.5 - runtime.pillar_params.world_margin);
+    player_pos := character_controller_position(runtime.bindings.player_controller);
+    desired_count := min(runtime.pillars.count, max(cast(s64) 0, runtime.pillar_params.count));
+    placed_count: s32;
+    for pillar_index: 0..desired_count-1 {
+        placed := false;
+        for attempt: 0..31 {
+            seed := cast(u32) pillar_index * cast(u32) 0x9e3779b9 + cast(u32) attempt * cast(u32) 0x85ebca6b + 17;
+            spawn_x := lerp(-ground_half_x, ground_half_x, horde_hash01(seed ^ 0x243f6a88));
+            spawn_z := lerp(-ground_half_z, ground_half_z, horde_hash01(seed ^ 0xb7e15162));
+            position := Vector3.{spawn_x, 0.0, spawn_z};
+            to_player := position - player_pos;
+            to_player.y = 0.0;
+            if length(to_player) < 7.5 continue;
+
+            too_close := false;
+            for runtime.pillars {
+                if !it.active continue;
+                delta := position - it.position;
+                delta.y = 0.0;
+                if length(delta) < 6.0 {
+                    too_close = true;
+                    break;
+                }
+            }
+            if too_close continue;
+
+            radius := runtime.pillar_params.base_radius * lerp(0.85, 1.2, horde_hash01(seed ^ 0x52dce729));
+            height := lerp(runtime.pillar_params.min_height, runtime.pillar_params.max_height, horde_hash01(seed ^ 0x7f4a7c15));
+            base_y := horde_ground_height_at(runtime.bindings.ground.*, spawn_x, spawn_z);
+            runtime.pillars[pillar_index] = .{
+                active = true,
+                radius = radius,
+                height = height,
+                progress_t = 0.0,
+                position = .{spawn_x, base_y + height * 0.5, spawn_z},
+            };
+            placed_count += 1;
+            placed = true;
+            break;
+        }
+        if !placed {
+            runtime.pillars[pillar_index] = .{};
+        }
+    }
+    runtime.pillar_active_count = placed_count;
+}
+
+#scope_file
+draw_pillar_debug :: (runtime: *Horde_Runtime, gizmo_ctx: *Gizmo.Gizmo_Context) {
+    if runtime.pillar_active_count <= 0 return;
+    ring_segments :: 14;
+    for runtime.pillars {
+        if !it.active continue;
+        base_center := it.position - .{0.0, it.height * 0.5, 0.0};
+        top_center := it.position + .{0.0, it.height * 0.5, 0.0};
+        pillar_color := Vector4.{0.55, 0.76, 0.96, 0.88};
+        pillar_color *= lerp(0.75, 1.2, it.progress_t);
+        pillar_color.w = 0.88;
+        for seg: 0..ring_segments-1 {
+            seg_t0 := cast(float) seg / cast(float) ring_segments;
+            seg_t1 := cast(float) (seg + 1) / cast(float) ring_segments;
+            angle0 := seg_t0 * PI * 2.0;
+            angle1 := seg_t1 * PI * 2.0;
+            ring0 := Vector3.{cos(angle0) * it.radius, 0.0, sin(angle0) * it.radius};
+            ring1 := Vector3.{cos(angle1) * it.radius, 0.0, sin(angle1) * it.radius};
+            Gizmo.draw_line(gizmo_ctx, base_center + ring0, base_center + ring1, color = pillar_color, thickness = 2.0);
+            Gizmo.draw_line(gizmo_ctx, top_center + ring0, top_center + ring1, color = pillar_color, thickness = 2.0);
+            if (seg & 3) == 0 {
+                Gizmo.draw_line(gizmo_ctx, base_center + ring0, top_center + ring0, color = pillar_color, thickness = 2.0);
+            }
+        }
+
+        interact_radius := runtime.pillar_params.interact_radius;
+        if interact_radius > 0.0 {
+            interact_color := Vector4.{0.18, 0.95, 0.72, 0.26};
+            ring_center := base_center + .{0.0, 0.08, 0.0};
+            for seg: 0..ring_segments-1 {
+                seg_t0 := cast(float) seg / cast(float) ring_segments;
+                seg_t1 := cast(float) (seg + 1) / cast(float) ring_segments;
+                angle0 := seg_t0 * PI * 2.0;
+                angle1 := seg_t1 * PI * 2.0;
+                ring0 := Vector3.{cos(angle0) * interact_radius, 0.0, sin(angle0) * interact_radius};
+                ring1 := Vector3.{cos(angle1) * interact_radius, 0.0, sin(angle1) * interact_radius};
+                Gizmo.draw_line(gizmo_ctx, ring_center + ring0, ring_center + ring1, color = interact_color, thickness = 1.0);
+            }
+        }
+
+        if it.progress_t > 0.0 {
+            orb_center := top_center + .{0.0, 0.35, 0.0};
+            orb_radius := lerp(0.16, max(0.24, it.radius * 1.65), it.progress_t);
+            orb_color := Vector4.{0.18, 0.98, 0.86, 0.72};
+            orb_color *= lerp(0.65, 1.35, it.progress_t);
+            orb_color.w = 0.72;
+            Gizmo.draw_sphere(gizmo_ctx, orb_center, orb_radius, color = orb_color, thickness = 2.0, segments = 16);
+        }
     }
 }
 

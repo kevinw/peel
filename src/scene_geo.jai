@@ -187,6 +187,10 @@ Imported_Texture :: struct {
     builtin_white: bool;
 }
 
+Model_Import_Options :: struct {
+    disable_lod_generation: bool;
+}
+
 Imported_Scene :: struct {
     vertices: [..]Scene_Vertex;
     indices: [..]u32;
@@ -1265,7 +1269,9 @@ imported_scene_cache_path :: (model_paths: []string, resolved_model_paths: []str
         source_path := ifx i < model_paths.count then model_paths[i] else "";
         resolved_path := ifx i < resolved_model_paths.count then resolved_model_paths[i] else source_path;
         modtime, size, _ := file_modtime_and_size(resolved_path);
-        append(*builder, tprint("%|=>%|%|%|", source_path, resolved_path, size, modtime));
+        sidecar_text := model_import_sidecar_text(resolved_path);
+        defer if sidecar_text.count != 0 free(sidecar_text);
+        append(*builder, tprint("%|=>%|%|%|sidecar=%|", source_path, resolved_path, size, modtime, sidecar_text));
     }
     key_source := builder_to_string(*builder,, temp);
     hash := fnv1a_hash(key_source.data, key_source.count);
@@ -1958,7 +1964,7 @@ header_magic_matches :: (magic: []u8, expected: string) -> bool {
     return true;
 }
 
-load_peel_blender_scene_into_imported_scene :: (imported: *Imported_Scene, path: string) {
+load_peel_blender_scene_into_imported_scene :: (imported: *Imported_Scene, path: string, model_options: Model_Import_Options = .{}) {
     report("Loading PEEL Blender scene: %", path);
 
     data, ok := File.read_entire_file(path);
@@ -2089,7 +2095,9 @@ load_peel_blender_scene_into_imported_scene :: (imported: *Imported_Scene, path:
     for local_mesh_index: 0..cast(s64) header.mesh_count-1 {
         mesh_index := cast(s32) mesh_base + cast(s32) local_mesh_index;
         optimize_imported_mesh_vertex_fetch(imported, mesh_index, allow_compaction = false);
-        build_static_mesh_lods(imported, mesh_index);
+        if !model_options.disable_lod_generation {
+            build_static_mesh_lods(imported, mesh_index);
+        }
     }
 
     array_add(*imported.models, .{
@@ -2105,8 +2113,9 @@ load_peel_blender_scene_into_imported_scene :: (imported: *Imported_Scene, path:
 }
 
 load_model_into_imported_scene :: (imported: *Imported_Scene, path: string) {
+    model_options := parse_model_import_sidecar(path);
     if String.ends_with_nocase(path, ".peelscene") {
-        load_peel_blender_scene_into_imported_scene(imported, path);
+        load_peel_blender_scene_into_imported_scene(imported, path, model_options);
         return;
     }
 
@@ -2170,7 +2179,9 @@ load_model_into_imported_scene :: (imported: *Imported_Scene, path: string) {
     }
     for base_mesh_index: mesh_start .. mesh_start + scene.mNumMeshes - 1 {
         optimize_imported_mesh_vertex_fetch(imported, cast(s32) base_mesh_index, allow_compaction = true);
-        build_static_mesh_lods(imported, cast(s32) base_mesh_index);
+        if !model_options.disable_lod_generation {
+            build_static_mesh_lods(imported, cast(s32) base_mesh_index);
+        }
     }
 
     for anim, anim_index: ai.animations(scene) {
@@ -3261,6 +3272,52 @@ parse_bool_text :: (value: string, fallback: bool) -> bool {
     case "off"; return false;
     }
     return fallback;
+}
+
+model_import_sidecar_path :: (source_path: string) -> string {
+    return tprint("%.peelmodel", source_path);
+}
+
+model_import_sidecar_text :: (source_path: string) -> string {
+    sidecar_path := model_import_sidecar_path(source_path);
+    if !file_exists(sidecar_path) return "";
+
+    text, ok := File.read_entire_file(sidecar_path, zero_terminated = false, log_errors = true);
+    if !ok return "";
+    return text;
+}
+
+parse_model_import_sidecar :: (source_path: string) -> Model_Import_Options {
+    text := model_import_sidecar_text(source_path);
+    defer if text.count != 0 free(text);
+
+    options: Model_Import_Options;
+    if text.count == 0 return options;
+
+    lines := String.split(text, #char "\n");
+    defer array_free(lines);
+    for line_raw: lines {
+        line := String.trim(line_raw);
+        if line.count == 0 continue;
+        if line[0] == #char "#" continue;
+
+        eq := String.find_index_from_left(line, #char "=");
+        if eq <= 0 continue;
+        key := String.to_lower_copy(String.trim(String.slice(line, 0, eq)));
+        value := String.to_lower_copy(String.trim(String.slice(line, eq + 1, line.count - (eq + 1))));
+
+        if key == {
+        case "disable_lod_generation"; #through;
+        case "disable_lods"; #through;
+        case "lods";
+            if key == "lods" {
+                options.disable_lod_generation = !parse_bool_text(value, !options.disable_lod_generation);
+            } else {
+                options.disable_lod_generation = parse_bool_text(value, options.disable_lod_generation);
+            }
+        }
+    }
+    return options;
 }
 
 parse_texture_cache_sidecar :: (source_path: string, defaults: Texture_Cache_Options) -> Texture_Cache_Options, string {

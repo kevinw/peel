@@ -29,7 +29,8 @@ reload_pointer_check_after_copy :: (src: *App, dst: *App) {
 
     for g: dst_globals {
         if g.data == null || g.ti == null continue;
-        root_path := tprint("global[module_hash=% name_hash=%]", g.module_name_hash, g.name_hash);
+        root_path := tprint("global[module='%' module_hash=% name='%' name_hash=%]",
+            g.module_name, g.module_name_hash, g.name, g.name_hash);
         check_scan_value(*state, g.data, g.ti, root_path, 0);
     }
 
