@@ -2954,7 +2954,7 @@ orbit_update_camera :: (mouse_pos: Vector2) {
     camera.pitch = clamp(camera.pitch, camera.pitch_min, camera.pitch_max);
 
     cam_forward, cam_right, cam_up: Vector3;
-    editor_camera_basis(*camera, *cam_forward, *cam_right, *cam_up);
+    editor_camera_basis(camera, *cam_forward, *cam_right, *cam_up);
     camera.position = orbit_target - cam_forward * orbit_distance;
 }
 
