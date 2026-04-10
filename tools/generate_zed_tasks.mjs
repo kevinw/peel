@@ -4,6 +4,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(__dirname, "..");
+const absoluteDistDir = path.join(repoRoot, "dist");
+const peelDir = "~/src/peel";
+
 const staticTasks = [
   {
     label: "build ir_pipe",
@@ -31,18 +36,9 @@ const staticTasks = [
   },
 ];
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, "..");
 const appsDir = path.join(repoRoot, "src", "apps");
 const tasksPath = path.join(repoRoot, ".zed", "tasks.json");
-
-function makeAppTask(appName) {
-  return {
-    label: appName,
-    command: `jai ~/src/peel/build.jai - src/apps/${appName}.jai -run -dll`,
-  };
-}
+const debugEntriesPath = path.join(repoRoot, ".zed", "debug.json");
 
 async function main() {
   const dirEntries = await fs.readdir(appsDir, { withFileTypes: true });
@@ -51,12 +47,35 @@ async function main() {
     .map((d) => d.name.slice(0, -4))
     .sort((a, b) => a.localeCompare(b));
 
-  const appTasks = appNames.map(makeAppTask);
-  const tasks = [...appTasks, ...staticTasks];
-  const out = `${JSON.stringify(tasks, null, 2)}\n`;
+  {
+    const appTasks = appNames.map((appName) => {
+      return {
+        label: appName,
+        command: `jai ${peelDir}/build.jai - src/apps/${appName}.jai -run -dll`,
+      };
+    });
+    const tasks = [...appTasks, ...staticTasks];
+    await fs.writeFile(tasksPath, JSON.stringify(tasks, null, 2), "utf8");
+    console.log(`Wrote ${tasks.length} tasks to ${tasksPath}`);
+  }
 
-  await fs.writeFile(tasksPath, out, "utf8");
-  console.log(`Wrote ${tasks.length} tasks to ${tasksPath}`);
+  {
+    const debugEntries = appNames.map((appName) => {
+      return {
+        label: `debug ${appName}`,
+        build: {
+          command: `jai ${peelDir}/build.jai - src/apps/${appName}.jai`,
+        },
+        request: "launch",
+        mode: "debug",
+        program: `./dist/${appName}`,
+        cwd: `${absoluteDistDir}`,
+        adapter: "CodeLLDB",
+      };
+    });
+    await fs.writeFile(debugEntriesPath, JSON.stringify(debugEntries, null, 2), "utf8");
+    console.log(`Wrote ${debugEntries.length} debug entries to ${debugEntriesPath}`);
+  }
 }
 
 main().catch((err) => {
