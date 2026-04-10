@@ -96,10 +96,6 @@
     "command": "jai ~/src/peel/build.jai - src/apps/physics_test.jai -run -dll"
   },
   {
-    "label": "procedural_geometry",
-    "command": "jai ~/src/peel/build.jai - src/apps/procedural_geometry.jai -run -dll"
-  },
-  {
     "label": "raymarch",
     "command": "jai ~/src/peel/build.jai - src/apps/raymarch.jai -run -dll"
   },

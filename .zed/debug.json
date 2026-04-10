@@ -1,13 +1,420 @@
 [
   {
+    "label": "debug blender_scene",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/blender_scene.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/blender_scene",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug boids",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/boids.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/boids",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug brickmap",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/brickmap.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/brickmap",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug brickmap_graph",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/brickmap_graph.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/brickmap_graph",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug caustics_pool",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/caustics_pool.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/caustics_pool",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug cel_shading",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/cel_shading.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/cel_shading",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug color_space_test",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/color_space_test.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/color_space_test",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug crowd_nav",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/crowd_nav.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/crowd_nav",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug decal_painter",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/decal_painter.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/decal_painter",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug dynamic_graphics_pipeline_test",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/dynamic_graphics_pipeline_test.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/dynamic_graphics_pipeline_test",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug empty_window",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/empty_window.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/empty_window",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug fluid2d",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/fluid2d.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/fluid2d",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug flux",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/flux.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/flux",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug function_constants_test",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/function_constants_test.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/function_constants_test",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug gizmos_test",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/gizmos_test.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/gizmos_test",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug hex_tactics",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/hex_tactics.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/hex_tactics",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug inspiration_test",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/inspiration_test.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/inspiration_test",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug material_lab",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/material_lab.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/material_lab",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug mesh_shader_triangle",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/mesh_shader_triangle.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/mesh_shader_triangle",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug meshlet_lizard_grid",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/meshlet_lizard_grid.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/meshlet_lizard_grid",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug model_scene",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/model_scene.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/model_scene",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug particles",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/particles.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/particles",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug pbr",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/pbr.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/pbr",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug physics_test",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/physics_test.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/physics_test",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug raymarch",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/raymarch.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/raymarch",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug raytracer",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/raytracer.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/raytracer",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug reaction_diffusion",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/reaction_diffusion.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/reaction_diffusion",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug ripple_heightfield",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/ripple_heightfield.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/ripple_heightfield",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug sand_toy",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/sand_toy.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/sand_toy",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug shader_to_human",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/shader_to_human.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/shader_to_human",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug signal_field",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/signal_field.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/signal_field",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug terrain_test",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/terrain_test.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/terrain_test",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug tetris",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/tetris.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/tetris",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug tetris_core",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/tetris_core.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/tetris_core",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug tetris_core_tests",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/tetris_core_tests.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/tetris_core_tests",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "debug texture3d",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/texture3d.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/texture3d",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  },
+  {
     "label": "debug textured_triangle",
     "build": {
-      "command": "jai ~/src/peel/build.jai - src/apps/textured_triangle.jai",
+      "command": "jai ~/src/peel/build.jai - src/apps/textured_triangle.jai"
     },
     "request": "launch",
     "mode": "debug",
     "program": "./dist/textured_triangle",
     "cwd": "/Users/kev/src/peel/dist",
-    "adapter": "CodeLLDB",
+    "adapter": "CodeLLDB"
   },
+  {
+    "label": "debug ui_gallery",
+    "build": {
+      "command": "jai ~/src/peel/build.jai - src/apps/ui_gallery.jai"
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "./dist/ui_gallery",
+    "cwd": "/Users/kev/src/peel/dist",
+    "adapter": "CodeLLDB"
+  }
 ]
