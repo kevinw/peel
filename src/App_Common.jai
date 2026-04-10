@@ -2,8 +2,6 @@ num_app_reloads: int = 0;
 SAVE_AND_RESTORE_WINDOW_POS :: true;
 CHECK_CONTEXT :: false;
 
-////
-
 //
 // #program_export section
 //
@@ -12,13 +10,13 @@ CHECK_CONTEXT :: false;
 
 #program_export
 on_host_message :: (message: Host_Message) -> App_Return_Message {
-    push_remapped_context_without_stack_trace();
+    push_remapped_context();
     return handle_host_message(message);
 }
 
 #program_export
 get_globals :: () -> []Global_Entry {
-    push_remapped_context_without_stack_trace();
+    push_remapped_context();
 
     #if GLOBALS_RELOAD_PLUGIN_INCLUDED {
         G: [..]Global_Entry;
@@ -36,9 +34,9 @@ get_globals :: () -> []Global_Entry {
 
 #if SINGLE_BINARY {
     // no need to remap context when we're just a single executable
-    push_remapped_context_without_stack_trace :: () #expand { }
+    push_remapped_context :: () #expand { }
 } else {
-    push_remapped_context_without_stack_trace :: () #expand {
+    push_remapped_context :: () #expand {
         dll_context := remap_context();
 
         #if CHECK_CONTEXT {
@@ -46,11 +44,6 @@ get_globals :: () -> []Global_Entry {
             check_context(*host_context, host_context.context_info, "host context");
             check_context(dll_context,  dll_context.context_info,  "dll_context");
         }
-
-        // With Memory_Debugger enabled, I was seeing crashes when crossing the DLL boundary with a non-c_call function.
-        // TODO: investigate/report a bug maybe?
-        // The fix here is to cut off the stack trace at the DLL boundary. For now this is fine, since the host is a single main function.
-        #if MEMORY_DEBUGGER dll_context.stack_trace = null;
 
         `push_context,defer_pop dll_context;
     }
