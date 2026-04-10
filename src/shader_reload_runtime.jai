@@ -684,7 +684,13 @@ shader_hot_reload_get_or_create_graphics_pipeline_variant_no_constants :: (
     }
 
     reload := shader_hot_reload_current_ctx();
-    new_pipeline := shader_hot_reload_create_graphics_pipeline_for_entry(reload, shader_meta.entry_id, raster_desc);
+    new_pipeline: Gpu_Pipeline;
+    if reload != null && reload.enabled && shader_meta.entry_id.count != 0 {
+        entry := SRM.shader_reload_manifest_find_entry(*reload.watcher.manifest, shader_meta.entry_id);
+        if entry != null {
+            new_pipeline = shader_hot_reload_create_graphics_pipeline_for_entry(reload, shader_meta.entry_id, raster_desc);
+        }
+    }
     if new_pipeline == 0 && source.count > 0 {
         new_pipeline = gpu_create_graphics_pipeline(source, raster_desc);
     }

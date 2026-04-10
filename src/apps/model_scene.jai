@@ -1,3 +1,5 @@
+#load "../linear_present.jai";
+
 SCENE_ROOT_PATH :: "./scenes/model_scene.scene";
 
 Draw_Batch :: struct {
@@ -50,76 +52,77 @@ Ground_Draw_Params_CPU     :: CPU_Struct(Ground_Draw_Params);
 Model_Scene_Sky_Params_CPU :: CPU_Struct(Model_Scene_Sky_Params);
 Grass_Shadow_Params_CPU    :: CPU_Struct(Grass_Shadow_Params);
 Model_Scene_Meshlet_Params_CPU :: CPU_Struct(Model_Scene_Meshlet_Params);
-graphics_shader: Shader(model_scene_vertex_main, model_scene_fragment_main, .{
-    cull = .CW,
-    depth_format = .D32_SFLOAT,
-    color_targets = .[
-        .{format = .R16G16B16A16_SFLOAT},
-    ],
-});
-pick_shader: Shader(model_scene_vertex_main, model_scene_pick_fragment_main, .{
-    cull = .CW,
-    depth_format = .D32_SFLOAT,
-    color_targets = .[
-        .{format = .B8G8R8A8_UNORM},
-    ],
-});
-ground_shader: Shader(ground_vertex_main, ground_fragment_main, .{
-    cull = .CW,
-    depth_format = .D32_SFLOAT,
-    color_targets = .[
-        .{format = .R16G16B16A16_SFLOAT},
-    ],
-});
-ground_shadow_shader: Shader(ground_shadow_vertex_main, ground_shadow_fragment_main, .{
-    cull = .NONE,
-    depth_format = .D32_SFLOAT,
-    color_targets = .[
-        .{format = .R32_SFLOAT},
-    ],
-});
-shadow_shader: Shader(model_scene_shadow_vertex_main, model_scene_shadow_fragment_main, .{
-    cull = .NONE,
-    depth_format = .D32_SFLOAT,
-    color_targets = .[
-        .{format = .R32_SFLOAT},
-    ],
-});
-mesh_shader: Mesh_Shader(model_scene_mesh_main, model_scene_meshlet_fragment_main, .{
-    raster_desc = .{
+using shaders: struct @init_group {
+    graphics_shader: Shader(model_scene_vertex_main, model_scene_fragment_main, .{
         cull = .CW,
-        derive_attachment_formats_from_render_pass = true,
-    },
-    task_threads = .[1, 1, 1],
-    mesh_threads = .[1, 1, 1],
-    max_total_threadgroups_per_mesh_grid = 1024,
-}, model_scene_task_main);
-
-grass_shader: Shader(model_scene_grass_vertex_main, model_scene_grass_fragment_main, .{
-    cull = .CCW,
-    depth_format = .D32_SFLOAT,
-    color_targets = .[ {format = .R16G16B16A16_SFLOAT}, ],
-});
-grass_shadow_shader: Shader(model_scene_grass_shadow_vertex_main, model_scene_grass_shadow_fragment_main, .{
-    cull = .CCW,
-    depth_format = .D32_SFLOAT,
-    color_targets = .[ {format = .R32_SFLOAT}, ],
-});
-debug_shadow_shader: Shader(model_scene_debug_shadow_vertex_main, model_scene_debug_shadow_fragment_main, .{
-    cull = .CW,
-    depth_format = .D32_SFLOAT,
-    color_targets = .[ {format = .R16G16B16A16_SFLOAT}, ],
-});
-debug_pick_shader: Shader(model_scene_debug_shadow_vertex_main, model_scene_debug_pick_fragment_main, .{
-    cull = .CW,
-    depth_format = .D32_SFLOAT,
-    color_targets = .[ {format = .R16G16B16A16_SFLOAT}, ],
-});
-sky_shader: Shader(model_scene_sky_vertex_main, model_scene_sky_fragment_main, .{
-    cull = .NONE,
-    depth_format = .D32_SFLOAT,
-    color_targets = .[ {format = .R16G16B16A16_SFLOAT}, ],
-});
+        depth_format = .D32_SFLOAT,
+        color_targets = .[
+            .{format = .R16G16B16A16_SFLOAT},
+        ],
+    });
+    pick_shader: Shader(model_scene_vertex_main, model_scene_pick_fragment_main, .{
+        cull = .CW,
+        depth_format = .D32_SFLOAT,
+        color_targets = .[
+            .{format = .B8G8R8A8_UNORM},
+        ],
+    });
+    ground_shader: Shader(ground_vertex_main, ground_fragment_main, .{
+        cull = .CW,
+        depth_format = .D32_SFLOAT,
+        color_targets = .[
+            .{format = .R16G16B16A16_SFLOAT},
+        ],
+    });
+    ground_shadow_shader: Shader(ground_shadow_vertex_main, ground_shadow_fragment_main, .{
+        cull = .NONE,
+        depth_format = .D32_SFLOAT,
+        color_targets = .[
+            .{format = .R32_SFLOAT},
+        ],
+    });
+    shadow_shader: Shader(model_scene_shadow_vertex_main, model_scene_shadow_fragment_main, .{
+        cull = .NONE,
+        depth_format = .D32_SFLOAT,
+        color_targets = .[
+            .{format = .R32_SFLOAT},
+        ],
+    });
+    mesh_shader: Mesh_Shader(model_scene_mesh_main, model_scene_meshlet_fragment_main, .{
+        raster_desc = .{
+            cull = .CW,
+            derive_attachment_formats_from_render_pass = true,
+        },
+        task_threads = .[1, 1, 1],
+        mesh_threads = .[1, 1, 1],
+        max_total_threadgroups_per_mesh_grid = 1024,
+    }, model_scene_task_main);
+    grass_shader: Shader(model_scene_grass_vertex_main, model_scene_grass_fragment_main, .{
+        cull = .CCW,
+        depth_format = .D32_SFLOAT,
+        color_targets = .[ {format = .R16G16B16A16_SFLOAT}, ],
+    });
+    grass_shadow_shader: Shader(model_scene_grass_shadow_vertex_main, model_scene_grass_shadow_fragment_main, .{
+        cull = .CCW,
+        depth_format = .D32_SFLOAT,
+        color_targets = .[ {format = .R32_SFLOAT}, ],
+    });
+    debug_shadow_shader: Shader(model_scene_debug_shadow_vertex_main, model_scene_debug_shadow_fragment_main, .{
+        cull = .CW,
+        depth_format = .D32_SFLOAT,
+        color_targets = .[ {format = .R16G16B16A16_SFLOAT}, ],
+    });
+    debug_pick_shader: Shader(model_scene_debug_shadow_vertex_main, model_scene_debug_pick_fragment_main, .{
+        cull = .CW,
+        depth_format = .D32_SFLOAT,
+        color_targets = .[ {format = .R16G16B16A16_SFLOAT}, ],
+    });
+    sky_shader: Shader(model_scene_sky_vertex_main, model_scene_sky_fragment_main, .{
+        cull = .NONE,
+        depth_format = .D32_SFLOAT,
+        color_targets = .[ {format = .R16G16B16A16_SFLOAT}, ],
+    });
+};
 gpu_arena: Gpu_Arena;
 scene_geo: Scene_Geo;
 shadow_map: Shadow_Map;
@@ -295,17 +298,6 @@ on_dll_init :: () {
     Physics.init();
     Physics.debug_draw_enabled = false;
 
-    assert(SHR.init(*graphics_shader, graphics_shader_constants), "Failed to create model_scene graphics pipeline.");
-    assert(SHR.init(*pick_shader), "Failed to create model_scene pick pipeline.");
-    assert(SHR.init(*ground_shader), "Failed to create model_scene ground pipeline.");
-    assert(SHR.init(*ground_shadow_shader), "Failed to create model_scene ground shadow pipeline.");
-    assert(SHR.init(*shadow_shader), "Failed to create model_scene shadow pipeline.");
-    assert(SHR.init(*mesh_shader), "Failed to create model_scene mesh pipeline.");
-    assert(SHR.init(*grass_shader), "Failed to create model_scene grass pipeline.");
-    assert(SHR.init(*grass_shadow_shader), "Failed to create model_scene grass shadow pipeline.");
-    assert(SHR.init(*debug_shadow_shader), "Failed to create model_scene debug shadow pipeline.");
-    assert(SHR.init(*debug_pick_shader), "Failed to create model_scene debug pick pipeline.");
-    assert(SHR.init(*sky_shader), "Failed to create model_scene sky pipeline.");
     assert(linear_present_init(*scene_present, "model scene present"), "Failed to initialize model_scene present state.");
     shadow_map_init(*shadow_map);
     sky_draw_params = gpu_make_buffer_ring(Model_Scene_Sky_Params_CPU, label = "model scene sky params");
@@ -352,17 +344,6 @@ on_quit :: () {
     gpu_delete(*sky_draw_params);
     linear_present_deinit(*scene_present);
     linear_present_shutdown_shader();
-    gpu_delete(*sky_shader.pipeline);
-    gpu_delete(*debug_pick_shader.pipeline);
-    gpu_delete(*debug_shadow_shader.pipeline);
-    gpu_delete(*grass_shadow_shader.pipeline);
-    gpu_delete(*grass_shader.pipeline);
-    gpu_delete(*mesh_shader.pipeline);
-    gpu_delete(*pick_shader.pipeline);
-    gpu_delete(*ground_shadow_shader.pipeline);
-    gpu_delete(*shadow_shader.pipeline);
-    gpu_delete(*ground_shader.pipeline);
-    gpu_delete(*graphics_shader.pipeline);
     shadow_map_deinit(*shadow_map);
     array_free(running_lizard_instances);
     array_free(running_lizard_attachment_instances);
@@ -2588,7 +2569,6 @@ mesh_max_meshlet_count :: (mesh_index: u32) -> u32 {
 
 #load "../character_controller.jai";
 #load "../SGPU_App_Common.jai";
-#load "../linear_present.jai";
 #load "../editor_camera.jai";
 #load "../ui/manip.jai";
 #load "../ui/toggle_widget.jai";
