@@ -29,12 +29,12 @@ on_dll_init :: () {
     gpu_commit_residency();
 } @on_dll_init
 
-unload :: () {
+quit :: () {
     gpu_free_arena(gpu_arena);
     gpu_delete(*noise_texture_view);
     gpu_delete(*noise_texture);
     gpu_delete(*noise_sampler);
-} @on_unload
+} @on_quit
 
 tick :: () {
     _, swapchain_image := app_swapchain_acquire();

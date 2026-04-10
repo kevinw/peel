@@ -1,6 +1,6 @@
-READBACK_ENABLED :: !RELEASE;
-SGPU_FRAMES_IN_FLIGHT :: 3;
+READBACK_ENABLED    :: !RELEASE;
 LIVE_RELOAD_ENABLED :: !RELEASE;
+SGPU_FRAMES_IN_FLIGHT :: 3; // TODO: import this from sgpu
 
 ImGui :: #import "ImGui";
 
@@ -355,11 +355,15 @@ create_window_and_init_sgpu :: () {
     }
 }
 
+dummy_on_quit :: () {} @on_quit
+
 host_quit :: (quit_ctx: Quit_Ctx) {
     #if !RELEASE { // let OS do cleanup for us in release mode.
 
         main_queue := gpu_get_queue(.MAIN, 0); // TODO: we probably want to wait for other queues too, once we're using them.
         gpu_queue_wait_idle(main_queue);
+
+        call_event_functions(.quit);
 
         #if OS == .MACOS {
             init_all_objective_c_selector_structs();
@@ -618,14 +622,19 @@ Window_Type :: WT.Window_Type;
         return cast(*CAMetalLayer)content_view.layer(content_view);
     }
 
-    #if LIVE_RELOAD_ENABLED {
-    #scope_export
-    reload_stdlib :: () {
-    } @on_reload
+}
 
-    dll_unload :: () {
-    } @on_unload
-    }
+#if LIVE_RELOAD_ENABLED {
+
+#scope_export
+
+reload_stdlib :: () {
+    init_all_objective_c_selector_structs();
+    // gpu_reload_after_live_reload();
+} @on_reload
+
+dll_unload :: () {} @on_unload
+
 }
 
 perf_capture :: (cpu_frame_ms: float, gpu_frame_ms: float) {

@@ -182,7 +182,7 @@ on_unload :: () {
     Terrain_Mesh_Compute.deinit(*terrain_mesh_compute_ctx);
     Terrain_Render.deinit(*terrain_render_ctx);
     Terrain_Voxel.deinit(*terrain_voxel_ctx);
-} @on_unload
+} @on_quit
 
 tick :: () {
     result, swapchain_image := app_swapchain_acquire();

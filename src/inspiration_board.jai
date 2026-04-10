@@ -378,7 +378,7 @@ shutdown :: (using board: *Inspiration_Board) {
 
 inspiration_board_on_unload :: () {
     shutdown(*inspiration_board);
-} @on_unload
+} @on_quit
 
 #scope_file
 

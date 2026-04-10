@@ -421,7 +421,6 @@ reset :: (using runtime: *Horde_Runtime, horde_bindings: Horde_Bindings, camera_
 
     init_pillars(runtime);
 }
-}
 
 do_ui :: (using runtime: *Horde_Runtime) {
     #import "ImGui";

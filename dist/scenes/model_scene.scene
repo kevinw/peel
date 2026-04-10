@@ -40,6 +40,8 @@ scene "Model Scene" {
       center_z -12
       render_grid 112 112
       physics_grid 28 28
+      ridge 0.80
+      swell 0.42
       base_color "./textures/Ground104_1K-JPG/Ground104_1K-JPG_Color.jpg"
       normal "./textures/Ground104_1K-JPG/Ground104_1K-JPG_NormalGL.jpg"
       roughness "./textures/Ground104_1K-JPG/Ground104_1K-JPG_Roughness.jpg"

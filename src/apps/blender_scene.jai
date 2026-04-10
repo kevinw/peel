@@ -129,7 +129,7 @@ on_dll_init :: () {
     gpu_commit_residency();
 } @on_dll_init
 
-on_unload :: () {
+on_quit :: () {
     if source_path.count != 0 free(source_path);
     free(export_path);
     if mesh_source.count != 0 free(mesh_source);
@@ -148,7 +148,7 @@ on_unload :: () {
     if arena.cpu != null gpu_free_arena(arena);
     array_free(batches);
     scene_geo_deinit(*geo);
-} @on_unload
+} @on_quit
 
 tick :: () {
     poll_for_blender_scene_changes();

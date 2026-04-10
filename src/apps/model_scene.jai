@@ -332,7 +332,7 @@ on_dll_init :: () {
     gpu_commit_residency();
 } @on_dll_init
 
-on_unload :: () {
+on_quit :: () {
     clear_scene_runtime_resources();
     Scene_File.deinit(*scene_doc);
     Scene_File.deinit(*compiled_scene);
@@ -376,7 +376,8 @@ on_unload :: () {
     array_free(scene_batches);
     array_free(scene_batch_uses_dynamic_instances);
     scene_geo_deinit(*scene_geo);
-} @on_unload
+} @on_quit
+
 
 tick :: () {
     result, swapchain_image := app_swapchain_acquire();

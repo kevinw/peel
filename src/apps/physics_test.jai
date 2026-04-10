@@ -26,18 +26,18 @@ on_dll_init :: () {
     render_ok := Gizmo_Render.init(*gizmo_render_ctx, max_lines = 65536*10);
     assert(render_ok, "Failed to initialize Gizmo_Render module.");
     Gizmo_Render.bind_gizmo(*gizmo_render_ctx, *gizmo_ctx);
-    
+
     Physics.init();
     Physics.debug_draw_enabled = true;
 } @on_dll_init
 
-on_unload :: () {
+on_quit :: () {
     Gizmo_Render.deinit(*gizmo_render_ctx);
     Gizmo.deinit(*gizmo_ctx);
-} @on_unload
+} @on_quit
 
 tick :: () {
-    
+
     result, swapchain_image := app_swapchain_acquire();
     assert(result == .SUCCESS);
     if !swapchain_image return;

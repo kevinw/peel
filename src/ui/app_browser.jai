@@ -256,7 +256,7 @@ app_browser_shutdown :: () {
         }
     }
     array_reset(*app_browser_previews);
-} @on_unload
+} @on_quit
 
 File_Utilities :: #import "File_Utilities";
 #import "stb_image";

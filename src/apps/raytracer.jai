@@ -52,11 +52,11 @@ on_dll_init :: () {
     gpu_commit_residency();
 } @on_dll_init
 
-on_unload :: () {
+on_quit :: () {
     array_free(raytracer_objects);
     Gizmo_Render.deinit(*raytracer_gizmo_render_ctx);
     Gizmo.deinit(*raytracer_gizmo_ctx);
-} @on_unload
+} @on_quit
 
 app_ui_open := true;
 
