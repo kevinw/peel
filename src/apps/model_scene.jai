@@ -584,7 +584,12 @@ tick :: () {
         controller_right = .{cos(orbit_yaw), 0.0, sin(orbit_yaw)};
         controller_up = .{0.0, 1.0, 0.0};
     case .Editor;
-        _ = editor_camera_update(*scene_camera, dt, mx, my, mouse_ok,
+        camera_dt := dt;
+        if control_mode == .Editor {
+            camera_dt = editor_dt;
+        }
+
+        _ = editor_camera_update(*scene_camera, camera_dt, mx, my, mouse_ok,
             allow_move = !io.WantCaptureKeyboard,
             allow_look = right_down && !io.WantCaptureMouse,
             allow_zoom = !io.WantCaptureMouse);
