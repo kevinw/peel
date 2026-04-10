@@ -30,8 +30,8 @@ BUILD_IS_FOR_IDE            :: #exists(JAILS_DIAGNOSTICS_BUILD); // Whether the 
 #load "src/app_list.jai";
 
 #if OS == .MACOS {
-    MACOS_MAJOR_VERSION_FOR_RELEASE_BUILD :: 15;
-    MACOS_MAJOR_VERSION_FOR_DEBUG_BUILD :: 36;
+    MACOS_MAJOR_VERSION_FOR_RELEASE_BUILD :: 26;
+    MACOS_MAJOR_VERSION_FOR_DEBUG_BUILD :: 26;
     entitlements_file :: #run String.path_join(OUTPUT_PATH, "debug-entitlements.plist");
 }
 PLATFORM_DIR :: #run get_platform_dir(OS); // win, macos, linux
@@ -236,12 +236,11 @@ common_options :: (workspace: Workspace, result_output_type: type_of(Build_Optio
     }
 
     #if OS == .MACOS {
-        //macos_version_major: u8;
-        //if script_opts.release macos_version_major = MACOS_MAJOR_VERSION_FOR_RELEASE_BUILD;
-        //else                   macos_version_major = MACOS_MAJOR_VERSION_FOR_DEBUG_BUILD;
+        macos_version_major: u8;
+        if script_opts.release macos_version_major = MACOS_MAJOR_VERSION_FOR_RELEASE_BUILD;
+        else                   macos_version_major = MACOS_MAJOR_VERSION_FOR_DEBUG_BUILD;
 
-        //minimum_os_version=.{major=macos_version_major, minor=0};
-        //log("Minimum OS version set to macOS %", macos_version_major);
+        minimum_os_version=.{major=macos_version_major, minor=0};
 
         if result_output_type == .EXECUTABLE {
             // Patch the output binary's rpaths so that it can find the dylibs we link to.
