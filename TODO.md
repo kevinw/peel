@@ -1,4 +1,5 @@
 # TODO
+- pbr.jai needs a depth texture ring (how to detect this at runtime?)
 - blender_exporter: skip export for invisbile objects
 - collect list of external tools like 'ktx' and 'cmgen' and vendor them in tools/mac_arm64/
 - memory leak in model_scene?
