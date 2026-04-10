@@ -141,6 +141,8 @@ mediapipe_body_scale: float = 1.0;
 mediapipe_demo_focus: Vector3 = .{0.0, 2.3, -6.2};
 horde_runtime: Horde_Runtime;
 horde_reset_pending: bool;
+scene_rebuild_pending: bool;
+scene_reload_pending: bool;
 scene_static_instances: Gpu_View(Scene_Instance);
 scene_dynamic_instances: Gpu_Frame_View(Scene_Instance);
 scene_static_meshlet_instances: Gpu_View(Model_Scene_Meshlet_Instance);
@@ -464,10 +466,10 @@ tick :: () {
             Checkbox("Scene Shadows", *scene_shadows_enabled);
             do_ui(*horde_runtime);
             if Checkbox("Mediapipe Body Casts Shadows", *mediapipe_body_casts_shadows) {
-                rebuild_scene_runtime();
+                scene_rebuild_pending = true;
             }
             if Checkbox("Mediapipe Face Casts Shadows", *mediapipe_face_casts_shadows) {
-                rebuild_scene_runtime();
+                scene_rebuild_pending = true;
             }
             Checkbox("Show Shadow Debug", *show_shadow_debug);
             Checkbox("Show Pick Debug", *show_pick_debug);
@@ -491,12 +493,7 @@ tick :: () {
             }
             SameLine();
             if Button("Reload Scene") {
-                Scene_File.deinit(*compiled_scene);
-                compiled_scene = Scene_File.recompile_scene_document(scene_doc);
-                rebuild_scene_runtime();
-                scene_manip_objects_dirty = true;
-                scene_manip_apply_pending = false;
-                scene_dirty = false;
+                scene_reload_pending = true;
             }
             is_editor := control_mode == .Editor;
             if toggle("Toggle Editor (P)", *is_editor) {
@@ -1027,7 +1024,7 @@ tick :: () {
         gpu_set_pipeline(cmd_buff, graphics_pipeline);
         draw_main(*horde_runtime, cmd_buff, graphics_pipeline);
 
-        should_draw_gizmos := physics_gizmos_enabled || control_mode == .Editor || horde_runtime.projectile_active_count > 0 || horde_runtime.spider_active_count > 0 || horde_runtime.powerup_active_count > 0;
+        should_draw_gizmos := physics_gizmos_enabled || control_mode == .Editor || horde_runtime.projectile_active_count > 0 || horde_runtime.spider_active_count > 0 || horde_runtime.powerup_active_count > 0 || horde_runtime.pillar_active_count > 0;
         if should_draw_gizmos {
             Gizmo_Render.gizmo_render_draw(*gizmo_render_ctx, cmd_buff, *gizmo_ctx, viewport, depth_mode = .TEST);
             Gizmo_Render.gizmo_render_draw(*gizmo_overlay_render_ctx, cmd_buff, *gizmo_overlay_ctx, viewport, depth_mode = .NONE);
@@ -1064,6 +1061,21 @@ tick :: () {
 
     submit_and_present_with_ui(cmd_buff);
     scene_pick.render_this_frame = false;
+    if scene_reload_pending {
+        Scene_File.deinit(*compiled_scene);
+        compiled_scene = Scene_File.recompile_scene_document(scene_doc);
+        rebuild_scene_runtime();
+        scene_manip_objects_dirty = true;
+        scene_manip_apply_pending = false;
+        scene_dirty = false;
+        scene_reload_pending = false;
+        scene_rebuild_pending = false;
+    } else if scene_rebuild_pending {
+        rebuild_scene_runtime();
+        scene_manip_objects_dirty = true;
+        scene_manip_apply_pending = false;
+        scene_rebuild_pending = false;
+    }
     if horde_reset_pending {
         reset_player_and_horde_game();
         horde_reset_pending = false;
