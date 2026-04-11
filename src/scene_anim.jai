@@ -2,13 +2,59 @@
 ai :: #import "assimp";
 
 Scene_Anim_State :: struct {
+    // Model this sampled pose belongs to.
     model_index: s32 = -1;
+    // Last clip sampled into this state, or -1 for mixed/bind poses.
     clip_index: s32 = -1;
+    // Per-node local SQT transforms for the model.
     locals: [..]Scene_Node_Transform;
+    // Per-node model-space/world-space transforms rebuilt from locals.
     worlds: [..]Matrix4;
+    // Full morph target weight buffer for the scene.
     morph_weights: [..]float;
 }
 
+Scene_Anim_Clip_Player :: struct {
+    // Clip index this player samples.
+    clip_index: s32 = -1;
+    // Accumulated playback time in seconds.
+    time: float;
+    // Playback speed multiplier applied during advance.
+    rate: float = 1.0;
+    // Blend from bind pose into the sampled clip.
+    bind_blend: float = 1.0;
+}
+
+Scene_Anim_Blend_Node :: struct {
+    // Blend node operation type.
+    kind: enum u32 {
+        CLIP;
+        LERP;
+    };
+    // Source clip player for clip nodes.
+    clip_player_index: s32 = -1;
+    // First input node for lerp nodes.
+    input_a: s32 = -1;
+    // Second input node for lerp nodes.
+    input_b: s32 = -1;
+    // Interpolation factor for lerp nodes.
+    alpha: float;
+}
+
+Scene_Anim_Blend_Tree :: struct {
+    // Model this blend tree evaluates.
+    model_index: s32 = -1;
+    // Stateful clip players owned by the graph.
+    clip_players: [..]Scene_Anim_Clip_Player;
+    // Blend graph nodes in evaluation order.
+    nodes: [..]Scene_Anim_Blend_Node;
+    // Cached sampled state for each node.
+    node_states: [..]Scene_Anim_State;
+    // Final output node index for consumers.
+    output_node_index: s32 = -1;
+}
+
+// Allocate pose buffers for one model's sampled animation state.
 scene_anim_init :: (state: *Scene_Anim_State, geo: *Scene_Geo, model_index: s32, clip_index: s32 = -1) {
     assert(model_index >= 0 && model_index < geo.models.count, "Invalid Scene_Geo model index %", model_index);
     model := geo.models[model_index];
@@ -29,18 +75,21 @@ scene_anim_init :: (state: *Scene_Anim_State, geo: *Scene_Geo, model_index: s32,
     reset_morph_weights_to_bind(state, geo);
 }
 
-scene_anim_deinit :: (state: *Scene_Anim_State) {
+// Free all buffers owned by a sampled animation state.
+deinit :: (state: *Scene_Anim_State) {
     array_free(state.locals);
     array_free(state.worlds);
     array_free(state.morph_weights);
     state.* = .{};
 }
 
+// Sample one clip into a state, optionally blending from bind pose.
 scene_anim_sample :: (state: *Scene_Anim_State, geo: *Scene_Geo, clip_index: s32, seconds: float, blend_from_bind: float = 1.0) {
     assert(state.model_index >= 0 && state.model_index < geo.models.count);
     model := geo.models[state.model_index];
     assert(model.node_count == state.locals.count);
     assert(model.node_count == state.worlds.count);
+    state.clip_index = clip_index;
 
     blend := clamp(blend_from_bind, 0.0, 1.0);
     for local_index: 0..model.node_count-1 {
@@ -107,6 +156,122 @@ scene_anim_sample :: (state: *Scene_Anim_State, geo: *Scene_Geo, clip_index: s32
     }
 }
 
+// Initialize an empty blend tree for a specific model.
+init :: (tree: *Scene_Anim_Blend_Tree, geo: *Scene_Geo, model_index: s32) {
+    deinit(tree);
+    assert(model_index >= 0 && model_index < geo.models.count, "Invalid Scene_Geo model index %", model_index);
+    tree.model_index = model_index;
+    tree.clip_players.allocator = context.allocator;
+    tree.nodes.allocator = context.allocator;
+    tree.node_states.allocator = context.allocator;
+    tree.output_node_index = -1;
+}
+
+// Free all clip players, nodes, and cached states in a blend tree.
+deinit :: (tree: *Scene_Anim_Blend_Tree) {
+    for *tree.node_states deinit(it);
+    array_free(tree.node_states);
+    array_free(tree.nodes);
+    array_free(tree.clip_players);
+    tree.* = .{};
+}
+
+// Add a leaf node that samples a single clip player.
+scene_anim_blend_tree_add_clip_node :: (tree: *Scene_Anim_Blend_Tree, geo: *Scene_Geo, clip_index: s32, rate: float = 1.0, bind_blend: float = 1.0) -> s32, s32 {
+    assert(tree.model_index >= 0, "Scene_Anim_Blend_Tree must be initialized before adding nodes.");
+    clip_player_index := cast(s32) tree.clip_players.count;
+    array_add(*tree.clip_players, .{
+        clip_index = clip_index,
+        rate = rate,
+        bind_blend = bind_blend,
+    });
+
+    node_index := cast(s32) tree.nodes.count;
+    array_add(*tree.nodes, .{
+        kind = .CLIP,
+        clip_player_index = clip_player_index,
+    });
+
+    state := array_add(*tree.node_states);
+    scene_anim_init(state, geo, tree.model_index, clip_index);
+    return clip_player_index, node_index;
+}
+
+// Add a lerp node that blends two earlier node outputs.
+scene_anim_blend_tree_add_lerp_node :: (tree: *Scene_Anim_Blend_Tree, geo: *Scene_Geo, input_a: s32, input_b: s32, alpha: float = 0.0) -> s32 {
+    assert(tree.model_index >= 0, "Scene_Anim_Blend_Tree must be initialized before adding nodes.");
+    assert(input_a >= 0 && input_a < tree.nodes.count, "Invalid blend-tree input_a node index %", input_a);
+    assert(input_b >= 0 && input_b < tree.nodes.count, "Invalid blend-tree input_b node index %", input_b);
+
+    node_index := cast(s32) tree.nodes.count;
+    array_add(*tree.nodes, .{
+        kind = .LERP,
+        input_a = input_a,
+        input_b = input_b,
+        alpha = alpha,
+    });
+
+    state := array_add(*tree.node_states);
+    scene_anim_init(state, geo, tree.model_index, -1);
+    return node_index;
+}
+
+// Mark which node is the graph output consumed by runtime code.
+scene_anim_blend_tree_set_output :: (tree: *Scene_Anim_Blend_Tree, node_index: s32) {
+    assert(node_index >= 0 && node_index < tree.nodes.count, "Invalid blend-tree output node index %", node_index);
+    tree.output_node_index = node_index;
+}
+
+// Return the sampled state for the current output node.
+scene_anim_blend_tree_output_state :: (tree: *Scene_Anim_Blend_Tree) -> *Scene_Anim_State {
+    if tree.output_node_index < 0 || tree.output_node_index >= tree.node_states.count return null;
+    return tree.node_states.data + tree.output_node_index;
+}
+
+// Return a mutable clip player by index.
+scene_anim_blend_tree_player :: (tree: *Scene_Anim_Blend_Tree, clip_player_index: s32) -> *Scene_Anim_Clip_Player {
+    if clip_player_index < 0 || clip_player_index >= tree.clip_players.count return null;
+    return tree.clip_players.data + clip_player_index;
+}
+
+// Return a mutable blend node by index.
+scene_anim_blend_tree_node :: (tree: *Scene_Anim_Blend_Tree, node_index: s32) -> *Scene_Anim_Blend_Node {
+    if node_index < 0 || node_index >= tree.nodes.count return null;
+    return tree.nodes.data + node_index;
+}
+
+// Advance all clip players by dt using their current playback rates.
+scene_anim_blend_tree_advance :: (tree: *Scene_Anim_Blend_Tree, dt: float) {
+    for * tree.clip_players {
+        if it.clip_index < 0 continue;
+        it.time += dt * it.rate;
+    }
+}
+
+// Evaluate the blend tree into its per-node cached states.
+scene_anim_blend_tree_sample :: (tree: *Scene_Anim_Blend_Tree, geo: *Scene_Geo) {
+    assert(tree.model_index >= 0 && tree.model_index < geo.models.count);
+    assert(tree.nodes.count == tree.node_states.count, "Blend tree node/state count mismatch.");
+
+    for node_index: 0..tree.nodes.count-1 {
+        node := tree.nodes[node_index];
+        out_state := tree.node_states.data + node_index;
+        if #complete node.kind == {
+        case .CLIP;
+            assert(node.clip_player_index >= 0 && node.clip_player_index < tree.clip_players.count);
+            player := tree.clip_players[node.clip_player_index];
+            scene_anim_sample(out_state, geo, player.clip_index, player.time, player.bind_blend);
+        case .LERP;
+            assert(node.input_a >= 0 && node.input_a < cast(s32) node_index, "Blend-tree lerp input_a must reference an earlier node.");
+            assert(node.input_b >= 0 && node.input_b < cast(s32) node_index, "Blend-tree lerp input_b must reference an earlier node.");
+            a := tree.node_states.data + node.input_a;
+            b := tree.node_states.data + node.input_b;
+            scene_anim_blend_states(out_state, geo, a, b, node.alpha);
+        }
+    }
+}
+
+// Rebuild world transforms after external local pose edits.
 scene_anim_recompute_worlds :: (state: *Scene_Anim_State, geo: *Scene_Geo) {
     assert(state.model_index >= 0 && state.model_index < geo.models.count);
     model := geo.models[state.model_index];
@@ -125,6 +290,7 @@ scene_anim_recompute_worlds :: (state: *Scene_Anim_State, geo: *Scene_Geo) {
     }
 }
 
+// Write skinned bone matrices for one mesh from a sampled pose.
 scene_anim_write_skin_matrices :: (dst: []Vector4, geo: *Scene_Geo, state: *Scene_Anim_State, mesh: Scene_Mesh, mesh_node_index: s32) -> s64 {
     assert(state.model_index >= 0 && state.model_index < geo.models.count);
     model := geo.models[state.model_index];
@@ -150,6 +316,7 @@ scene_anim_write_skin_matrices :: (dst: []Vector4, geo: *Scene_Geo, state: *Scen
     return mesh.skin_bone_count;
 }
 
+// Write morph weights for one mesh from a sampled pose.
 scene_anim_write_morph_weights :: (dst: []float, geo: *Scene_Geo, state: *Scene_Anim_State, mesh: Scene_Mesh) -> s64 {
     assert(state.model_index >= 0 && state.model_index < geo.models.count);
     if mesh.morph_target_count == 0 return 0;
@@ -162,6 +329,29 @@ scene_anim_write_morph_weights :: (dst: []float, geo: *Scene_Geo, state: *Scene_
 }
 
 #scope_file
+
+// Blend two fully sampled states into a destination state.
+scene_anim_blend_states :: (dst: *Scene_Anim_State, geo: *Scene_Geo, a: *Scene_Anim_State, b: *Scene_Anim_State, alpha: float) {
+    assert(dst != null && a != null && b != null);
+    assert(a.model_index == b.model_index, "Can only blend animation states for the same model (% vs %).", a.model_index, b.model_index);
+    assert(dst.model_index == a.model_index, "Blend destination model mismatch (% vs %).", dst.model_index, a.model_index);
+    assert(a.locals.count == b.locals.count && dst.locals.count == a.locals.count, "Blend local-count mismatch.");
+    assert(a.morph_weights.count == b.morph_weights.count && dst.morph_weights.count == a.morph_weights.count, "Blend morph-count mismatch.");
+
+    t := clamp(alpha, 0.0, 1.0);
+    dst.clip_index = -1;
+    for local_index: 0..dst.locals.count-1 {
+        dst.locals[local_index] = .{
+            translation = lerp(a.locals[local_index].translation, b.locals[local_index].translation, t),
+            rotation = quat_slerp(a.locals[local_index].rotation, b.locals[local_index].rotation, t),
+            scale = lerp(a.locals[local_index].scale, b.locals[local_index].scale, t),
+        };
+    }
+    for morph_index: 0..dst.morph_weights.count-1 {
+        dst.morph_weights[morph_index] = lerp(a.morph_weights[morph_index], b.morph_weights[morph_index], t);
+    }
+    scene_anim_recompute_worlds(dst, geo);
+}
 
 reset_morph_weights_to_bind :: (state: *Scene_Anim_State, geo: *Scene_Geo) {
     for it: 0..state.morph_weights.count-1 {

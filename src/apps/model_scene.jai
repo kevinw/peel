@@ -127,14 +127,19 @@ gpu_arena: Gpu_Arena;
 scene_geo: Scene_Geo;
 shadow_map: Shadow_Map;
 running_lizard_controller: Character_Controller;
-running_lizard_anim: Scene_Anim_State;
+running_lizard_anim_tree: Scene_Anim_Blend_Tree;
 mediapipe_body_anim: Scene_Anim_State;
-running_lizard_clip_index: s32 = -1;
-running_lizard_idle_clip_index: s32 = -1;
-running_lizard_walk_clip_index: s32 = -1;
-running_lizard_jump_clip_index: s32 = -1;
-running_lizard_anim_time: float;
-running_lizard_root: Matrix4 = Matrix4_Identity;
+running_lizard_idle_clip_index: s32 = -1; // Resolved idle clip for the player model.
+running_lizard_walk_clip_index: s32 = -1; // Resolved walk clip for the player model.
+running_lizard_jump_clip_index: s32 = -1; // Resolved jump clip for the player model.
+running_lizard_idle_player_index: s32 = -1; // Blend-tree leaf player sampling the idle clip.
+running_lizard_walk_player_index: s32 = -1; // Blend-tree leaf player sampling the walk clip.
+running_lizard_jump_player_index: s32 = -1; // Blend-tree leaf player sampling the jump clip.
+running_lizard_locomotion_node_index: s32 = -1; // Blend node mixing idle and walk.
+running_lizard_output_node_index: s32 = -1; // Final blend node mixing locomotion and jump.
+running_lizard_move_alpha: float; // Smoothed idle-to-walk blend factor.
+running_lizard_airborne_alpha: float; // Smoothed grounded-to-airborne blend factor.
+running_lizard_root: Matrix4 = Matrix4_Identity; // World transform applied to the sampled player pose.
 running_lizard_spawn_position: Vector3;
 running_lizard_spawn_visual_yaw_offset: float = PI;
 mediapipe_body_root: Matrix4 = Matrix4_Identity;
@@ -694,12 +699,11 @@ tick :: () {
 
     running_lizard_root = character_controller_root_matrix(*running_lizard_controller, running_lizard_scale);
     update_player_animation_state(dt);
-    scene_anim_sample(
-        *running_lizard_anim,
-        *scene_geo,
-        running_lizard_clip_index,
-        running_lizard_anim_time);
+    scene_anim_blend_tree_advance(*running_lizard_anim_tree, dt);
+    scene_anim_blend_tree_sample(*running_lizard_anim_tree, *scene_geo);
     update_mediapipe_demo_pose(cast(float) time, current_dynamic_instances.cpu);
+    running_lizard_anim := scene_anim_blend_tree_output_state(*running_lizard_anim_tree);
+    assert(running_lizard_anim != null, "Player animation blend tree output is missing.");
     running_lizard_model := scene_geo.models[running_lizard_anim.model_index];
     for running_lizard_instances {
         node_local_index := it.node_index - cast(s32) running_lizard_model.node_start;
@@ -728,7 +732,7 @@ tick :: () {
         written: s64;
         if #complete it.source == {
         case .PLAYER;
-            written = scene_anim_write_skin_matrices(dst, *scene_geo, *running_lizard_anim, mesh, it.node_index);
+            written = scene_anim_write_skin_matrices(dst, *scene_geo, running_lizard_anim, mesh, it.node_index);
         case .MEDIAPIPE_DEMO;
             written = scene_anim_write_skin_matrices(dst, *scene_geo, *mediapipe_body_anim, mesh, it.node_index);
         }
@@ -741,7 +745,7 @@ tick :: () {
             dst := current_morph_weights.cpu;
             dst.data += mesh.morph_target_start;
             dst.count = mesh.morph_target_count;
-            written := scene_anim_write_morph_weights(dst, *scene_geo, *running_lizard_anim, mesh);
+            written := scene_anim_write_morph_weights(dst, *scene_geo, running_lizard_anim, mesh);
             assert(written == mesh.morph_target_count);
         }
         write_mediapipe_demo_morph_weights(cast(float) time, current_morph_weights.cpu);
@@ -1178,11 +1182,16 @@ rebuild_scene_runtime :: () {
     array_reset(*mediapipe_demo_instances);
     array_reset(*mediapipe_face_instances);
     running_lizard_compiled_root_node_index = -1;
-    running_lizard_clip_index = -1;
     running_lizard_idle_clip_index = -1;
     running_lizard_walk_clip_index = -1;
     running_lizard_jump_clip_index = -1;
-    running_lizard_anim_time = 0.0;
+    running_lizard_idle_player_index = -1;
+    running_lizard_walk_player_index = -1;
+    running_lizard_jump_player_index = -1;
+    running_lizard_locomotion_node_index = -1;
+    running_lizard_output_node_index = -1;
+    running_lizard_move_alpha = 0.0;
+    running_lizard_airborne_alpha = 0.0;
     running_lizard_scale = 1.0;
     running_lizard_ground_y = 0.0;
     mediapipe_body_model_index = -1;
@@ -1460,8 +1469,8 @@ rebuild_scene_runtime :: () {
 
 clear_scene_runtime_resources :: () {
     controller_deinit(*running_lizard_controller);
-    scene_anim_deinit(*running_lizard_anim);
-    scene_anim_deinit(*mediapipe_body_anim);
+    deinit(*running_lizard_anim_tree);
+    deinit(*mediapipe_body_anim);
 
     for stone_physics_bodies Physics.destroy_body(it);
     array_reset(*stone_physics_bodies);
@@ -1607,9 +1616,20 @@ init_player_from_compiled_node :: (instances_cpu: *[..]Scene_Instance, total_ski
     if clip_index < 0 clip_index = running_lizard_walk_clip_index;
     if clip_index < 0 clip_index = running_lizard_jump_clip_index;
     if clip_index < 0 clip_index = cast(s32) scene_geo.models[model_index].anim_clip_start;
-    running_lizard_clip_index = clip_index;
-    running_lizard_anim_time = 0.0;
-    scene_anim_init(*running_lizard_anim, *scene_geo, model_index, clip_index);
+    if running_lizard_idle_clip_index < 0 running_lizard_idle_clip_index = clip_index;
+    if running_lizard_walk_clip_index < 0 running_lizard_walk_clip_index = running_lizard_idle_clip_index;
+    if running_lizard_jump_clip_index < 0 running_lizard_jump_clip_index = running_lizard_walk_clip_index;
+
+    init(*running_lizard_anim_tree, *scene_geo, model_index);
+    running_lizard_idle_player_index, idle_node_index := scene_anim_blend_tree_add_clip_node(*running_lizard_anim_tree, *scene_geo, running_lizard_idle_clip_index, rate = 0.8);
+    running_lizard_walk_player_index, walk_node_index := scene_anim_blend_tree_add_clip_node(*running_lizard_anim_tree, *scene_geo, running_lizard_walk_clip_index, rate = 1.0);
+    running_lizard_jump_player_index, jump_node_index := scene_anim_blend_tree_add_clip_node(*running_lizard_anim_tree, *scene_geo, running_lizard_jump_clip_index, rate = 1.5);
+    running_lizard_locomotion_node_index = scene_anim_blend_tree_add_lerp_node(*running_lizard_anim_tree, *scene_geo, idle_node_index, walk_node_index, 0.0);
+    running_lizard_output_node_index = scene_anim_blend_tree_add_lerp_node(*running_lizard_anim_tree, *scene_geo, running_lizard_locomotion_node_index, jump_node_index, 0.0);
+    scene_anim_blend_tree_set_output(*running_lizard_anim_tree, running_lizard_output_node_index);
+    running_lizard_move_alpha = 0.0;
+    running_lizard_airborne_alpha = 0.0;
+    scene_anim_blend_tree_sample(*running_lizard_anim_tree, *scene_geo);
 
     start_pos, start_rot_deg, start_scale := decompose_matrix_trs(node.world * compiled_asset_import_matrix(compiled_scene.assets[node.asset_index]));
     running_lizard_scale = max(max(start_scale.x, start_scale.y), start_scale.z);
@@ -1729,7 +1749,19 @@ reset_player_and_horde_game :: () {
         running_lizard_spawn_position,
         visual_yaw_offset = running_lizard_spawn_visual_yaw_offset);
     running_lizard_root = character_controller_root_matrix(*running_lizard_controller, running_lizard_scale);
-    running_lizard_anim_time = 0.0;
+    idle_player := scene_anim_blend_tree_player(*running_lizard_anim_tree, running_lizard_idle_player_index);
+    if idle_player idle_player.time = 0.0;
+    walk_player := scene_anim_blend_tree_player(*running_lizard_anim_tree, running_lizard_walk_player_index);
+    if walk_player walk_player.time = 0.0;
+    jump_player := scene_anim_blend_tree_player(*running_lizard_anim_tree, running_lizard_jump_player_index);
+    if jump_player jump_player.time = 0.0;
+    running_lizard_move_alpha = 0.0;
+    running_lizard_airborne_alpha = 0.0;
+    locomotion_node := scene_anim_blend_tree_node(*running_lizard_anim_tree, running_lizard_locomotion_node_index);
+    if locomotion_node locomotion_node.alpha = running_lizard_move_alpha;
+    output_node := scene_anim_blend_tree_node(*running_lizard_anim_tree, running_lizard_output_node_index);
+    if output_node output_node.alpha = running_lizard_airborne_alpha;
+    scene_anim_blend_tree_sample(*running_lizard_anim_tree, *scene_geo);
     reset(*horde_runtime, .{
         scene_geo = *scene_geo,
         shadow_map = *shadow_map,
@@ -2221,40 +2253,29 @@ player_model_clip_index :: (model_index: s32, names: []string) -> s32 {
     return -1;
 }
 
+player_anim_approach :: (current: float, target: float, dt: float, speed: float) -> float {
+    t := clamp(dt * speed, 0.0, 1.0);
+    return lerp(current, target, t);
+}
+
 update_player_animation_state :: (dt: float) {
-    desired_clip := running_lizard_idle_clip_index;
     grounded := character_controller_is_grounded(*running_lizard_controller);
-    moving := running_lizard_controller.animation_blend > 0.05;
+    locomotion_target := clamp(running_lizard_controller.animation_blend, 0.0, 1.0);
+    airborne_target := ifx grounded then 0.0 else 1.0;
 
-    if !grounded && running_lizard_jump_clip_index >= 0 {
-        desired_clip = running_lizard_jump_clip_index;
-    } else if moving && running_lizard_walk_clip_index >= 0 {
-        desired_clip = running_lizard_walk_clip_index;
-    } else if desired_clip < 0 {
-        desired_clip = running_lizard_walk_clip_index;
-    }
+    running_lizard_move_alpha = player_anim_approach(running_lizard_move_alpha, locomotion_target, dt, speed = 18.0);
+    running_lizard_airborne_alpha = player_anim_approach(running_lizard_airborne_alpha, airborne_target, dt, speed = 22.0);
 
-    if desired_clip < 0 {
-        desired_clip = running_lizard_clip_index;
-    }
-
-    if desired_clip != running_lizard_clip_index {
-        running_lizard_clip_index = desired_clip;
-        running_lizard_anim_time = 0.0;
-        if running_lizard_anim.model_index >= 0 {
-            scene_anim_init(*running_lizard_anim, *scene_geo, running_lizard_anim.model_index, running_lizard_clip_index);
-        }
-    }
-
-    rate := 1.0;
-    if running_lizard_clip_index == running_lizard_walk_clip_index {
-        rate = max(0.35, running_lizard_controller.animation_blend) * 1.6;
-    } else if running_lizard_clip_index == running_lizard_jump_clip_index {
-        rate = 1.5;
-    } else if running_lizard_clip_index == running_lizard_idle_clip_index {
-        rate = 0.8;
-    }
-    running_lizard_anim_time += dt * rate;
+    idle_player := scene_anim_blend_tree_player(*running_lizard_anim_tree, running_lizard_idle_player_index);
+    if idle_player idle_player.rate = 0.8;
+    walk_player := scene_anim_blend_tree_player(*running_lizard_anim_tree, running_lizard_walk_player_index);
+    if walk_player walk_player.rate = max(0.35, running_lizard_controller.animation_blend) * 1.6;
+    jump_player := scene_anim_blend_tree_player(*running_lizard_anim_tree, running_lizard_jump_player_index);
+    if jump_player jump_player.rate = 1.5;
+    locomotion_node := scene_anim_blend_tree_node(*running_lizard_anim_tree, running_lizard_locomotion_node_index);
+    if locomotion_node locomotion_node.alpha = running_lizard_move_alpha;
+    output_node := scene_anim_blend_tree_node(*running_lizard_anim_tree, running_lizard_output_node_index);
+    if output_node output_node.alpha = running_lizard_airborne_alpha;
 }
 
 scene_mouse_world_ray :: (frame: Manip_Frame_Input) -> Vector3, Vector3, bool {
