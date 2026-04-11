@@ -2522,12 +2522,6 @@ ground_normal_at :: (desc: Scene_File.Scene_Procedural_Ground_Desc, x: float, z:
     return normalize({h_l - h_r, eps * 2.0, h_d - h_u});
 }
 
-hash01 :: (x: u32) -> float {
-    phase := cast(float) x * 12.9898 + 78.233;
-    value := sin(phase) * cast(float) 43758.5453;
-    return value - floor(value);
-}
-
 toggle_control_mode :: () {
     if #complete control_mode == {
     case .Player; control_mode = .Editor;

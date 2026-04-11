@@ -790,7 +790,7 @@ model_scene_grass_fragment_main :: (using in: Grass_Fragment_In, params: *Grass_
 
     root_col := Vector3.{0.22, 0.18, 0.08};
     tip_col := Vector3.{0.74, 0.67, 0.31};
-    tint_noise := grass_hash01_f(world_pos.x * 0.17 + world_pos.z * 0.11 + 17.4);
+    tint_noise := hash01(world_pos.x * 0.17 + world_pos.z * 0.11 + 17.4);
     cool := Vector3.{0.92, 0.98, 1.03};
     warm := Vector3.{1.08, 1.02, 0.91};
     base := mix(root_col, tip_col, blade_t) * mix(cool, warm, tint_noise);
@@ -827,19 +827,14 @@ model_scene_sky_fragment_main :: (using in: Model_Scene_Sky_Fragment_In, params:
     sun_dir := normalize(Vector3.{-params.light_dir_sun_strength.x, -params.light_dir_sun_strength.y, -params.light_dir_sun_strength.z});
     sun_strength := max(params.light_dir_sun_strength.w, 0.0);
 
-    ndc_x := uv.x * 2.0 - 1.0;
-    ndc_y := uv.y * 2.0 - 1.0;
-    view_dir := normalize(cam_forward + cam_right * (ndc_x / max(proj_x, 0.0001)) + cam_up * (ndc_y / max(proj_y, 0.0001)));
+    ndc := uv * 2.0 - 1.0;
+    view_dir := normalize(cam_forward + cam_right * (ndc.x / max(proj_x, 0.0001)) + cam_up * (ndc.y / max(proj_y, 0.0001)));
     color := model_scene_sky_color(view_dir, sun_dir, sun_strength);
     return .{out_color = .{color.x, color.y, color.z, 1.0}};
 } @fragment_shader
 
 #scope_file
 
-grass_hash01_f :: (x: float) -> float {
-    v := sin(x * cast(float) 12.9898 + cast(float) 78.233) * cast(float) 43758.5453;
-    return v - floor(v);
-}
 
 grass_hash01_2 :: (x: float, y: float, phase: float) -> float {
     v := sin(x * cast(float) 127.1 + y * cast(float) 311.7 + phase * cast(float) 74.7) * cast(float) 43758.5453;

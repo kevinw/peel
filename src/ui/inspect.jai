@@ -1,3 +1,13 @@
+Inspect_Opts :: struct {
+    is_pointer: bool;
+    show_name:  bool = true;
+    in_table:   bool;
+    flatten_struct: bool;
+    change_callback: ();
+    source_code_location: Source_Code_Location;
+    notes: []string; // at-sign @jai_notes on this field
+}
+
 
 inspect_globals :: (show_window: *bool) {
     using ui_opts.globals;
@@ -40,7 +50,7 @@ inspect_globals :: (show_window: *bool) {
                 name=temp_c_string(it.name),
                 data=it.data,
                 info=it.ti,
-                opts=.{ show_name = false, in_table = true });
+                options=.{ show_name = false, in_table = true });
         }
     }
 }
@@ -72,19 +82,27 @@ go_to_definition_in_editor :: (using source_code_location: Source_Code_Location)
 }
 
 _go_to_definition_in_editor :: (thread: *Thread) -> s64 {
-    #import "Process";
+    Process :: #import "Process";
+
+    editor: enum {
+        Cursor;
+        Zed;
+    } = .Zed;
 
     using loc := cast(*Source_Code_Location) thread.data;
 
     args: [..]string;
-    array_add(*args, "cursor", "-g", tprint("%:%", fully_pathed_filename, line_number));
+    if #complete editor == {
+    case .Cursor;
+        array_add(*args, "cursor", "-g", tprint("%:%", fully_pathed_filename, line_number));
+    case .Zed;
+        array_add(*args, "zed", tprint("%:%", fully_pathed_filename, line_number));
+    }
 
-    String :: #import "String";
     log(String.join(..args, separator=" "), user_flags=1);
 
     RELATIVE_PATH_TO_SOURCE_CODE :: "..";
-
-    res, stdout, stderr := run_command(..args, working_directory=RELATIVE_PATH_TO_SOURCE_CODE);
+    res, stdout, stderr := Process.run_command(..args, working_directory=RELATIVE_PATH_TO_SOURCE_CODE);
     if stdout log("stdout: %\n", stdout);
     if stderr log_error("stderr: %\n", stderr);
 
@@ -157,14 +175,7 @@ CheckboxFlags64 :: (label: *u8, flags: *u64, flags_value: u64) -> bool {
     return pressed;
 }
 
-Inspect_Opts :: struct {
-    is_pointer: bool = false;
-    show_name: bool = true;
-    in_table: bool = false;
-    change_callback: ();
-    source_code_location: Source_Code_Location = .{};
-}
-
+/*
 // TODO: clean this up!
 insp :: ($c: Code) {
     T :: c.type;
@@ -199,18 +210,29 @@ insp :: ($c: Code) {
 
     #insert,scope(c) #run tprint("UI.inspect(\"%\", *%);", name, name);
 }
+*/
 
 inspect :: (name: *u8, val: *$T, opts: Inspect_Opts = .{}) -> bool {
     return inspect(name, val, type_info(T), opts);
 }
 
-inspect :: (name: *u8, data: *void, info:*Type_Info, opts: Inspect_Opts = .{}) -> bool {
+inspect_flat :: (val: *$T, opts: Inspect_Opts = .{}) -> bool {
+    opts_copy := opts;
+    opts_copy.flatten_struct = true;
+    return inspect(null, val, type_info(T), opts_copy);
+}
+
+inspect :: (name: *u8, data: *void, info: *Type_Info, options: Inspect_Opts = .{}) -> bool {
     change := false;
     default_size: ImVec2;
     label: *u8;
 
+    opts := options;
+    flatten_struct := opts.flatten_struct;
+    opts.flatten_struct = false;
+
     name_str: string;
-    if !opts.show_name {
+    if !opts.show_name || flatten_struct {
         label = tprint("##%\0", name).data;
     } else {
         name_str = to_string(name);
@@ -220,27 +242,33 @@ inspect :: (name: *u8, data: *void, info:*Type_Info, opts: Inspect_Opts = .{}) -
     using Type_Info_Tag;
     if #complete info.type == {
         case .INTEGER;
-            ti_int := info.(*Type_Info_Integer);
-            data_type: DataType;
-            ok := true;
-            if info.runtime_size == {
-                case 1; data_type = ifx ti_int.signed then DataType.S8  else DataType.U8;
-                case 2; data_type = ifx ti_int.signed then DataType.S16 else DataType.U16;
-                case 4; data_type = ifx ti_int.signed then DataType.S32 else DataType.U32;
-                case 8; data_type = ifx ti_int.signed then DataType.S64 else DataType.U64;
-                case;
-                    assert(false, "don't know how to handle integer with Type_Info.runtime_size of %");
-                    ok = false;
+            ok, data_type := imgui_data_type(cast(*Type_Info_Integer)info);
+            if ok {
+                InputScalar(label, data_type, data);
             }
-            if ok InputScalar(label, data_type, data);
 
         case .FLOAT;
+            DEFAULT_MIN :: 0.01;
+            DEFAULT_MAX :: 1.0;
+            note_parsed, note_min, note_max := parse_range_note_floating_point(opts.notes, DEFAULT_MIN, DEFAULT_MAX);
             if info.runtime_size == {
-                case 4; change = DragFloat(label, data, 0.01, 1.0);
-                case 8; change = InputDouble(label, data, 0.01, 1.0);
+                case 4;
+                    if note_parsed {
+                        change |= SliderFloat(label, data, cast(float)note_min, cast(float)note_max);
+                    } else {
+                        change |= DragFloat(label, data, cast(float)note_min, cast(float)note_max);
+                    }
+                case 8;
+                    if note_parsed {
+                        change |= SliderScalar(label, .Double, data, *note_min, *note_max);
+                    } else {
+                        change = InputDouble(label, data, note_min, note_max);
+                    }
             }
+
         case .BOOL;
             change = Checkbox(label, data);
+
         case .STRING;
             s := data.(*string);
             if s.count change = InputText(label, s.data, xx s.count, .ReadOnly);    // @@ We could allow editing of strings too.
@@ -270,7 +298,7 @@ inspect :: (name: *u8, data: *void, info:*Type_Info, opts: Inspect_Opts = .{}) -
 
             struct_name := ifx info_struct.name else "<unnamed struct>";
 
-            skip_label := opts.in_table;
+            skip_label := opts.in_table || flatten_struct;
 
             struct_name_cstr: string;
             if opts.is_pointer struct_name_cstr = tprint("*%\0", struct_name);
@@ -303,21 +331,46 @@ inspect :: (name: *u8, data: *void, info:*Type_Info, opts: Inspect_Opts = .{}) -
                 } else if info_struct == cast(*Type_Info_Struct)Math.Matrix3 {
                     for * data.(*Math.Matrix3).v
                         change |= DragFloat3(tprint("##%.%\0", *it.component, name_str, it_index).data, *it.component);
-                } else if TreeNode(label, name_str) {
-                    AddSameLineStructName();
-
-                    highest_offset := -1;
-                    for member: info_struct.members {
-                        if member.flags & .CONSTANT continue; // don't show constant types, etc.
-                        if member.offset_in_bytes <= highest_offset continue; // skip #place types, etc.
-                        highest_offset = member.offset_in_bytes;
-
-                        if opts.in_table struct_table_row(member.name);
-                        change |= inspect(temp_c_string(member.name), data + member.offset_in_bytes, member.type, opts);
-                    }
-                    TreePop();
                 } else {
-                    AddSameLineStructName();
+                    // here flatten_struct means we are showing the fields of a
+                    // struct without any header or type info at the top. so we
+                    // can skip the tree node, etc.
+                    show_contents := false;
+                    need_tree_pop := false;
+                    if flatten_struct {
+                        show_contents = true;
+                    } else {
+                        show_contents = TreeNode(label, name_str);
+                        if show_contents need_tree_pop = true;
+                        AddSameLineStructName();
+                    }
+
+                    if show_contents {
+                        highest_offset := -1;
+                        for member: info_struct.members {
+                            if member.flags & .CONSTANT continue;  // don't show constant fields
+                            if has_note(member, "no_ui") continue; // don't show fields with @no_ui note
+
+                            if member.name == { // TODO: clean this up?
+                            case "pad"; #through;
+                            case "_pad1"; #through;
+                            case "_pad2"; #through;
+                            case "_pad3"; #through;
+                            case "_pad4";
+                                continue;
+                            }
+
+                            if member.offset_in_bytes <= highest_offset continue; // skip #overlay types, etc.
+                            highest_offset = member.offset_in_bytes;
+
+                            if opts.in_table struct_table_row(member.name);
+
+                            member_opts := opts;
+                            member_opts.notes = member.notes;
+                            change |= inspect(temp_c_string(member.name), data + member.offset_in_bytes, member.type, member_opts);
+                        }
+                        if need_tree_pop TreePop();
+                    }
                 }
             }
         case .ARRAY;
@@ -435,12 +488,59 @@ inspect :: (name: *u8, data: *void, info:*Type_Info, opts: Inspect_Opts = .{}) -
 }
 
 #scope_file
-Reflection :: #import "Reflection";
-ImGui :: #import "ImGui";
+
+has_note :: (s: $S, note: string) -> bool {
+    for s.notes if it == note return true;
+    return false;
+}
+
+parse_range_note_floating_point :: (notes: []string, default_min: float64, default_max: float64) -> (parsed: bool, range_min: float64, range_max: float64) {
+    for notes {
+        has_parens := it.count > 2 && it[0] == #char "(" && it[it.count - 1] == #char ")";
+        if !has_parens continue;
+
+        // omit parens
+        text := it;
+        text.data += 1;
+        text.count -= 2;
+
+        results := String.split(text, #char ",",, temp);
+        if results.count != 2 continue;
+
+        left_ok, range_min, remainder   := string_to_float64_new(results[0]);
+        if !left_ok || remainder.count continue;
+
+        right_ok, range_max, remainder= := string_to_float64_new(results[1]);
+        if !right_ok || remainder.count continue;
+
+        return true, range_min, range_max;
+    }
+
+    return false, default_min, default_max;
+}
+
+imgui_data_type :: (using ti_integer: *Type_Info_Integer) -> ok: bool, data_type: ImGui.DataType {
+    data_type: DataType;
+    ok := true;
+    if runtime_size == {
+        case 1; data_type = ifx signed then .S8  else .U8;
+        case 2; data_type = ifx signed then .S16 else .U16;
+        case 4; data_type = ifx signed then .S32 else .U32;
+        case 8; data_type = ifx signed then .S64 else .U64;
+        case;
+            assert(false, "Don't know how to handle integer with Type_Info.runtime_size of %");
+            ok = false;
+    }
+    return ok, data_type;
+
+}
+
+using ImGui :: #import "ImGui";
 #import "imgui_extra";
-using ImGui;
+
+Program_Print :: #import "Program_Print";
+String :: #import "String";
+Reflection :: #import "Reflection";
+#import "Thread";
 #import "Basic";
 #import "Compiler";
-Program_Print :: #import "Program_Print";
-#import "Thread";
-String :: #import "String";

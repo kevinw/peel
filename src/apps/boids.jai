@@ -30,27 +30,16 @@ using app: struct {
     boids_draw_params: Gpu_Buffer(Boids_Draw_Params_CPU);
     boids_control_ring: Gpu_Frame_Ring(Boids_Control);
 
-    using control: Boids_Control = .{
-        view_extent = VIEW_EXTENT,
-        min_speed = MIN_SPEED,
-        max_speed = MAX_SPEED,
-        perception_radius = 0.13,
-        separation_radius = 0.049,
-    };
+    using control: Boids_Control;
 };
 
+boids_ui_open: bool = true;
 build_ui :: () {
     using,except(Viewport) _ :: #import "ImGui";
-    open: bool = true;
-    window_flags: WindowFlags = .NoDecoration | .AlwaysAutoResize | .NoSavedSettings | .NoFocusOnAppearing | .NoNav;
-    if Begin("Boids", *open, window_flags) {
-        Text("Boids");
+    window_flags: WindowFlags = .AlwaysAutoResize | .NoSavedSettings | .NoFocusOnAppearing | .NoNav;
+    if Begin("Boids", *boids_ui_open, window_flags) {
         using control;
-        SliderFloat("View Extent", *view_extent, 0.25, 1.1);
-        SliderFloat("Min Speed", *min_speed, 0.001, 0.2);
-        SliderFloat("Max Speed", *max_speed, 0.5, 2.0);
-        SliderFloat("Perception Radius", *perception_radius, 0, 0.2);
-        SliderFloat("Separation Radius", *separation_radius, 0, 0.1);
+        inspect_flat(*control, .{ flatten_struct = true });
     }
     End();
 }

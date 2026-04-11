@@ -95,11 +95,6 @@ crowd_nav_safe_normalize3 :: (v: Vector3) -> Vector3 {
     return v * (1.0 / sqrt(len2));
 }
 
-crowd_nav_hash01 :: (seed: float) -> float {
-    x := sin(seed * 12.9898 + 78.233) * 43758.547;
-    return x - floor(x);
-}
-
 crowd_nav_target_at :: (idx: float) -> Vector2 {
     if idx < 0.5 return .{-6.5, -5.3};
     if idx < 1.5 return .{ 6.0, -4.2};
@@ -206,7 +201,7 @@ crowd_nav_step_compute :: (using in: Crowd_Nav_Compute_In, data: *Crowd_Nav_Comp
         boundary_push = inward * ((center_dist - arena_radius) * 1.25);
     }
 
-    lane_angle := crowd_nav_hash01(src_sim1.x * 0.71 + pos.x * 0.13 + pos.y * 0.19) * 6.2831855;
+    lane_angle := hash01(src_sim1.x * 0.71 + pos.x * 0.13 + pos.y * 0.19) * 6.2831855;
     lane_bias := Vector2.{cos(lane_angle), sin(lane_angle)} * 0.16;
 
     steer := (desired_vel - vel) * 1.2;

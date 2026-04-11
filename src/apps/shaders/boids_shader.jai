@@ -1,5 +1,8 @@
 #import "Jai-Shader-Transpiler";
 #import "Jai-Shader-Transpiler/modules/ShaderFuncs";
+#import "Jai-Shader-Transpiler/modules/ShaderLib";
+#import "Math";
+
 #import "Math";
 
 BOIDS_COUNT :: 1920;
@@ -10,7 +13,6 @@ COHESION_WEIGHT :: 0.45;
 SEPARATION_WEIGHT :: 1.4;
 CURSOR_AVOID_RADIUS :: 0.25;
 CURSOR_AVOID_WEIGHT :: 2.9;
-VIEW_EXTENT :: 1.05;
 
 // One boid's state.
 Boid_State :: struct {
@@ -19,15 +21,15 @@ Boid_State :: struct {
 }
 
 Boids_Control :: struct {
-    cursor: Vector2;
-    use_b_as_src: u32;
-    delta_time: float;
+    cursor: Vector2; @no_ui
+    use_b_as_src: u32; @no_ui
+    delta_time: float; @no_ui
 
-    view_extent: float = VIEW_EXTENT;
-    min_speed: float = MIN_SPEED;
-    max_speed: float = MAX_SPEED;
-    perception_radius: float = 0.13;
-    separation_radius: float = 0.049;
+    view_extent: float = 1.05; @(0.25,1.1)
+    min_speed: float = MIN_SPEED; @(0.001,0.2)
+    max_speed: float = MAX_SPEED; @(0.5,2.0)
+    perception_radius: float = 0.13; @(0,0.2)
+    separation_radius: float = 0.049; @(0,0.1)
     _pad1: float;
     _pad2: float;
 }
@@ -37,18 +39,8 @@ Boids_Compute_Params :: struct {
     control: *Boids_Control;
 }
 
-boids_hash01 :: (i: u32, pos: Vector2) -> float {
-    k0: float = 12.9898;
-    k1: float = 78.233;
-    k2: float = 37.719;
-    k3: float = 43758.547;
-    n := sin(pos.x * k0 + pos.y * k1 + cast(float) i * k2);
-    x := n * k3;
-    return x - floor(x);
-}
-
 boids_random_turn_impulse :: (i: u32, pos: Vector2, vel: Vector2, max_speed: float) -> Vector2 {
-    h := boids_hash01(i, pos);
+    h := hash01(i, pos);
     turn_strength := max_speed * 6.0;
 
     if h > 0.992 return Vector2.{-vel.y, vel.x} * turn_strength;
@@ -110,7 +102,7 @@ boids_step_compute :: (using in: Boids_Compute_In, using data: *Boids_Compute_Pa
         j += 1;
     }
 
-    fallback_hash := boids_hash01(i, pos);
+    fallback_hash := hash01(i, pos);
     fallback_angle := fallback_hash * 6.2831855;
     fallback_dir := Vector2.{cos(fallback_angle), sin(fallback_angle)};
     accel: Vector2;
@@ -120,41 +112,35 @@ boids_step_compute :: (using in: Boids_Compute_In, using data: *Boids_Compute_Pa
         align_target := align_avg;
         align_len := length(align_target);
         if align_len < 0.000001 {
-            align_target = .{fallback_dir.x * min_speed, fallback_dir.y * min_speed};
+            align_target = fallback_dir * min_speed;
         } else if align_len > max_speed {
-            inv := 1.0 / align_len;
-            align_target = .{align_target.x * inv * max_speed, align_target.y * inv * max_speed};
+            align_target = align_target * (1.0 / align_len) * max_speed;
         } else if align_len < min_speed {
-            inv := 1.0 / align_len;
-            align_target = .{align_target.x * inv * min_speed, align_target.y * inv * min_speed};
+            align_target = align_target * (1.0 / align_len) * min_speed;
         }
-        align_force := Vector2.{align_target.x - vel.x, align_target.y - vel.y};
+        align_force := align_target - vel;
 
         cohesion_center := cohesion_sum * inv_neighbors;
         cohesion_dir := cohesion_center - pos;
         cohesion_target := cohesion_dir;
-        cohesion_len := sqrt(cohesion_target.x * cohesion_target.x + cohesion_target.y * cohesion_target.y);
+        cohesion_len := length(cohesion_target);
         if cohesion_len < 0.000001 {
-            cohesion_target = .{fallback_dir.x * min_speed, fallback_dir.y * min_speed};
+            cohesion_target = fallback_dir * min_speed;
         } else if cohesion_len > max_speed {
-            inv := 1.0 / cohesion_len;
-            cohesion_target = .{cohesion_target.x * inv * max_speed, cohesion_target.y * inv * max_speed};
+            cohesion_target = cohesion_target * (1.0 / cohesion_len) * max_speed;
         } else if cohesion_len < min_speed {
-            inv := 1.0 / cohesion_len;
-            cohesion_target = .{cohesion_target.x * inv * min_speed, cohesion_target.y * inv * min_speed};
+            cohesion_target = cohesion_target * (1.0 / cohesion_len) * min_speed;
         }
         cohesion_force := cohesion_target - vel;
 
         separation_target := separation_sum;
-        separation_len := sqrt(separation_target.x * separation_target.x + separation_target.y * separation_target.y);
+        separation_len := length(separation_target);
         if separation_len < 0.000001 {
             separation_target = fallback_dir * min_speed;
         } else if separation_len > max_speed {
-            inv := 1.0 / separation_len;
-            separation_target = separation_target * inv * max_speed;
+            separation_target = separation_target * (1.0 / separation_len) * max_speed;
         } else if separation_len < min_speed {
-            inv := 1.0 / separation_len;
-            separation_target = separation_target * inv * min_speed;
+            separation_target = separation_target * (1.0 / separation_len) * min_speed;
         }
 
         separation_force := separation_target - vel;
@@ -176,15 +162,15 @@ boids_step_compute :: (using in: Boids_Compute_In, using data: *Boids_Compute_Pa
     }
 
     next_vel := vel + accel * delta_time;
-    next_vel_len := sqrt(next_vel.x * next_vel.x + next_vel.y * next_vel.y);
+    next_vel_len := length(next_vel);
     if next_vel_len < 0.000001 {
-        next_vel = .{fallback_dir.x * MIN_SPEED, fallback_dir.y * MIN_SPEED};
+        next_vel = fallback_dir * MIN_SPEED;
     } else if next_vel_len > max_speed {
         inv := 1.0 / next_vel_len;
-        next_vel = .{next_vel.x * inv * max_speed, next_vel.y * inv * max_speed};
+        next_vel = next_vel * inv * max_speed;
     } else if next_vel_len < MIN_SPEED {
         inv := 1.0 / next_vel_len;
-        next_vel = .{next_vel.x * inv * MIN_SPEED, next_vel.y * inv * MIN_SPEED};
+        next_vel = next_vel * inv * MIN_SPEED;
     }
 
     next_pos := pos + next_vel * delta_time;
@@ -200,7 +186,7 @@ boids_step_compute :: (using in: Boids_Compute_In, using data: *Boids_Compute_Pa
 boids_vertex_main :: (using in: Vertex_In, data: *Boids_Draw_Params) -> Vertex_Out {
     instance_pos := data.instances[instance_id].pos;
     vel := data.instances[instance_id].vel;
-    vel_len := sqrt(vel.x * vel.x + vel.y * vel.y);
+    vel_len := length(vel);
     forward := Vector2.{1, 0};
     if vel_len > 0.000001 {
         inv_len := 1.0 / vel_len;
@@ -240,5 +226,3 @@ Vertex_In :: struct {
     vertex_id: u32; @SV_VertexID
     instance_id: u32; @SV_InstanceID
 }
-
-Vertex_Uniforms :: struct {}
