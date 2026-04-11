@@ -1,4 +1,5 @@
 #import "Jai-Shader-Transpiler";
+#import "Jai-Shader-Transpiler/modules/ShaderFuncs";
 #import "Math";
 
 BOIDS_COUNT :: 1920;
@@ -21,7 +22,7 @@ Boids_Control :: struct {
     cursor: Vector2;
     use_b_as_src: u32;
     delta_time: float;
-    
+
     view_extent: float = VIEW_EXTENT;
     min_speed: float = MIN_SPEED;
     max_speed: float = MAX_SPEED;
@@ -59,11 +60,7 @@ Boids_Compute_In :: struct {
     thread_id: UVector3; @thread_position_in_grid
 }
 
-UVector3 :: struct {
-    x, y, z: u32;
-}
-
-boids_step_compute :: (using in: Boids_Compute_In, data: *Boids_Compute_Params) {
+boids_step_compute :: (using in: Boids_Compute_In, using data: *Boids_Compute_Params) {
     i := thread_id.x;
     if i >= BOIDS_COUNT return;
     
@@ -165,11 +162,11 @@ boids_step_compute :: (using in: Boids_Compute_In, data: *Boids_Compute_Params) 
             inv := 1.0 / separation_len;
             separation_target = separation_target * inv * min_speed;
         }
-        
+
         separation_force := separation_target - vel;
         accel = align_force * ALIGN_WEIGHT + cohesion_force * COHESION_WEIGHT + separation_force * SEPARATION_WEIGHT;
     }
-    
+
     turn_impulse := boids_random_turn_impulse(i, pos, vel, data.control.max_speed);
     accel += turn_impulse;
 
@@ -229,8 +226,7 @@ boids_vertex_main :: (using in: Vertex_In, data: *Boids_Draw_Params) -> Vertex_O
     };
 } @vertex_shader
 
-boids_frag_main :: (using in: Fragment_In, data: *Boids_Draw_Params) -> Vector4 @SV_Target0 {
-    _ = data;
+boids_frag_main :: (using in: struct { tint: Vector4; @color }, data: *Boids_Draw_Params) -> Vector4 @SV_Target0 {
     return tint;
 } @fragment_shader
 
@@ -244,10 +240,6 @@ Boids_Draw_Params :: struct {
 
 Vertex_Out :: struct {
     gl_Position: Vector4; @position
-    tint: Vector4; @color
-}
-
-Fragment_In :: struct {
     tint: Vector4; @color
 }
 
