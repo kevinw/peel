@@ -111,6 +111,9 @@ for elem, elem_index: my_collection {
 
 Prefer `assert(my_condition, "my message: %", my_val)` over `assert(my_condition, tprint("my message: %", my_val))`.
 Prefer `print_to_builder(*string_builder, "my message: %", my_val)` over `append(*string_builder, tprint("my message: %", my_val))`.
+For app-local helper layers that mostly operate on one struct, prefer `using my_struct: *My_Struct` on function arguments so field access stays concise without repetitive `foo.` prefixes.
+Prefer short overloaded function names like `sample`, `output_state`, `player`, `advance`, or `reset_blend` when the surrounding types already make the meaning clear; avoid redundant filename/type prefixes.
+When resetting a runtime struct and the zero/default values are the intended state, use a whole-struct reset like `runtime.* = {};` instead of manually reassigning each field.
 
 Logging functions from the Basic module:
 
@@ -143,3 +146,5 @@ When writing shader math, prefer swizzles and whole-vector operators over split 
 Prefer `color.xyz += sun_color.xyz * sun_mix` and `return vec4(color.xyz, 1.0)` over separate `color_r/color_g/color_b` or `x/y/z` component code when the operation is naturally vector-shaped.
 
 Prefer `sprint("%.foo", bar)` over `copy_string(tprint("%.foo", bar))`
+
+Remember that the Context is an implicit argument in all Jai functions. That it contains "globals" like the allocator. That you can override the allocator with another via the double comma: `print_to_builder(*sb, "foo: %", bar,, temp);` (Allocations in that call will go to the temporary allocator.) You can also manipulate the context directly via the `context` variable available everywhere. And in #c_call functions, you need to `push_context {}` or `push_context my_ctx_ptr {}` a new one.

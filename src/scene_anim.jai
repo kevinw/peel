@@ -177,7 +177,7 @@ deinit :: (tree: *Scene_Anim_Blend_Tree) {
 }
 
 // Add a leaf node that samples a single clip player.
-scene_anim_blend_tree_add_clip_node :: (tree: *Scene_Anim_Blend_Tree, geo: *Scene_Geo, clip_index: s32, rate: float = 1.0, bind_blend: float = 1.0) -> s32, s32 {
+add_clip_node :: (tree: *Scene_Anim_Blend_Tree, geo: *Scene_Geo, clip_index: s32, rate: float = 1.0, bind_blend: float = 1.0) -> s32, s32 {
     assert(tree.model_index >= 0, "Scene_Anim_Blend_Tree must be initialized before adding nodes.");
     clip_player_index := cast(s32) tree.clip_players.count;
     array_add(*tree.clip_players, .{
@@ -198,57 +198,56 @@ scene_anim_blend_tree_add_clip_node :: (tree: *Scene_Anim_Blend_Tree, geo: *Scen
 }
 
 // Add a lerp node that blends two earlier node outputs.
-scene_anim_blend_tree_add_lerp_node :: (tree: *Scene_Anim_Blend_Tree, geo: *Scene_Geo, input_a: s32, input_b: s32, alpha: float = 0.0) -> s32 {
-    assert(tree.model_index >= 0, "Scene_Anim_Blend_Tree must be initialized before adding nodes.");
-    assert(input_a >= 0 && input_a < tree.nodes.count, "Invalid blend-tree input_a node index %", input_a);
-    assert(input_b >= 0 && input_b < tree.nodes.count, "Invalid blend-tree input_b node index %", input_b);
+add_lerp_node :: scene_anim_blend_tree_add_lerp_node;
+scene_anim_blend_tree_add_lerp_node :: (using tree: *Scene_Anim_Blend_Tree, geo: *Scene_Geo, input_a: s32, input_b: s32, alpha: float = 0.0) -> s32 {
+    assert(model_index >= 0, "Scene_Anim_Blend_Tree must be initialized before adding nodes.");
+    assert(input_a >= 0 && input_a < nodes.count, "Invalid blend-tree input_a node index %", input_a);
+    assert(input_b >= 0 && input_b < nodes.count, "Invalid blend-tree input_b node index %", input_b);
 
-    node_index := cast(s32) tree.nodes.count;
-    array_add(*tree.nodes, .{
+    node_index := cast(s32) nodes.count;
+    array_add(*nodes, .{
         kind = .LERP,
         input_a = input_a,
         input_b = input_b,
         alpha = alpha,
     });
 
-    state := array_add(*tree.node_states);
-    scene_anim_init(state, geo, tree.model_index, -1);
+    state := array_add(*node_states);
+    scene_anim_init(state, geo, model_index, -1);
     return node_index;
 }
 
 // Mark which node is the graph output consumed by runtime code.
-scene_anim_blend_tree_set_output :: (tree: *Scene_Anim_Blend_Tree, node_index: s32) {
-    assert(node_index >= 0 && node_index < tree.nodes.count, "Invalid blend-tree output node index %", node_index);
-    tree.output_node_index = node_index;
+set_output  :: (using tree: *Scene_Anim_Blend_Tree, node_index: s32) {
+    assert(node_index >= 0 && node_index < nodes.count, "Invalid blend-tree output node index %", node_index);
+    output_node_index = node_index;
 }
 
 // Return the sampled state for the current output node.
-scene_anim_blend_tree_output_state :: (tree: *Scene_Anim_Blend_Tree) -> *Scene_Anim_State {
-    if tree.output_node_index < 0 || tree.output_node_index >= tree.node_states.count return null;
-    return tree.node_states.data + tree.output_node_index;
+output_state :: (using tree: *Scene_Anim_Blend_Tree) -> *Scene_Anim_State {
+    return *tree.node_states[output_node_index];
 }
 
 // Return a mutable clip player by index.
-scene_anim_blend_tree_player :: (tree: *Scene_Anim_Blend_Tree, clip_player_index: s32) -> *Scene_Anim_Clip_Player {
-    if clip_player_index < 0 || clip_player_index >= tree.clip_players.count return null;
-    return tree.clip_players.data + clip_player_index;
+player :: (tree: *Scene_Anim_Blend_Tree, clip_player_index: s32) -> *Scene_Anim_Clip_Player {
+    return *tree.clip_players[clip_player_index];
 }
 
 // Return a mutable blend node by index.
-scene_anim_blend_tree_node :: (tree: *Scene_Anim_Blend_Tree, node_index: s32) -> *Scene_Anim_Blend_Node {
-    if node_index < 0 || node_index >= tree.nodes.count return null;
-    return tree.nodes.data + node_index;
+blend_tree_node :: (tree: *Scene_Anim_Blend_Tree, node_index: s32) -> *Scene_Anim_Blend_Node {
+    return *tree.nodes[node_index];
 }
 
 // Advance all clip players by dt using their current playback rates.
-scene_anim_blend_tree_advance :: (tree: *Scene_Anim_Blend_Tree, dt: float) {
-    for * tree.clip_players {
+advance :: (using tree: *Scene_Anim_Blend_Tree, dt: float) {
+    for * clip_players {
         if it.clip_index < 0 continue;
         it.time += dt * it.rate;
     }
 }
 
 // Evaluate the blend tree into its per-node cached states.
+sample :: scene_anim_blend_tree_sample;
 scene_anim_blend_tree_sample :: (tree: *Scene_Anim_Blend_Tree, geo: *Scene_Geo) {
     assert(tree.model_index >= 0 && tree.model_index < geo.models.count);
     assert(tree.nodes.count == tree.node_states.count, "Blend tree node/state count mismatch.");

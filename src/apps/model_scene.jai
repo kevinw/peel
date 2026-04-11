@@ -667,9 +667,9 @@ tick :: () {
     player_runtime.root = character_controller_root_matrix(*player_controller, player_runtime.scale);
     update_player_animation_state(dt);
     animated_model_runtime_advance(*player_runtime, dt);
-    animated_model_runtime_sample(*player_runtime, *scene_geo);
+    sample(*player_runtime, *scene_geo);
     update_mediapipe_demo_pose(cast(float) time, current_dynamic_instances.cpu);
-    player_anim := animated_model_runtime_output_state(*player_runtime);
+    player_anim := output_state(*player_runtime);
     assert(player_anim != null, "Player animation blend tree output is missing.");
     player_model := scene_geo.models[player_anim.model_index];
     for player_runtime.instances {
@@ -1693,7 +1693,7 @@ reset_player_and_horde_game :: () {
         player_runtime.spawn_position,
         visual_yaw_offset = player_runtime.spawn_visual_yaw_offset);
     player_runtime.root = character_controller_root_matrix(*player_controller, player_runtime.scale);
-    animated_model_runtime_reset_blend(*player_runtime, *scene_geo);
+    reset_blend(*player_runtime, *scene_geo);
     reset(*horde_runtime, .{
         scene_geo = *scene_geo,
         shadow_map = *shadow_map,
