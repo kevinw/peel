@@ -21,12 +21,6 @@ shadow_skip_batch: [..]bool;
 batch_pick_object_ids: [..]u32;
 batch_compiled_node_indices: [..]s32;
 
-Running_Lizard_Instance :: struct {
-    instance_index: u32;
-    node_index: s32;
-    mesh_index: u32;
-}
-
 Mediapipe_Demo_Instance :: struct {
     instance_index: u32;
     node_index: s32;
@@ -37,14 +31,6 @@ Mediapipe_Face_Instance :: struct {
     instance_index: u32;
     node_index: s32;
     mesh_index: u32;
-}
-
-Running_Lizard_Attachment_Instance :: struct {
-    instance_index: u32;
-    geo_node_index: s32;
-    attachment_node_index: s32;
-    _pad0: s32;
-    attachment_offset: Matrix4;
 }
 
 Scene_Draw_Params_CPU      :: CPU_Struct(Scene_Draw_Params);
@@ -126,25 +112,10 @@ using shaders: struct @init_group {
 gpu_arena: Gpu_Arena;
 scene_geo: Scene_Geo;
 shadow_map: Shadow_Map;
-running_lizard_controller: Character_Controller;
-running_lizard_anim_tree: Scene_Anim_Blend_Tree;
+player_controller: Character_Controller;
+player_runtime: Animated_Model_Runtime;
 mediapipe_body_anim: Scene_Anim_State;
-running_lizard_idle_clip_index: s32 = -1; // Resolved idle clip for the player model.
-running_lizard_walk_clip_index: s32 = -1; // Resolved walk clip for the player model.
-running_lizard_jump_clip_index: s32 = -1; // Resolved jump clip for the player model.
-running_lizard_idle_player_index: s32 = -1; // Blend-tree leaf player sampling the idle clip.
-running_lizard_walk_player_index: s32 = -1; // Blend-tree leaf player sampling the walk clip.
-running_lizard_jump_player_index: s32 = -1; // Blend-tree leaf player sampling the jump clip.
-running_lizard_locomotion_node_index: s32 = -1; // Blend node mixing idle and walk.
-running_lizard_output_node_index: s32 = -1; // Final blend node mixing locomotion and jump.
-running_lizard_move_alpha: float; // Smoothed idle-to-walk blend factor.
-running_lizard_airborne_alpha: float; // Smoothed grounded-to-airborne blend factor.
-running_lizard_root: Matrix4 = Matrix4_Identity; // World transform applied to the sampled player pose.
-running_lizard_spawn_position: Vector3;
-running_lizard_spawn_visual_yaw_offset: float = PI;
 mediapipe_body_root: Matrix4 = Matrix4_Identity;
-running_lizard_scale: float = 1.0;
-running_lizard_ground_y: float = 0.5;
 mediapipe_body_scale: float = 1.0;
 mediapipe_demo_focus: Vector3 = .{0.0, 2.3, -6.2};
 horde_runtime: Horde_Runtime;
@@ -216,8 +187,6 @@ stone_scaled_shapes: [..]Physics.Collider_Shape;
 scene_batches: [..]Draw_Batch;
 scene_batch_uses_dynamic_instances: [..]bool;
 animated_batches: [..]Animated_Batch;
-running_lizard_instances: [..]Running_Lizard_Instance;
-running_lizard_attachment_instances: [..]Running_Lizard_Attachment_Instance;
 mediapipe_demo_instances: [..]Mediapipe_Demo_Instance;
 mediapipe_face_instances: [..]Mediapipe_Face_Instance;
 mediapipe_body_model_index: s32 = -1;
@@ -238,7 +207,6 @@ mediapipe_body_thigh_l_node_index: s32 = -1;
 mediapipe_body_thigh_r_node_index: s32 = -1;
 mediapipe_body_shin_l_node_index: s32 = -1;
 mediapipe_body_shin_r_node_index: s32 = -1;
-running_lizard_compiled_root_node_index: s32 = -1;
 scene_doc: Scene_File.Scene_Document;
 compiled_scene: Scene_File.Compiled_Scene;
 scene_palette_models: [..]string;
@@ -350,8 +318,7 @@ on_quit :: () {
     linear_present_deinit(*scene_present);
     linear_present_shutdown_shader();
     shadow_map_deinit(*shadow_map);
-    array_free(running_lizard_instances);
-    array_free(running_lizard_attachment_instances);
+    animated_model_runtime_deinit(*player_runtime);
     array_free(mediapipe_demo_instances);
     array_free(mediapipe_face_instances);
     array_free(shadow_skip_batch);
@@ -606,12 +573,12 @@ tick :: () {
     }
 
     if autopilot_enabled && dot(desired_move, desired_move) < 1.0e-6 {
-        autopilot_center := Vector3.{-6.8, running_lizard_ground_y, -9.5};
+        autopilot_center := Vector3.{-6.8, player_runtime.ground_y, -9.5};
         autopilot_radius := 3.8;
         autopilot_target := autopilot_center + .{
             cos(cast(float) time * 0.35) * autopilot_radius, 0.0, sin(cast(float) time * 0.35) * autopilot_radius,
         };
-        desired_move = autopilot_target - character_controller_position(*running_lizard_controller);
+        desired_move = autopilot_target - character_controller_position(*player_controller);
     }
 
     Gizmo.begin_frame(*gizmo_ctx);
@@ -620,14 +587,14 @@ tick :: () {
         desired_move = .{};
         jump_pressed = false;
     }
-    character_controller_update_in_system(*running_lizard_controller, Physics.physics.system, desired_move, dt, jump_pressed);
+    character_controller_update_in_system(*player_controller, Physics.physics.system, desired_move, dt, jump_pressed);
     update(*horde_runtime, dt);
     Physics.tick(dt);
     if horde_runtime.restart_requested {
         horde_reset_pending = true;
     }
     if physics_gizmos_enabled {
-        append_lizard_physics_gizmos();
+        append_player_physics_gizmos();
         draw_physics_debug(*horde_runtime, *gizmo_ctx);
     }
     draw_debug(*horde_runtime, *gizmo_ctx);
@@ -673,7 +640,7 @@ tick :: () {
     }
 
     if control_mode == .Player {
-        player_focus := character_controller_position(*running_lizard_controller) + .{0.0, 0.95, 0.0};
+        player_focus := character_controller_position(*player_controller) + .{0.0, 0.95, 0.0};
         orbit_dir := Vector3.{ sin(orbit_yaw) * cos(orbit_pitch), sin(orbit_pitch), -cos(orbit_yaw) * cos(orbit_pitch) };
         normalize(*orbit_dir, fallback = .{0.0, -0.25, 1.0});
         scene_camera.position = player_focus - orbit_dir * orbit_distance;
@@ -697,27 +664,27 @@ tick :: () {
 
     fill_sky_params(outdoor_rig, current_sky_draw_params.cpu, cam_forward, cam_right, cam_up, proj, shadow_map.light_dir);
 
-    running_lizard_root = character_controller_root_matrix(*running_lizard_controller, running_lizard_scale);
+    player_runtime.root = character_controller_root_matrix(*player_controller, player_runtime.scale);
     update_player_animation_state(dt);
-    scene_anim_blend_tree_advance(*running_lizard_anim_tree, dt);
-    scene_anim_blend_tree_sample(*running_lizard_anim_tree, *scene_geo);
+    animated_model_runtime_advance(*player_runtime, dt);
+    animated_model_runtime_sample(*player_runtime, *scene_geo);
     update_mediapipe_demo_pose(cast(float) time, current_dynamic_instances.cpu);
-    running_lizard_anim := scene_anim_blend_tree_output_state(*running_lizard_anim_tree);
-    assert(running_lizard_anim != null, "Player animation blend tree output is missing.");
-    running_lizard_model := scene_geo.models[running_lizard_anim.model_index];
-    for running_lizard_instances {
-        node_local_index := it.node_index - cast(s32) running_lizard_model.node_start;
-        instance_world := running_lizard_root;
-        if node_local_index >= 0 && node_local_index < running_lizard_anim.worlds.count {
-            instance_world = running_lizard_root * running_lizard_anim.worlds[node_local_index];
+    player_anim := animated_model_runtime_output_state(*player_runtime);
+    assert(player_anim != null, "Player animation blend tree output is missing.");
+    player_model := scene_geo.models[player_anim.model_index];
+    for player_runtime.instances {
+        node_local_index := it.node_index - cast(s32) player_model.node_start;
+        instance_world := player_runtime.root;
+        if node_local_index >= 0 && node_local_index < player_anim.worlds.count {
+            instance_world = player_runtime.root * player_anim.worlds[node_local_index];
         }
         current_dynamic_instances.cpu[it.instance_index].world = instance_world;
     }
-    for running_lizard_attachment_instances {
-        attachment_world := running_lizard_root;
-        attachment_local_index := it.attachment_node_index - cast(s32) running_lizard_model.node_start;
-        if attachment_local_index >= 0 && attachment_local_index < running_lizard_anim.worlds.count {
-            attachment_world = running_lizard_root * running_lizard_anim.worlds[attachment_local_index];
+    for player_runtime.attachment_instances {
+        attachment_world := player_runtime.root;
+        attachment_local_index := it.attachment_node_index - cast(s32) player_model.node_start;
+        if attachment_local_index >= 0 && attachment_local_index < player_anim.worlds.count {
+            attachment_world = player_runtime.root * player_anim.worlds[attachment_local_index];
         }
         current_dynamic_instances.cpu[it.instance_index].world = attachment_world * it.attachment_offset * scene_geo.nodes[it.geo_node_index].world;
     }
@@ -732,20 +699,20 @@ tick :: () {
         written: s64;
         if #complete it.source == {
         case .PLAYER;
-            written = scene_anim_write_skin_matrices(dst, *scene_geo, running_lizard_anim, mesh, it.node_index);
+            written = scene_anim_write_skin_matrices(dst, *scene_geo, player_anim, mesh, it.node_index);
         case .MEDIAPIPE_DEMO;
             written = scene_anim_write_skin_matrices(dst, *scene_geo, *mediapipe_body_anim, mesh, it.node_index);
         }
         assert(written == it.skin_matrix_count);
     }
     if current_morph_weights.cpu.data != null {
-        for mesh_index: running_lizard_model.mesh_start .. running_lizard_model.mesh_start + running_lizard_model.mesh_count - 1 {
+        for mesh_index: player_model.mesh_start .. player_model.mesh_start + player_model.mesh_count - 1 {
             mesh := scene_geo.meshes[mesh_index];
             if mesh.morph_target_count == 0 continue;
             dst := current_morph_weights.cpu;
             dst.data += mesh.morph_target_start;
             dst.count = mesh.morph_target_count;
-            written := scene_anim_write_morph_weights(dst, *scene_geo, running_lizard_anim, mesh);
+            written := scene_anim_write_morph_weights(dst, *scene_geo, player_anim, mesh);
             assert(written == mesh.morph_target_count);
         }
         write_mediapipe_demo_morph_weights(cast(float) time, current_morph_weights.cpu);
@@ -791,10 +758,10 @@ tick :: () {
     current_ground_shadow_params.cpu.* = ground_shadow_params.buffers[0].cpu.*;
     current_ground_draw_params.cpu.* = ground_draw_params.buffers[0].cpu.*;
     apply_ground_lighting(outdoor_rig, current_ground_shadow_params.cpu, current_ground_draw_params.cpu, view_proj, scene_camera.position, shadow_map.light_dir);
-    lizard_pos := character_controller_position(*running_lizard_controller);
+    player_pos := character_controller_position(*player_controller);
     current_grass_shadow_params.cpu.* = grass_shadow_params.buffers[0].cpu.*;
     current_grass_draw_params.cpu.* = grass_draw_params.buffers[0].cpu.*;
-    apply_grass_lighting(outdoor_rig, current_grass_shadow_params.cpu, *current_grass_draw_params, active_ground, lizard_pos, running_lizard_controller.facing_yaw, cast(float) time, view_proj, scene_camera.position, shadow_map.light_dir, shadow_map.view_proj, shadow_binding);
+    apply_grass_lighting(outdoor_rig, current_grass_shadow_params.cpu, *current_grass_draw_params, active_ground, player_pos, player_controller.facing_yaw, cast(float) time, view_proj, scene_camera.position, shadow_map.light_dir, shadow_map.view_proj, shadow_binding);
     grass_grid_x := max(1, cast(s32) ceil(cast(float) active_ground.render_grid_x * grass_density_scale));
     grass_grid_z := max(1, cast(s32) ceil(cast(float) active_ground.render_grid_z * grass_density_scale));
     grass_shadow_grid_x := max(1, cast(s32) ceil(cast(float) active_ground.render_grid_x * grass_shadow_density_scale));
@@ -1133,13 +1100,13 @@ ensure_scene_depth_target :: (width: u32, height: u32) {
     gpu_commit_residency();
 }
 
-append_lizard_physics_gizmos :: () {
-    lizard_pos := character_controller_position(*running_lizard_controller);
-    lizard_forward := Vector3.{ sin(running_lizard_controller.facing_yaw), 0.0, cos(running_lizard_controller.facing_yaw) };
-    Gizmo.draw_sphere(*gizmo_ctx, lizard_pos + .{0.0, 0.45, 0.0}, 0.42, color = .{0.98, 0.84, 0.22, 0.95}, thickness = 1.75);
+append_player_physics_gizmos :: () {
+    player_pos := character_controller_position(*player_controller);
+    player_forward := Vector3.{ sin(player_controller.facing_yaw), 0.0, cos(player_controller.facing_yaw) };
+    Gizmo.draw_sphere(*gizmo_ctx, player_pos + .{0.0, 0.45, 0.0}, 0.42, color = .{0.98, 0.84, 0.22, 0.95}, thickness = 1.75);
     Gizmo.draw_arrow(*gizmo_ctx,
-        lizard_pos + .{0.0, 0.45, 0.0},
-        lizard_pos + .{0.0, 0.45, 0.0} + lizard_forward * 1.3,
+        player_pos + .{0.0, 0.45, 0.0},
+        player_pos + .{0.0, 0.45, 0.0} + player_forward * 1.3,
         color = .{1.0, 0.48, 0.18, 0.95},
         thickness = 2.0,
         head_size = 0.16);
@@ -1177,23 +1144,9 @@ rebuild_scene_runtime :: () {
     array_reset(*batch_compiled_node_indices);
     array_reset(*animated_batches);
     array_reset(*shadow_skip_batch);
-    array_reset(*running_lizard_instances);
-    array_reset(*running_lizard_attachment_instances);
+    animated_model_runtime_reset(*player_runtime);
     array_reset(*mediapipe_demo_instances);
     array_reset(*mediapipe_face_instances);
-    running_lizard_compiled_root_node_index = -1;
-    running_lizard_idle_clip_index = -1;
-    running_lizard_walk_clip_index = -1;
-    running_lizard_jump_clip_index = -1;
-    running_lizard_idle_player_index = -1;
-    running_lizard_walk_player_index = -1;
-    running_lizard_jump_player_index = -1;
-    running_lizard_locomotion_node_index = -1;
-    running_lizard_output_node_index = -1;
-    running_lizard_move_alpha = 0.0;
-    running_lizard_airborne_alpha = 0.0;
-    running_lizard_scale = 1.0;
-    running_lizard_ground_y = 0.0;
     mediapipe_body_model_index = -1;
     mediapipe_face_model_index = -1;
     mediapipe_body_mesh_index = -1;
@@ -1229,7 +1182,7 @@ rebuild_scene_runtime :: () {
             continue;
         }
 
-        if running_lizard_compiled_root_node_index >= 0 && compiled_node_is_under_player_root(cast(s32) it_index) {
+        if player_runtime.compiled_root_node_index >= 0 && compiled_node_is_under_player_root(cast(s32) it_index) {
             continue;
         }
 
@@ -1247,7 +1200,7 @@ rebuild_scene_runtime :: () {
             continue;
         case .SKINNED_MESH;
             if it.behavior.type_name == "Player_Controller" {
-                running_lizard_scale, running_lizard_ground_y = init_player_from_compiled_node(*instances_cpu, *total_skin_matrix_count, cast(s32) it_index);
+                player_runtime.scale, player_runtime.ground_y = init_player_from_compiled_node(*instances_cpu, *total_skin_matrix_count, cast(s32) it_index);
                 autopilot_enabled = it.behavior.autopilot;
                 continue;
             }
@@ -1284,8 +1237,8 @@ rebuild_scene_runtime :: () {
     instance_uses_dynamic_storage: [..]bool;
     instance_uses_dynamic_storage.allocator = temp;
     array_resize(*instance_uses_dynamic_storage, instances_cpu.count);
-    for it: running_lizard_instances           instance_uses_dynamic_storage[it.instance_index] = true;
-    for it: running_lizard_attachment_instances instance_uses_dynamic_storage[it.instance_index] = true;
+    for it: player_runtime.instances            instance_uses_dynamic_storage[it.instance_index] = true;
+    for it: player_runtime.attachment_instances instance_uses_dynamic_storage[it.instance_index] = true;
     for it: mediapipe_demo_instances           instance_uses_dynamic_storage[it.instance_index] = true;
     for it: mediapipe_face_instances           instance_uses_dynamic_storage[it.instance_index] = true;
 
@@ -1342,8 +1295,8 @@ rebuild_scene_runtime :: () {
         }
     }
 
-    for *running_lizard_instances            it.instance_index = remapped_instance_indices[it.instance_index];
-    for *running_lizard_attachment_instances it.instance_index = remapped_instance_indices[it.instance_index];
+    for *player_runtime.instances            it.instance_index = remapped_instance_indices[it.instance_index];
+    for *player_runtime.attachment_instances it.instance_index = remapped_instance_indices[it.instance_index];
     for *mediapipe_demo_instances            it.instance_index = remapped_instance_indices[it.instance_index];
     for *mediapipe_face_instances            it.instance_index = remapped_instance_indices[it.instance_index];
 
@@ -1458,7 +1411,7 @@ rebuild_scene_runtime :: () {
     reset(*horde_runtime, .{
         scene_geo = *scene_geo,
         shadow_map = *shadow_map,
-        player_controller = *running_lizard_controller,
+        player_controller = *player_controller,
         ground = *active_ground,
         mask_import_basis = ifx compiled_scene_find_asset_index_by_name_for_runtime("mask") >= 0
             then compiled_asset_import_matrix(compiled_scene.assets[compiled_scene_find_asset_index_by_name_for_runtime("mask")])
@@ -1468,8 +1421,8 @@ rebuild_scene_runtime :: () {
 }
 
 clear_scene_runtime_resources :: () {
-    controller_deinit(*running_lizard_controller);
-    deinit(*running_lizard_anim_tree);
+    controller_deinit(*player_controller);
+    animated_model_runtime_deinit(*player_runtime);
     deinit(*mediapipe_body_anim);
 
     for stone_physics_bodies Physics.destroy_body(it);
@@ -1538,7 +1491,7 @@ clear_scene_runtime_resources :: () {
     scene_morph_weights = .{};
     clear(*horde_runtime);
 
-    array_reset(*running_lizard_instances);
+    array_reset(*player_runtime.instances);
     array_reset(*mediapipe_demo_instances);
     array_reset(*animated_batches);
     array_reset(*scene_batches);
@@ -1604,49 +1557,40 @@ get_or_create_collider_base_shape :: (collider_model_indices: *[..]s32, model_in
 
 init_player_from_compiled_node :: (instances_cpu: *[..]Scene_Instance, total_skin_matrix_count: *s64, node_index: s32) -> float, float {
     node := compiled_scene.nodes[node_index];
-    running_lizard_compiled_root_node_index = node_index;
+    player_runtime.compiled_root_node_index = node_index;
     assert(node.asset_index >= 0, "Player controller node '%' is missing an asset.", node.name);
     model_index := scene_model_index_for_compiled_asset(node.asset_index);
     assert(model_index >= 0, "Failed to resolve player model '%'.", node.name);
     clip_name := ifx node.clip_name.count > 0 then node.clip_name else "walk";
-    running_lizard_walk_clip_index = player_model_clip_index(model_index, .["walk", "Walk", clip_name, "Run", "run"]);
-    running_lizard_idle_clip_index = player_model_clip_index(model_index, .["idle", "Idle", "static", "Static"]);
-    running_lizard_jump_clip_index = player_model_clip_index(model_index, .["jump", "Jump"]);
-    clip_index := running_lizard_idle_clip_index;
-    if clip_index < 0 clip_index = running_lizard_walk_clip_index;
-    if clip_index < 0 clip_index = running_lizard_jump_clip_index;
+    player_runtime.walk_clip_index = player_model_clip_index(model_index, .["walk", "Walk", clip_name, "Run", "run"]);
+    player_runtime.idle_clip_index = player_model_clip_index(model_index, .["idle", "Idle", "static", "Static"]);
+    player_runtime.jump_clip_index = player_model_clip_index(model_index, .["jump", "Jump"]);
+    clip_index := player_runtime.idle_clip_index;
+    if clip_index < 0 clip_index = player_runtime.walk_clip_index;
+    if clip_index < 0 clip_index = player_runtime.jump_clip_index;
     if clip_index < 0 clip_index = cast(s32) scene_geo.models[model_index].anim_clip_start;
-    if running_lizard_idle_clip_index < 0 running_lizard_idle_clip_index = clip_index;
-    if running_lizard_walk_clip_index < 0 running_lizard_walk_clip_index = running_lizard_idle_clip_index;
-    if running_lizard_jump_clip_index < 0 running_lizard_jump_clip_index = running_lizard_walk_clip_index;
+    if player_runtime.idle_clip_index < 0 player_runtime.idle_clip_index = clip_index;
+    if player_runtime.walk_clip_index < 0 player_runtime.walk_clip_index = player_runtime.idle_clip_index;
+    if player_runtime.jump_clip_index < 0 player_runtime.jump_clip_index = player_runtime.walk_clip_index;
 
-    init(*running_lizard_anim_tree, *scene_geo, model_index);
-    running_lizard_idle_player_index, idle_node_index := scene_anim_blend_tree_add_clip_node(*running_lizard_anim_tree, *scene_geo, running_lizard_idle_clip_index, rate = 0.8);
-    running_lizard_walk_player_index, walk_node_index := scene_anim_blend_tree_add_clip_node(*running_lizard_anim_tree, *scene_geo, running_lizard_walk_clip_index, rate = 1.0);
-    running_lizard_jump_player_index, jump_node_index := scene_anim_blend_tree_add_clip_node(*running_lizard_anim_tree, *scene_geo, running_lizard_jump_clip_index, rate = 1.5);
-    running_lizard_locomotion_node_index = scene_anim_blend_tree_add_lerp_node(*running_lizard_anim_tree, *scene_geo, idle_node_index, walk_node_index, 0.0);
-    running_lizard_output_node_index = scene_anim_blend_tree_add_lerp_node(*running_lizard_anim_tree, *scene_geo, running_lizard_locomotion_node_index, jump_node_index, 0.0);
-    scene_anim_blend_tree_set_output(*running_lizard_anim_tree, running_lizard_output_node_index);
-    running_lizard_move_alpha = 0.0;
-    running_lizard_airborne_alpha = 0.0;
-    scene_anim_blend_tree_sample(*running_lizard_anim_tree, *scene_geo);
+    animated_model_runtime_init_locomotion_graph(*player_runtime, *scene_geo, model_index, player_runtime.idle_clip_index, player_runtime.walk_clip_index, player_runtime.jump_clip_index);
 
     start_pos, start_rot_deg, start_scale := decompose_matrix_trs(node.world * compiled_asset_import_matrix(compiled_scene.assets[node.asset_index]));
-    running_lizard_scale = max(max(start_scale.x, start_scale.y), start_scale.z);
-    running_lizard_bounds := scene_geo_model_bounds(*scene_geo, model_index);
-    running_lizard_ground_y = -running_lizard_bounds.min.y * running_lizard_scale - 0.2;
-    running_lizard_spawn_position = .{start_pos.x, running_lizard_ground_y, start_pos.z};
-    running_lizard_spawn_visual_yaw_offset = start_rot_deg.y * PI / 180.0;
+    player_runtime.scale = max(max(start_scale.x, start_scale.y), start_scale.z);
+    player_bounds := scene_geo_model_bounds(*scene_geo, model_index);
+    player_runtime.ground_y = -player_bounds.min.y * player_runtime.scale - 0.2;
+    player_runtime.spawn_position = .{start_pos.x, player_runtime.ground_y, start_pos.z};
+    player_runtime.spawn_visual_yaw_offset = start_rot_deg.y * PI / 180.0;
 
     character_controller_init_in_system(
-        *running_lizard_controller,
+        *player_controller,
         Physics.physics.system,
-        running_lizard_spawn_position,
-        visual_yaw_offset = running_lizard_spawn_visual_yaw_offset);
+        player_runtime.spawn_position,
+        visual_yaw_offset = player_runtime.spawn_visual_yaw_offset);
 
-    running_lizard_root = character_controller_root_matrix(*running_lizard_controller, running_lizard_scale);
-    running_lizard_model_info := scene_geo.models[model_index];
-    for geo_node_index: running_lizard_model_info.node_start .. running_lizard_model_info.node_start + running_lizard_model_info.node_count - 1 {
+    player_runtime.root = character_controller_root_matrix(*player_controller, player_runtime.scale);
+    player_model_info := scene_geo.models[model_index];
+    for geo_node_index: player_model_info.node_start .. player_model_info.node_start + player_model_info.node_count - 1 {
         geo_node := scene_geo.nodes[geo_node_index];
         if geo_node.mesh_ref_count == 0 continue;
         for mesh_ref_offset: 0..geo_node.mesh_ref_count-1 {
@@ -1661,7 +1605,7 @@ init_player_from_compiled_node :: (instances_cpu: *[..]Scene_Instance, total_ski
 
             instance_index := cast(u32) instances_cpu.count;
             array_add(instances_cpu, .{
-                world = running_lizard_root,
+                world = player_runtime.root,
                 tint = .{1.0, 1.0, 1.0, 1.0},
                 shadow_view_proj = Matrix4_Identity,
                 //shadow_view_proj_0 = .{1.0, 0.0, 0.0, 0.0},
@@ -1669,7 +1613,7 @@ init_player_from_compiled_node :: (instances_cpu: *[..]Scene_Instance, total_ski
                 //shadow_view_proj_2 = .{0.0, 0.0, 1.0, 0.0},
                 //shadow_view_proj_3 = .{0.0, 0.0, 0.0, 1.0},
             });
-            array_add(*running_lizard_instances, .{
+            array_add(*player_runtime.instances, .{
                 instance_index = instance_index,
                 node_index = cast(s32) geo_node_index,
                 mesh_index = mesh_index,
@@ -1694,7 +1638,7 @@ init_player_from_compiled_node :: (instances_cpu: *[..]Scene_Instance, total_ski
         if attachment_node.render_kind == .MESH && attachment_node.asset_index >= 0 {
             attachment_model_index := scene_model_index_for_compiled_asset(attachment_node.asset_index);
             if attachment_model_index >= 0 {
-                anchor_geo_node_index := running_lizard_model_info.root_node_index;
+                anchor_geo_node_index := player_model_info.root_node_index;
                 if attachment_node.attach_node_name.count > 0 {
                     resolved_anchor := scene_geo_model_node_index_by_name(*scene_geo, model_index, attachment_node.attach_node_name);
                     if resolved_anchor >= 0 {
@@ -1721,11 +1665,11 @@ init_player_from_compiled_node :: (instances_cpu: *[..]Scene_Instance, total_ski
 
                         instance_index := cast(u32) instances_cpu.count;
                         array_add(instances_cpu, .{
-                            world = running_lizard_root * attachment_offset * scene_geo.nodes[geo_node_index].world,
+                            world = player_runtime.root * attachment_offset * scene_geo.nodes[geo_node_index].world,
                             tint = .{1.0, 1.0, 1.0, 1.0},
                             shadow_view_proj = Matrix4_Identity,
                         });
-                        array_add(*running_lizard_attachment_instances, .{
+                        array_add(*player_runtime.attachment_instances, .{
                             instance_index = instance_index,
                             geo_node_index = cast(s32) geo_node_index,
                             attachment_node_index = anchor_geo_node_index,
@@ -1738,34 +1682,22 @@ init_player_from_compiled_node :: (instances_cpu: *[..]Scene_Instance, total_ski
         attachment_node_index = compiled_scene.nodes[attachment_node_index].next_sibling_index;
     }
 
-    return running_lizard_scale, running_lizard_ground_y;
+    return player_runtime.scale, player_runtime.ground_y;
 }
 
 reset_player_and_horde_game :: () {
-    controller_deinit(*running_lizard_controller);
+    controller_deinit(*player_controller);
     character_controller_init_in_system(
-        *running_lizard_controller,
+        *player_controller,
         Physics.physics.system,
-        running_lizard_spawn_position,
-        visual_yaw_offset = running_lizard_spawn_visual_yaw_offset);
-    running_lizard_root = character_controller_root_matrix(*running_lizard_controller, running_lizard_scale);
-    idle_player := scene_anim_blend_tree_player(*running_lizard_anim_tree, running_lizard_idle_player_index);
-    if idle_player idle_player.time = 0.0;
-    walk_player := scene_anim_blend_tree_player(*running_lizard_anim_tree, running_lizard_walk_player_index);
-    if walk_player walk_player.time = 0.0;
-    jump_player := scene_anim_blend_tree_player(*running_lizard_anim_tree, running_lizard_jump_player_index);
-    if jump_player jump_player.time = 0.0;
-    running_lizard_move_alpha = 0.0;
-    running_lizard_airborne_alpha = 0.0;
-    locomotion_node := scene_anim_blend_tree_node(*running_lizard_anim_tree, running_lizard_locomotion_node_index);
-    if locomotion_node locomotion_node.alpha = running_lizard_move_alpha;
-    output_node := scene_anim_blend_tree_node(*running_lizard_anim_tree, running_lizard_output_node_index);
-    if output_node output_node.alpha = running_lizard_airborne_alpha;
-    scene_anim_blend_tree_sample(*running_lizard_anim_tree, *scene_geo);
+        player_runtime.spawn_position,
+        visual_yaw_offset = player_runtime.spawn_visual_yaw_offset);
+    player_runtime.root = character_controller_root_matrix(*player_controller, player_runtime.scale);
+    animated_model_runtime_reset_blend(*player_runtime, *scene_geo);
     reset(*horde_runtime, .{
         scene_geo = *scene_geo,
         shadow_map = *shadow_map,
-        player_controller = *running_lizard_controller,
+        player_controller = *player_controller,
         ground = *active_ground,
         mask_import_basis = ifx compiled_scene_find_asset_index_by_name_for_runtime("mask") >= 0
             then compiled_asset_import_matrix(compiled_scene.assets[compiled_scene_find_asset_index_by_name_for_runtime("mask")])
@@ -2227,11 +2159,11 @@ compiled_node_pick_object_id :: (compiled_node_index: s32) -> u32 {
 }
 
 compiled_node_is_under_player_root :: (node_index: s32) -> bool {
-    if running_lizard_compiled_root_node_index < 0 return false;
-    if node_index == running_lizard_compiled_root_node_index return false;
+    if player_runtime.compiled_root_node_index < 0 return false;
+    if node_index == player_runtime.compiled_root_node_index return false;
     probe := compiled_scene.nodes[node_index].parent_index;
     while probe >= 0 {
-        if probe == running_lizard_compiled_root_node_index return true;
+        if probe == player_runtime.compiled_root_node_index return true;
         probe = compiled_scene.nodes[probe].parent_index;
     }
     return false;
@@ -2253,29 +2185,12 @@ player_model_clip_index :: (model_index: s32, names: []string) -> s32 {
     return -1;
 }
 
-player_anim_approach :: (current: float, target: float, dt: float, speed: float) -> float {
-    t := clamp(dt * speed, 0.0, 1.0);
-    return lerp(current, target, t);
-}
-
 update_player_animation_state :: (dt: float) {
-    grounded := character_controller_is_grounded(*running_lizard_controller);
-    locomotion_target := clamp(running_lizard_controller.animation_blend, 0.0, 1.0);
+    grounded := character_controller_is_grounded(*player_controller);
+    locomotion_target := clamp(player_controller.animation_blend, 0.0, 1.0);
     airborne_target := ifx grounded then 0.0 else 1.0;
-
-    running_lizard_move_alpha = player_anim_approach(running_lizard_move_alpha, locomotion_target, dt, speed = 18.0);
-    running_lizard_airborne_alpha = player_anim_approach(running_lizard_airborne_alpha, airborne_target, dt, speed = 22.0);
-
-    idle_player := scene_anim_blend_tree_player(*running_lizard_anim_tree, running_lizard_idle_player_index);
-    if idle_player idle_player.rate = 0.8;
-    walk_player := scene_anim_blend_tree_player(*running_lizard_anim_tree, running_lizard_walk_player_index);
-    if walk_player walk_player.rate = max(0.35, running_lizard_controller.animation_blend) * 1.6;
-    jump_player := scene_anim_blend_tree_player(*running_lizard_anim_tree, running_lizard_jump_player_index);
-    if jump_player jump_player.rate = 1.5;
-    locomotion_node := scene_anim_blend_tree_node(*running_lizard_anim_tree, running_lizard_locomotion_node_index);
-    if locomotion_node locomotion_node.alpha = running_lizard_move_alpha;
-    output_node := scene_anim_blend_tree_node(*running_lizard_anim_tree, running_lizard_output_node_index);
-    if output_node output_node.alpha = running_lizard_airborne_alpha;
+    walk_rate := max(0.35, player_controller.animation_blend) * 1.6;
+    animated_model_runtime_update_locomotion(*player_runtime, locomotion_target, airborne_target, walk_rate, dt);
 }
 
 scene_mouse_world_ray :: (frame: Manip_Frame_Input) -> Vector3, Vector3, bool {
@@ -2590,6 +2505,7 @@ mesh_max_meshlet_count :: (mesh_index: u32) -> u32 {
 #load "../shadowmap.jai";
 #load "../scene_geo.jai";
 #load "../scene_anim.jai";
+#load "./model_scene_animated_model_runtime.jai";
 #load "../horde_runtime.jai";
 #load "../scene_pick.jai";
 #load "../outdoor_rig.jai";
