@@ -63,14 +63,8 @@ Boids_Compute_In :: struct {
 boids_step_compute :: (using in: Boids_Compute_In, using data: *Boids_Compute_Params) {
     i := thread_id.x;
     if i >= BOIDS_COUNT return;
-    
-    dt := data.control.delta_time;
-    view_extent := data.control.view_extent;
-    min_speed := data.control.min_speed;
-    max_speed := data.control.max_speed;
-    perception_radius := data.control.perception_radius;
-    separation_radius := data.control.separation_radius;
-    
+
+    using control;
 
     src_offset: u32 = 0;
     dst_offset: u32 = cast(u32) BOIDS_COUNT;
@@ -79,8 +73,8 @@ boids_step_compute :: (using in: Boids_Compute_In, using data: *Boids_Compute_Pa
         dst_offset = 0;
     }
 
-    pos := data.state[src_offset + i].pos;
-    vel := data.state[src_offset + i].vel;
+    pos := state[src_offset + i].pos;
+    vel := state[src_offset + i].vel;
 
     perception2 := perception_radius * perception_radius;
     separation2 := separation_radius * separation_radius;
@@ -97,7 +91,7 @@ boids_step_compute :: (using in: Boids_Compute_In, using data: *Boids_Compute_Pa
             continue;
         }
 
-        other_pos := data.state[src_offset + j].pos;
+        other_pos := state[src_offset + j].pos;
         delta := other_pos - pos;
         dist2 := delta.x * delta.x + delta.y * delta.y;
         if dist2 > perception2 {
@@ -106,7 +100,7 @@ boids_step_compute :: (using in: Boids_Compute_In, using data: *Boids_Compute_Pa
         }
 
         neighbors += 1;
-        align_sum += data.state[src_offset + j].vel;
+        align_sum += state[src_offset + j].vel;
         cohesion_sum += other_pos;
 
         if dist2 < separation2 && dist2 > 0.000001 {
@@ -167,7 +161,7 @@ boids_step_compute :: (using in: Boids_Compute_In, using data: *Boids_Compute_Pa
         accel = align_force * ALIGN_WEIGHT + cohesion_force * COHESION_WEIGHT + separation_force * SEPARATION_WEIGHT;
     }
 
-    turn_impulse := boids_random_turn_impulse(i, pos, vel, data.control.max_speed);
+    turn_impulse := boids_random_turn_impulse(i, pos, vel, max_speed);
     accel += turn_impulse;
 
     cursor_delta := pos - data.control.cursor;
@@ -181,7 +175,7 @@ boids_step_compute :: (using in: Boids_Compute_In, using data: *Boids_Compute_Pa
         accel += cursor_force * CURSOR_AVOID_WEIGHT;
     }
 
-    next_vel := vel + accel * dt;
+    next_vel := vel + accel * delta_time;
     next_vel_len := sqrt(next_vel.x * next_vel.x + next_vel.y * next_vel.y);
     if next_vel_len < 0.000001 {
         next_vel = .{fallback_dir.x * MIN_SPEED, fallback_dir.y * MIN_SPEED};
@@ -193,15 +187,14 @@ boids_step_compute :: (using in: Boids_Compute_In, using data: *Boids_Compute_Pa
         next_vel = .{next_vel.x * inv * MIN_SPEED, next_vel.y * inv * MIN_SPEED};
     }
 
-    next_pos := pos + next_vel * dt;
+    next_pos := pos + next_vel * delta_time;
     if next_pos.x < -view_extent next_pos.x += view_extent * 2.0;
     if next_pos.x > view_extent next_pos.x -= view_extent * 2.0;
     if next_pos.y < -view_extent next_pos.y += view_extent * 2.0;
     if next_pos.y > view_extent next_pos.y -= view_extent * 2.0;
 
-    data.state[dst_offset + i].pos = next_pos;
-    data.state[dst_offset + i].vel = next_vel;
-
+    state[dst_offset + i].pos = next_pos;
+    state[dst_offset + i].vel = next_vel;
 } @compute_shader
 
 boids_vertex_main :: (using in: Vertex_In, data: *Boids_Draw_Params) -> Vertex_Out {
