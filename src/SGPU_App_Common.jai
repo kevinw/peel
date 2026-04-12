@@ -1,6 +1,7 @@
 READBACK_ENABLED    :: !RELEASE;
 LIVE_RELOAD_ENABLED :: !RELEASE;
 SGPU_FRAMES_IN_FLIGHT :: 3; // TODO: import this from sgpu
+MAXIMUM_DELTA_TIME :: 0.5;
 
 ImGui :: #import "ImGui";
 
@@ -114,6 +115,9 @@ app_update :: (update_ctx: *App_Update_Ctx) {
 
     time = seconds_since_init();
     dt = cast(float)(time - last_time);
+    if dt > MAXIMUM_DELTA_TIME {
+        dt = MAXIMUM_DELTA_TIME;
+    }
     editor_dt = dt;
     last_time = time;
     cpu_frame_ms := dt * 1000.0;

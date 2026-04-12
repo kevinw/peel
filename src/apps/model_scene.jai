@@ -21,18 +21,6 @@ shadow_skip_batch: [..]bool;
 batch_pick_object_ids: [..]u32;
 batch_compiled_node_indices: [..]s32;
 
-Mediapipe_Demo_Instance :: struct {
-    instance_index: u32;
-    node_index: s32;
-    mesh_index: u32;
-}
-
-Mediapipe_Face_Instance :: struct {
-    instance_index: u32;
-    node_index: s32;
-    mesh_index: u32;
-}
-
 Scene_Draw_Params_CPU      :: CPU_Struct(Scene_Draw_Params);
 Ground_Draw_Params_CPU     :: CPU_Struct(Ground_Draw_Params);
 Model_Scene_Sky_Params_CPU :: CPU_Struct(Model_Scene_Sky_Params);
@@ -114,14 +102,12 @@ scene_geo: Scene_Geo;
 shadow_map: Shadow_Map;
 player_controller: Character_Controller;
 player_runtime: Animated_Model_Runtime;
-mediapipe_body_anim: Scene_Anim_State;
-mediapipe_body_root: Matrix4 = Matrix4_Identity;
-mediapipe_body_scale: float = 1.0;
-mediapipe_demo_focus: Vector3 = .{0.0, 2.3, -6.2};
+mediapipe_runtime: Mediapipe_Demo_Runtime;
 horde_runtime: Horde_Runtime;
 horde_reset_pending: bool;
 scene_rebuild_pending: bool;
 scene_reload_pending: bool;
+scene_runtime_mutation_allowed: bool = true;
 scene_static_instances: Gpu_View(Scene_Instance);
 scene_dynamic_instances: Gpu_Frame_View(Scene_Instance);
 scene_static_meshlet_instances: Gpu_View(Model_Scene_Meshlet_Instance);
@@ -177,8 +163,6 @@ grass_far_shade_start: float = 16.0;
 grass_shadow_fade_start: float = 7.0;
 grass_shadow_fade_end: float = 16.0;
 scene_shadows_enabled: bool = true;
-mediapipe_body_casts_shadows: bool = true;
-mediapipe_face_casts_shadows: bool = true;
 ground_physics_body: u32;
 ground_physics_body_valid: bool;
 stone_physics_bodies: [..]u32;
@@ -187,26 +171,6 @@ stone_scaled_shapes: [..]Physics.Collider_Shape;
 scene_batches: [..]Draw_Batch;
 scene_batch_uses_dynamic_instances: [..]bool;
 animated_batches: [..]Animated_Batch;
-mediapipe_demo_instances: [..]Mediapipe_Demo_Instance;
-mediapipe_face_instances: [..]Mediapipe_Face_Instance;
-mediapipe_body_model_index: s32 = -1;
-mediapipe_face_model_index: s32 = -1;
-mediapipe_body_mesh_index: s32 = -1;
-mediapipe_face_mesh_index: s32 = -1;
-mediapipe_face_node_index: s32 = -1;
-mediapipe_face_root: Matrix4 = Matrix4_Identity;
-mediapipe_body_hips_node_index: s32 = -1;
-mediapipe_body_torso_node_index: s32 = -1;
-mediapipe_body_neck_node_index: s32 = -1;
-mediapipe_body_head_node_index: s32 = -1;
-mediapipe_body_upper_arm_l_node_index: s32 = -1;
-mediapipe_body_upper_arm_r_node_index: s32 = -1;
-mediapipe_body_forearm_l_node_index: s32 = -1;
-mediapipe_body_forearm_r_node_index: s32 = -1;
-mediapipe_body_thigh_l_node_index: s32 = -1;
-mediapipe_body_thigh_r_node_index: s32 = -1;
-mediapipe_body_shin_l_node_index: s32 = -1;
-mediapipe_body_shin_r_node_index: s32 = -1;
 scene_doc: Scene_File.Scene_Document;
 compiled_scene: Scene_File.Compiled_Scene;
 scene_palette_models: [..]string;
@@ -216,6 +180,7 @@ scene_manip_node_indices: [..]s32;
 scene_manip_objects_dirty: bool = true;
 scene_manip_apply_pending: bool;
 scene_dirty: bool;
+scene_pending_select_node_index: s32 = -1;
 scene_place_palette_index: s32 = -1;
 scene_debug_logged: bool;
 autopilot_enabled: bool;
@@ -277,10 +242,11 @@ on_dll_init :: () {
     debug_pick_params = gpu_make_buffer_ring(Scene_Draw_Params_CPU, label = "model scene debug pick params");
     mesh_grid_limit = gpu_get_mesh_pipeline_max_total_threadgroups_per_grid(mesh_shader.pipeline);
     if mesh_grid_limit == 0 mesh_grid_limit = 1024;
-    mediapipe_body_casts_shadows = false;
-    mediapipe_face_casts_shadows = false;
+    mediapipe_runtime.body_casts_shadows = false;
+    mediapipe_runtime.face_casts_shadows = false;
 
     scene_palette_models = Scene_File.scan_scene_palette_models();
+    append_unique_model_path(*scene_palette_models, tprint("%/tools/blender_exporter/rocks.blend", cache_workspace_root()));
     scene_doc, compiled_scene = Scene_File.load_compiled_scene_cached(SCENE_ROOT_PATH);
     init_scene_geo_from_palette();
     rebuild_scene_runtime();
@@ -319,8 +285,7 @@ on_quit :: () {
     linear_present_shutdown_shader();
     shadow_map_deinit(*shadow_map);
     animated_model_runtime_deinit(*player_runtime);
-    array_free(mediapipe_demo_instances);
-    array_free(mediapipe_face_instances);
+    deinit(*mediapipe_runtime);
     array_free(shadow_skip_batch);
     array_free(batch_pick_object_ids);
     array_free(batch_compiled_node_indices);
@@ -336,6 +301,7 @@ tick :: () {
     result, swapchain_image := app_swapchain_acquire();
     if !swapchain_image return;
 
+    scene_runtime_mutation_allowed = false;
     current_scene_draw_params := sgpu_frame_view_slot(*scene_draw_params);
     current_dynamic_instances: Gpu_View(Scene_Instance);
     if scene_dynamic_instances.items_per_frame > 0 {
@@ -419,10 +385,10 @@ tick :: () {
             }
             Checkbox("Scene Shadows", *scene_shadows_enabled);
             do_ui(*horde_runtime);
-            if Checkbox("Mediapipe Body Casts Shadows", *mediapipe_body_casts_shadows) {
+            if Checkbox("Mediapipe Body Casts Shadows", *mediapipe_runtime.body_casts_shadows) {
                 scene_rebuild_pending = true;
             }
-            if Checkbox("Mediapipe Face Casts Shadows", *mediapipe_face_casts_shadows) {
+            if Checkbox("Mediapipe Face Casts Shadows", *mediapipe_runtime.face_casts_shadows) {
                 scene_rebuild_pending = true;
             }
             Checkbox("Show Shadow Debug", *show_shadow_debug);
@@ -435,8 +401,8 @@ tick :: () {
             do_ui(*outdoor_rig);
             if Button("Focus Mediapipe Demo") {
                 control_mode = .Editor;
-                scene_camera.position = mediapipe_demo_focus + .{-3.4, 1.9, 4.8};
-                editor_camera_set_look_at(*scene_camera, mediapipe_demo_focus);
+                scene_camera.position = mediapipe_runtime.focus + .{-3.4, 1.9, 4.8};
+                editor_camera_set_look_at(*scene_camera, mediapipe_runtime.focus);
             }
             if animated_batches.count > 0 {
                 max_batch_index := cast(s32) animated_batches.count - 1;
@@ -668,7 +634,7 @@ tick :: () {
     update_player_animation_state(dt);
     animated_model_runtime_advance(*player_runtime, dt);
     sample(*player_runtime, *scene_geo);
-    update_mediapipe_demo_pose(cast(float) time, current_dynamic_instances.cpu);
+    update_pose(*mediapipe_runtime, cast(float) time, current_dynamic_instances.cpu);
     player_anim := output_state(*player_runtime);
     assert(player_anim != null, "Player animation blend tree output is missing.");
     player_model := scene_geo.models[player_anim.model_index];
@@ -701,7 +667,7 @@ tick :: () {
         case .PLAYER;
             written = scene_anim_write_skin_matrices(dst, *scene_geo, player_anim, mesh, it.node_index);
         case .MEDIAPIPE_DEMO;
-            written = scene_anim_write_skin_matrices(dst, *scene_geo, *mediapipe_body_anim, mesh, it.node_index);
+            written = scene_anim_write_skin_matrices(dst, *scene_geo, *mediapipe_runtime.body_anim, mesh, it.node_index);
         }
         assert(written == it.skin_matrix_count);
     }
@@ -715,7 +681,7 @@ tick :: () {
             written := scene_anim_write_morph_weights(dst, *scene_geo, player_anim, mesh);
             assert(written == mesh.morph_target_count);
         }
-        write_mediapipe_demo_morph_weights(cast(float) time, current_morph_weights.cpu);
+        write_morph_weights(*mediapipe_runtime, current_morph_weights.cpu, cast(float) time);
     }
 
     for * scene_static_instances.cpu {
@@ -1018,6 +984,7 @@ tick :: () {
     }
 
     submit_and_present_with_ui(cmd_buff);
+    scene_runtime_mutation_allowed = true;
     scene_pick.render_this_frame = false;
     if scene_reload_pending {
         Scene_File.deinit(*compiled_scene);
@@ -1034,6 +1001,7 @@ tick :: () {
         scene_manip_apply_pending = false;
         scene_rebuild_pending = false;
     }
+    apply_pending_scene_selection();
     if horde_reset_pending {
         reset_player_and_horde_game();
         horde_reset_pending = false;
@@ -1125,10 +1093,12 @@ init_scene_geo_from_palette :: () {
     for scene_palette_models array_add(*model_paths, it);
     append_unique_model_path(*model_paths, "models/sample.glb");
     append_unique_model_path(*model_paths, "models/mediapipe-canonical-face.glb");
+    append_unique_model_path(*model_paths, tprint("%/tools/blender_exporter/rocks.blend", cache_workspace_root()));
     scene_geo_init(*scene_geo, model_paths);
 }
 
 rebuild_scene_runtime :: () {
+    assert(scene_runtime_mutation_allowed, "model_scene rebuild_scene_runtime called while frame-local GPU resources are live.");
     auto_release_temp();
     clear_scene_runtime_resources();
 
@@ -1145,25 +1115,7 @@ rebuild_scene_runtime :: () {
     array_reset(*animated_batches);
     array_reset(*shadow_skip_batch);
     animated_model_runtime_reset(*player_runtime);
-    array_reset(*mediapipe_demo_instances);
-    array_reset(*mediapipe_face_instances);
-    mediapipe_body_model_index = -1;
-    mediapipe_face_model_index = -1;
-    mediapipe_body_mesh_index = -1;
-    mediapipe_face_mesh_index = -1;
-    mediapipe_face_node_index = -1;
-    mediapipe_body_hips_node_index = -1;
-    mediapipe_body_torso_node_index = -1;
-    mediapipe_body_neck_node_index = -1;
-    mediapipe_body_head_node_index = -1;
-    mediapipe_body_upper_arm_l_node_index = -1;
-    mediapipe_body_upper_arm_r_node_index = -1;
-    mediapipe_body_forearm_l_node_index = -1;
-    mediapipe_body_forearm_r_node_index = -1;
-    mediapipe_body_thigh_l_node_index = -1;
-    mediapipe_body_thigh_r_node_index = -1;
-    mediapipe_body_shin_l_node_index = -1;
-    mediapipe_body_shin_r_node_index = -1;
+    reset(*mediapipe_runtime);
     autopilot_enabled = false;
     active_ground = .{};
 
@@ -1232,15 +1184,15 @@ rebuild_scene_runtime :: () {
     while shadow_skip_batch.count < scene_batches.count array_add(*shadow_skip_batch, false);
     while batch_pick_object_ids.count < scene_batches.count array_add(*batch_pick_object_ids, 0);
     while batch_compiled_node_indices.count < scene_batches.count array_add(*batch_compiled_node_indices, -1);
-    append_mediapipe_demo_instances(*instances_cpu, *total_skin_matrix_count);
+    append_instances(*mediapipe_runtime, *instances_cpu, *total_skin_matrix_count);
 
     instance_uses_dynamic_storage: [..]bool;
     instance_uses_dynamic_storage.allocator = temp;
     array_resize(*instance_uses_dynamic_storage, instances_cpu.count);
     for it: player_runtime.instances            instance_uses_dynamic_storage[it.instance_index] = true;
     for it: player_runtime.attachment_instances instance_uses_dynamic_storage[it.instance_index] = true;
-    for it: mediapipe_demo_instances           instance_uses_dynamic_storage[it.instance_index] = true;
-    for it: mediapipe_face_instances           instance_uses_dynamic_storage[it.instance_index] = true;
+    for it: mediapipe_runtime.body_instances   instance_uses_dynamic_storage[it.instance_index] = true;
+    for it: mediapipe_runtime.face_instances   instance_uses_dynamic_storage[it.instance_index] = true;
 
     array_resize(*scene_batch_uses_dynamic_instances, scene_batches.count);
     static_instance_count: s64;
@@ -1297,8 +1249,8 @@ rebuild_scene_runtime :: () {
 
     for *player_runtime.instances            it.instance_index = remapped_instance_indices[it.instance_index];
     for *player_runtime.attachment_instances it.instance_index = remapped_instance_indices[it.instance_index];
-    for *mediapipe_demo_instances            it.instance_index = remapped_instance_indices[it.instance_index];
-    for *mediapipe_face_instances            it.instance_index = remapped_instance_indices[it.instance_index];
+    for *mediapipe_runtime.body_instances    it.instance_index = remapped_instance_indices[it.instance_index];
+    for *mediapipe_runtime.face_instances    it.instance_index = remapped_instance_indices[it.instance_index];
 
     arena_bytes :=
         max(cast(s64) 1, static_instance_count) * size_of(Scene_Instance) +
@@ -1421,9 +1373,10 @@ rebuild_scene_runtime :: () {
 }
 
 clear_scene_runtime_resources :: () {
+    assert(scene_runtime_mutation_allowed, "model_scene clear_scene_runtime_resources called while frame-local GPU resources are live.");
     controller_deinit(*player_controller);
     animated_model_runtime_deinit(*player_runtime);
-    deinit(*mediapipe_body_anim);
+    deinit(*mediapipe_runtime);
 
     for stone_physics_bodies Physics.destroy_body(it);
     array_reset(*stone_physics_bodies);
@@ -1492,7 +1445,8 @@ clear_scene_runtime_resources :: () {
     clear(*horde_runtime);
 
     array_reset(*player_runtime.instances);
-    array_reset(*mediapipe_demo_instances);
+    array_reset(*mediapipe_runtime.body_instances);
+    array_reset(*mediapipe_runtime.face_instances);
     array_reset(*animated_batches);
     array_reset(*scene_batches);
     array_reset(*scene_batch_uses_dynamic_instances);
@@ -1705,175 +1659,6 @@ reset_player_and_horde_game :: () {
     }, scene_camera.position, outdoor_rig.sun_strength, outdoor_rig.time_of_day);
 }
 
-append_mediapipe_demo_instances :: (instances_cpu: *[..]Scene_Instance, total_skin_matrix_count: *s64) {
-    mediapipe_body_model_index = scene_geo_model_index_by_name(*scene_geo, "sample");
-    mediapipe_face_model_index = scene_geo_model_index_by_name(*scene_geo, "mediapipe-canonical-face");
-
-    if mediapipe_body_model_index >= 0 {
-        scene_anim_init(*mediapipe_body_anim, *scene_geo, mediapipe_body_model_index, -1);
-        mediapipe_body_scale = scale_model_to_target_extent(mediapipe_body_model_index, 8.0);
-        body_bounds := scene_geo_model_bounds(*scene_geo, mediapipe_body_model_index);
-        body_ground_y := -body_bounds.min.y * mediapipe_body_scale;
-        body_pos := Vector3.{0.0, body_ground_y, -5.8};
-        mediapipe_body_root = make_trs_matrix(body_pos, quat_from_euler_deg(.{0.0, 180.0, 0.0}), .{mediapipe_body_scale, mediapipe_body_scale, mediapipe_body_scale});
-
-        body_model := scene_geo.models[mediapipe_body_model_index];
-        mediapipe_body_mesh_index = find_model_mesh_index_by_node_name(mediapipe_body_model_index, "body");
-        mediapipe_body_hips_node_index = find_mesh_skin_bone_node_index(mediapipe_body_mesh_index, "hips");
-        mediapipe_body_torso_node_index = find_mesh_skin_bone_node_index(mediapipe_body_mesh_index, "torso");
-        mediapipe_body_neck_node_index = find_mesh_skin_bone_node_index(mediapipe_body_mesh_index, "neck");
-        mediapipe_body_head_node_index = find_mesh_skin_bone_node_index(mediapipe_body_mesh_index, "head");
-        mediapipe_body_upper_arm_l_node_index = find_mesh_skin_bone_node_index(mediapipe_body_mesh_index, "upper_arm.L");
-        mediapipe_body_upper_arm_r_node_index = find_mesh_skin_bone_node_index(mediapipe_body_mesh_index, "upper_arm.R");
-        mediapipe_body_forearm_l_node_index = find_mesh_skin_bone_node_index(mediapipe_body_mesh_index, "forearm.L");
-        mediapipe_body_forearm_r_node_index = find_mesh_skin_bone_node_index(mediapipe_body_mesh_index, "forearm.R");
-        mediapipe_body_thigh_l_node_index = find_mesh_skin_bone_node_index(mediapipe_body_mesh_index, "thigh.L");
-        mediapipe_body_thigh_r_node_index = find_mesh_skin_bone_node_index(mediapipe_body_mesh_index, "thigh.R");
-        mediapipe_body_shin_l_node_index = find_mesh_skin_bone_node_index(mediapipe_body_mesh_index, "shin.L");
-        mediapipe_body_shin_r_node_index = find_mesh_skin_bone_node_index(mediapipe_body_mesh_index, "shin.R");
-
-        for geo_node_index: body_model.node_start .. body_model.node_start + body_model.node_count - 1 {
-            geo_node := scene_geo.nodes[geo_node_index];
-            if geo_node.mesh_ref_count == 0 continue;
-            for mesh_ref_offset: 0..geo_node.mesh_ref_count-1 {
-                mesh_index := scene_geo.node_mesh_refs[geo_node.first_mesh_ref + mesh_ref_offset];
-                mesh := scene_geo.meshes[mesh_index];
-                batch := array_add(*scene_batches);
-                batch.mesh_index = mesh_index;
-                batch.first_instance = cast(u32) instances_cpu.count;
-                batch.instance_count = 1;
-                array_add(*batch_pick_object_ids, 0);
-                array_add(*shadow_skip_batch, !mediapipe_body_casts_shadows);
-                array_add(*batch_compiled_node_indices, -1);
-
-                instance_index := cast(u32) instances_cpu.count;
-                array_add(instances_cpu, .{
-                    world = mediapipe_body_root,
-                    tint = .{1.0, 1.0, 1.0, 1.0},
-                    shadow_view_proj = Matrix4_Identity,
-                });
-                array_add(*mediapipe_demo_instances, .{
-                    instance_index = instance_index,
-                    node_index = cast(s32) geo_node_index,
-                    mesh_index = mesh_index,
-                });
-
-                if mesh.skin_bone_count > 0 {
-                    array_add(*animated_batches, .{
-                        batch_index = cast(s32) scene_batches.count - 1,
-                        node_index = cast(s32) geo_node_index,
-                        skin_matrix_start = cast(u32) total_skin_matrix_count.*,
-                        skin_matrix_count = mesh.skin_bone_count,
-                        source = .MEDIAPIPE_DEMO,
-                    });
-                    total_skin_matrix_count.* += mesh.skin_bone_count;
-                }
-            }
-        }
-    }
-
-    if mediapipe_body_model_index >= 0 {
-        mediapipe_face_node_index = scene_geo_model_node_index_by_name(*scene_geo, mediapipe_body_model_index, "face.001");
-        if mediapipe_face_node_index >= 0 {
-            face_node := scene_geo.nodes[mediapipe_face_node_index];
-            if face_node.mesh_ref_count > 0 {
-                mediapipe_face_mesh_index = cast(s32) scene_geo.node_mesh_refs[face_node.first_mesh_ref];
-                face_scale := scale_model_to_target_extent(mediapipe_body_model_index, 3.0);
-                mediapipe_face_root = make_trs_matrix(.{5.4, 2.6, -6.4}, quat_from_euler_deg(.{0.0, 200.0, 0.0}), .{face_scale, face_scale, face_scale});
-
-                mesh := scene_geo.meshes[mediapipe_face_mesh_index];
-                batch := array_add(*scene_batches);
-                batch.mesh_index = cast(u32) mediapipe_face_mesh_index;
-                batch.first_instance = cast(u32) instances_cpu.count;
-                batch.instance_count = 1;
-                array_add(*batch_pick_object_ids, 0);
-                array_add(*shadow_skip_batch, !mediapipe_face_casts_shadows);
-                array_add(*batch_compiled_node_indices, -1);
-
-                instance_index := cast(u32) instances_cpu.count;
-                array_add(instances_cpu, .{
-                    world = mediapipe_face_root,
-                    tint = .{1.0, 1.0, 1.0, 1.0},
-                    shadow_view_proj = Matrix4_Identity,
-                });
-                array_add(*mediapipe_face_instances, .{
-                    instance_index = instance_index,
-                    node_index = mediapipe_face_node_index,
-                    mesh_index = cast(u32) mediapipe_face_mesh_index,
-                });
-
-                if mesh.skin_bone_count > 0 {
-                    array_add(*animated_batches, .{
-                        batch_index = cast(s32) scene_batches.count - 1,
-                        node_index = mediapipe_face_node_index,
-                        skin_matrix_start = cast(u32) total_skin_matrix_count.*,
-                        skin_matrix_count = mesh.skin_bone_count,
-                        source = .MEDIAPIPE_DEMO,
-                    });
-                    total_skin_matrix_count.* += mesh.skin_bone_count;
-                }
-            }
-        }
-    }
-}
-
-update_mediapipe_demo_pose :: (t: float, dynamic_instances: []Scene_Instance) {
-    if mediapipe_body_model_index < 0 return;
-
-    scene_anim_sample(*mediapipe_body_anim, *scene_geo, -1, t, 1.0);
-
-    pose_t := t;
-    apply_mediapipe_demo_bone_offset(mediapipe_body_hips_node_index, quat_from_euler_deg(.{0.0, sin(pose_t * 0.55) * 10.0, 0.0}));
-    apply_mediapipe_demo_bone_offset(mediapipe_body_torso_node_index, quat_from_euler_deg(.{sin(pose_t * 0.8) * 10.0, 0.0, sin(pose_t * 0.5) * 9.0}));
-    apply_mediapipe_demo_bone_offset(mediapipe_body_neck_node_index, quat_from_euler_deg(.{sin(pose_t * 0.9) * 9.0, sin(pose_t * 0.7) * 18.0, 0.0}));
-    apply_mediapipe_demo_bone_offset(mediapipe_body_head_node_index, quat_from_euler_deg(.{sin(pose_t * 1.0) * 14.0, sin(pose_t * 0.6 + 0.6) * 28.0, sin(pose_t * 0.8) * 7.0}));
-    apply_mediapipe_demo_bone_offset(mediapipe_body_upper_arm_l_node_index, quat_from_euler_deg(.{-40.0 + sin(pose_t * 1.7) * 28.0, 0.0, -52.0 + sin(pose_t * 1.3) * 22.0}));
-    apply_mediapipe_demo_bone_offset(mediapipe_body_upper_arm_r_node_index, quat_from_euler_deg(.{-24.0 + sin(pose_t * 1.9 + 1.4) * 38.0, 0.0, 52.0 + sin(pose_t * 1.2 + 0.4) * 26.0}));
-    apply_mediapipe_demo_bone_offset(mediapipe_body_forearm_l_node_index, quat_from_euler_deg(.{-36.0 + sin(pose_t * 2.1 + 0.4) * 26.0, 0.0, -18.0}));
-    apply_mediapipe_demo_bone_offset(mediapipe_body_forearm_r_node_index, quat_from_euler_deg(.{-54.0 + sin(pose_t * 2.2 + 1.0) * 34.0, 0.0, 18.0}));
-    apply_mediapipe_demo_bone_offset(mediapipe_body_thigh_l_node_index, quat_from_euler_deg(.{sin(pose_t * 1.4) * 14.0, 0.0, 0.0}));
-    apply_mediapipe_demo_bone_offset(mediapipe_body_thigh_r_node_index, quat_from_euler_deg(.{sin(pose_t * 1.4 + PI) * 14.0, 0.0, 0.0}));
-    apply_mediapipe_demo_bone_offset(mediapipe_body_shin_l_node_index, quat_from_euler_deg(.{max(0.0, sin(pose_t * 1.4 + 0.25)) * 18.0, 0.0, 0.0}));
-    apply_mediapipe_demo_bone_offset(mediapipe_body_shin_r_node_index, quat_from_euler_deg(.{max(0.0, sin(pose_t * 1.4 + PI + 0.25)) * 18.0, 0.0, 0.0}));
-
-    set_model_morph_wave_weights(*mediapipe_body_anim, mediapipe_body_model_index, t, 0.0);
-    scene_anim_recompute_worlds(*mediapipe_body_anim, *scene_geo);
-
-    body_model := scene_geo.models[mediapipe_body_model_index];
-    for mediapipe_demo_instances {
-        node_local_index := it.node_index - cast(s32) body_model.node_start;
-        instance_world := mediapipe_body_root;
-        if node_local_index >= 0 && node_local_index < mediapipe_body_anim.worlds.count {
-            instance_world = mediapipe_body_root * mediapipe_body_anim.worlds[node_local_index];
-        }
-        dynamic_instances[it.instance_index].world = instance_world;
-    }
-    for mediapipe_face_instances {
-        node_local_index := it.node_index - cast(s32) body_model.node_start;
-        instance_world := mediapipe_face_root;
-        if node_local_index >= 0 && node_local_index < mediapipe_body_anim.worlds.count {
-            instance_world = mediapipe_face_root * mediapipe_body_anim.worlds[node_local_index];
-        }
-        dynamic_instances[it.instance_index].world = instance_world;
-    }
-}
-
-write_mediapipe_demo_morph_weights :: (t: float, morph_weights: []float) {
-    if mediapipe_body_model_index >= 0 {
-        for mesh_index: scene_geo.models[mediapipe_body_model_index].mesh_start .. scene_geo.models[mediapipe_body_model_index].mesh_start + scene_geo.models[mediapipe_body_model_index].mesh_count - 1 {
-            mesh := scene_geo.meshes[mesh_index];
-            if mesh.morph_target_count == 0 continue;
-            dst := morph_weights;
-            dst.data += mesh.morph_target_start;
-            dst.count = mesh.morph_target_count;
-            written := scene_anim_write_morph_weights(dst, *scene_geo, *mediapipe_body_anim, mesh);
-            assert(written == mesh.morph_target_count);
-        }
-    }
-
-    _ = t;
-}
-
 scene_model_index_for_compiled_asset :: (asset_index: s32) -> s32 {
     if asset_index < 0 || asset_index >= compiled_scene.assets.count return -1;
     asset := compiled_scene.assets[asset_index];
@@ -1923,84 +1708,6 @@ decompose_matrix_trs :: (m: Matrix4) -> (pos: Vector3, rot: Vector3, scl: Vector
 append_unique_model_path :: (paths: *[..]string, model_path: string) {
     for paths.* if it == model_path return;
     array_add(paths, model_path);
-}
-
-find_model_mesh_index_by_node_name :: (model_index: s32, node_name: string) -> s32 {
-    if model_index < 0 return -1;
-    model := scene_geo.models[model_index];
-    target_node_index := scene_geo_model_node_index_by_name(*scene_geo, model_index, node_name);
-    if target_node_index < 0 return -1;
-    node := scene_geo.nodes[target_node_index];
-    if node.mesh_ref_count <= 0 return -1;
-    return cast(s32) scene_geo.node_mesh_refs[node.first_mesh_ref];
-}
-
-find_mesh_skin_bone_node_index :: (mesh_index: s32, node_name: string) -> s32 {
-    if mesh_index < 0 return -1;
-    mesh := scene_geo.meshes[mesh_index];
-    if mesh.skin_bone_count <= 0 return -1;
-    for i: 0..mesh.skin_bone_count-1 {
-        skin_bone := scene_geo.mesh_skin_bones[mesh.skin_bone_start + i];
-        if scene_geo.node_names[skin_bone.node_index] == node_name return skin_bone.node_index;
-    }
-    return -1;
-}
-
-find_mesh_morph_target_index_by_name :: (mesh_index: s32, target_name: string) -> s32 {
-    if mesh_index < 0 return -1;
-    mesh := scene_geo.meshes[mesh_index];
-    if mesh.morph_target_count <= 0 return -1;
-    for local_index: 0..mesh.morph_target_count-1 {
-        global_index := mesh.morph_target_start + cast(u32) local_index;
-        if global_index >= scene_geo.morph_target_names.count continue;
-        if scene_geo.morph_target_names[global_index] == target_name return cast(s32) global_index;
-    }
-    return -1;
-}
-
-set_named_morph_weight :: (state: *Scene_Anim_State, mesh_index: s32, target_name: string, weight: float) {
-    target_index := find_mesh_morph_target_index_by_name(mesh_index, target_name);
-    if target_index < 0 return;
-    state.morph_weights[target_index] = clamp(weight, 0.0, 1.0);
-}
-
-scale_model_to_target_extent :: (model_index: s32, target_extent: float) -> float {
-    bounds := scene_geo_model_bounds(*scene_geo, model_index);
-    size := bounds.max - bounds.min;
-    max_extent := max(max(size.x, size.y), size.z);
-    return ifx max_extent > 0.0 then target_extent / max_extent else 1.0;
-}
-
-apply_mediapipe_demo_bone_offset :: (node_index: s32, rotation_offset: Quaternion) {
-    if node_index < 0 return;
-    local_index := node_index - cast(s32) scene_geo.models[mediapipe_body_model_index].node_start;
-    if local_index < 0 || local_index >= mediapipe_body_anim.locals.count return;
-    local := *mediapipe_body_anim.locals[local_index];
-    local.rotation = rotation_offset * local.rotation;
-    normalize_or_identity(*local.rotation);
-}
-
-set_model_morph_wave_weights :: (state: *Scene_Anim_State, model_index: s32, t: float, phase: float) {
-    if model_index < 0 return;
-    model := scene_geo.models[model_index];
-    for mesh_index: model.mesh_start .. model.mesh_start + model.mesh_count - 1 {
-        mesh := scene_geo.meshes[mesh_index];
-        if mesh.morph_target_count == 0 continue;
-        for local_index: 0..mesh.morph_target_count-1 {
-            state.morph_weights[mesh.morph_target_start + local_index] = 0.0;
-        }
-        set_named_morph_weight(state, cast(s32) mesh_index, "eyeBlinkLeft",  clamp(0.5 + 0.5 * sin(t * 1.7 + phase), 0.0, 1.0));
-        set_named_morph_weight(state, cast(s32) mesh_index, "eyeBlinkRight", clamp(0.5 + 0.5 * sin(t * 1.7 + phase + 1.7), 0.0, 1.0));
-        set_named_morph_weight(state, cast(s32) mesh_index, "eyeSquintLeft", 0.12 + 0.10 * sin(t * 1.1 + phase + 0.2));
-        set_named_morph_weight(state, cast(s32) mesh_index, "eyeSquintRight", 0.12 + 0.10 * sin(t * 1.1 + phase + 1.1));
-        set_named_morph_weight(state, cast(s32) mesh_index, "browInnerUp", 0.2 + 0.18 * sin(t * 0.7 + phase));
-        set_named_morph_weight(state, cast(s32) mesh_index, "mouthSmileLeft", 0.2 + 0.18 * sin(t * 0.9 + phase + 2.0));
-        set_named_morph_weight(state, cast(s32) mesh_index, "mouthSmileRight", 0.2 + 0.18 * sin(t * 0.9 + phase + 3.3));
-        set_named_morph_weight(state, cast(s32) mesh_index, "jawOpen", 0.18 + 0.16 * sin(t * 1.2 + phase + 0.8));
-        set_named_morph_weight(state, cast(s32) mesh_index, "mouthFunnel", 0.12 + 0.12 * sin(t * 0.6 + phase + 1.3));
-        set_named_morph_weight(state, cast(s32) mesh_index, "eyeWideLeft", 0.05 + 0.08 * sin(t * 1.0 + phase + 0.5));
-        set_named_morph_weight(state, cast(s32) mesh_index, "eyeWideRight", 0.05 + 0.08 * sin(t * 1.0 + phase + 1.0));
-    }
 }
 
 scene_apply_manip_live_to_runtime :: () {
@@ -2121,16 +1828,10 @@ scene_place_selected_palette_at_cursor :: (frame: Manip_Frame_Input) {
     new_node := Scene_File.place_palette_model(*scene_doc, scene_palette_models[scene_place_palette_index], p);
     log("SCENE_PLACE new node index=% total_nodes=%", new_node, scene_doc.nodes.count);
     scene_dirty = true;
+    scene_pending_select_node_index = new_node;
     scene_place_palette_index = -1;
-    Scene_File.deinit(*compiled_scene);
-    compiled_scene = Scene_File.recompile_scene_document(scene_doc);
-    log("SCENE_PLACE recompiled scene: compiled_nodes=% compiled_assets=%", compiled_scene.nodes.count, compiled_scene.assets.count);
-    rebuild_scene_runtime();
-    scene_manip_objects_dirty = true;
-    scene_rebuild_manip_objects();
-    scene_manip_objects_dirty = false;
-    for scene_manip_node_indices if it == new_node scene_manip_ctx.selected_index = cast(s32) it_index;
-    log("SCENE_PLACE selected manip index=%", scene_manip_ctx.selected_index);
+    scene_reload_pending = true;
+    log("SCENE_PLACE deferred scene reload for node=%", new_node);
 }
 
 find_compiled_node_for_source :: (source_path: string, node_name: string) -> s32 {
@@ -2167,6 +1868,22 @@ compiled_node_is_under_player_root :: (node_index: s32) -> bool {
         probe = compiled_scene.nodes[probe].parent_index;
     }
     return false;
+}
+
+apply_pending_scene_selection :: () {
+    if scene_pending_select_node_index < 0 return;
+
+    scene_rebuild_manip_objects();
+    scene_manip_objects_dirty = false;
+    scene_manip_ctx.selected_index = -1;
+    for scene_manip_node_indices {
+        if it == scene_pending_select_node_index {
+            scene_manip_ctx.selected_index = cast(s32) it_index;
+            break;
+        }
+    }
+    log("SCENE_PLACE selected manip index=% node=%", scene_manip_ctx.selected_index, scene_pending_select_node_index);
+    scene_pending_select_node_index = -1;
 }
 
 clamp_player_camera_above_ground :: (camera: *Editor_Camera) {
@@ -2506,6 +2223,7 @@ mesh_max_meshlet_count :: (mesh_index: u32) -> u32 {
 #load "../scene_geo.jai";
 #load "../scene_anim.jai";
 #load "./model_scene_animated_model_runtime.jai";
+#load "./model_scene_mediapipe_runtime.jai";
 #load "../horde_runtime.jai";
 #load "../scene_pick.jai";
 #load "../outdoor_rig.jai";

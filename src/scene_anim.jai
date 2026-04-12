@@ -1,6 +1,3 @@
-#import "Math";
-ai :: #import "assimp";
-
 Scene_Anim_State :: struct {
     // Model this sampled pose belongs to.
     model_index: s32 = -1;
@@ -28,8 +25,8 @@ Scene_Anim_Clip_Player :: struct {
 Scene_Anim_Blend_Node :: struct {
     // Blend node operation type.
     kind: enum u32 {
-        CLIP;
-        LERP;
+        CLIP; // Samples a single clip player into this node's cached state.
+        LERP; // Blends two earlier node states together with alpha.
     };
     // Source clip player for clip nodes.
     clip_player_index: s32 = -1;
@@ -168,11 +165,11 @@ init :: (tree: *Scene_Anim_Blend_Tree, geo: *Scene_Geo, model_index: s32) {
 }
 
 // Free all clip players, nodes, and cached states in a blend tree.
-deinit :: (tree: *Scene_Anim_Blend_Tree) {
-    for *tree.node_states deinit(it);
-    array_free(tree.node_states);
-    array_free(tree.nodes);
-    array_free(tree.clip_players);
+deinit :: (using tree: *Scene_Anim_Blend_Tree) {
+    for *node_states deinit(it);
+    array_free(node_states);
+    array_free(nodes);
+    array_free(clip_players);
     tree.* = .{};
 }
 
@@ -225,12 +222,12 @@ set_output  :: (using tree: *Scene_Anim_Blend_Tree, node_index: s32) {
 
 // Return the sampled state for the current output node.
 output_state :: (using tree: *Scene_Anim_Blend_Tree) -> *Scene_Anim_State {
-    return *tree.node_states[output_node_index];
+    return *node_states[output_node_index];
 }
 
 // Return a mutable clip player by index.
-player :: (tree: *Scene_Anim_Blend_Tree, clip_player_index: s32) -> *Scene_Anim_Clip_Player {
-    return *tree.clip_players[clip_player_index];
+player :: (using tree: *Scene_Anim_Blend_Tree, clip_player_index: s32) -> *Scene_Anim_Clip_Player {
+    return *clip_players[clip_player_index];
 }
 
 // Return a mutable blend node by index.
@@ -456,3 +453,6 @@ anim_morph_key_span :: (geo: *Scene_Geo, channel: Scene_Anim_Morph_Channel) -> [
     result.count = channel.key_count;
     return result;
 }
+
+#import "Math";
+ai :: #import "assimp";

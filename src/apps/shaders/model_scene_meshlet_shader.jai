@@ -393,7 +393,10 @@ model_scene_meshlet_fragment_main :: (
         return .{color.x, color.y, color.z, 1.0};
     }
 
-    tex := sample_2d(params.base_color_texture_index, params.sampler_index, uv);
+    tex := params.base_color_factor;
+    if params.base_color_texture_index != SCENE_INVALID_TEXTURE_INDEX {
+        tex = sample_2d(params.base_color_texture_index, params.sampler_index, uv);
+    }
     base_rgb := Vector3.{
         tex.x * params.base_color_factor.x * tint.x,
         tex.y * params.base_color_factor.y * tint.y,

@@ -30,18 +30,19 @@ scene "Model Scene" {
   asset "stone_5" {
     model "./models/Low Poly Stones/Mesh/ST_Stone5.fbx"
   }
+  asset "rocks" {
+    model "/Users/kev/src/peel/tools/blender_exporter/rocks.blend"
+  }
 
   node "Ground" {
     position 0 0 0
     rotation_deg 0 0 0
-    scale 1 1 1
+    scale 1.3 1.3 1.3
     procedural_ground {
-      size 48 46
+      size 85 85
       center_z -12
-      render_grid 112 112
+      render_grid 150 150
       physics_grid 28 28
-      ridge 0.80
-      swell 0.42
       base_color "./textures/Ground104_1K-JPG/Ground104_1K-JPG_Color.jpg"
       normal "./textures/Ground104_1K-JPG/Ground104_1K-JPG_NormalGL.jpg"
       roughness "./textures/Ground104_1K-JPG/Ground104_1K-JPG_Roughness.jpg"
@@ -203,5 +204,11 @@ scene "Model Scene" {
     rotation_deg 0 0 0
     scale 1 1 1
     mesh_render "Tree"
+  }
+  node "rocks" {
+    position -0.577572 -1.040066 -12.006695
+    rotation_deg 0 0 0
+    scale 1 1 1
+    mesh_render "rocks"
   }
 }

@@ -564,7 +564,10 @@ scene_encode_object_id :: (object_id: u32) -> Vector4 {
 
 model_scene_fragment_main :: (using in: Model_Scene_Fragment_In, params: *Scene_Draw_Params, using constants: Model_Scene_Meshlet_Constants) -> Vector4 @SV_Target0 {
     material := params.materials[params.material_index];
-    tex := sample_2d(material.base_color_texture_index, material.sampler_index, uv);
+    tex := material.base_color_factor;
+    if material.base_color_texture_index != SCENE_INVALID_TEXTURE_INDEX {
+        tex = sample_2d(material.base_color_texture_index, material.sampler_index, uv);
+    }
     alpha := scene_material_alpha(material, uv, tint.w);
     if material.alpha_mode == SCENE_ALPHA_MODE_MASK && alpha < material.alpha_cutoff discard();
     base_rgb := Vector3.{
