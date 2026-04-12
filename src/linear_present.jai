@@ -3,8 +3,6 @@
 Linear_Present_Params_CPU :: CPU_Struct(Linear_Present_Params);
 
 linear_present_shader: Shader(fullscreen_tri_vert, linear_present_fragment_main, .{
-    cull = .NONE,
-    derive_attachment_formats_from_render_pass = true,
 });
 
 Linear_Present_State :: struct {

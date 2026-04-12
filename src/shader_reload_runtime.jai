@@ -356,18 +356,18 @@ shader_hot_reload_ensure_function_constant_variant_generation :: (base: *Shader_
     shader_hot_reload_reset_function_constant_variants(base);
 }
 
-shader_hot_reload_raster_desc_is_dynamic :: (raster_desc: Gpu_Raster_Desc) -> bool {
-    return raster_desc.derive_attachment_formats_from_render_pass;
+is_dynamic :: (using raster_desc: Gpu_Raster_Desc) -> bool {
+    return color_targets.count == 0;
 }
 
 shader_hot_reload_attachment_layout_from_raster_desc :: (raster_desc: Gpu_Raster_Desc) -> Shader_Attachment_Layout_Key {
-    key: Shader_Attachment_Layout_Key;
-    key.sample_count = raster_desc.sample_count;
-    key.color_target_count = cast(u8) min(raster_desc.color_targets.count, 8);
-    key.depth_format = raster_desc.depth_format;
-    key.stencil_format = raster_desc.stencil_format;
+    using key: Shader_Attachment_Layout_Key;
+    sample_count = raster_desc.sample_count;
+    color_target_count = cast(u8) min(raster_desc.color_targets.count, 8);
+    depth_format = raster_desc.depth_format;
+    stencil_format = raster_desc.stencil_format;
     for i: 0..cast(s64) key.color_target_count-1 {
-        key.color_formats[i] = raster_desc.color_targets[i].format;
+        color_formats[i] = raster_desc.color_targets[i].format;
     }
     return key;
 }
@@ -419,11 +419,14 @@ shader_hot_reload_hash_graphics_variant_key :: (layout: Shader_Attachment_Layout
     return hash;
 }
 
-shader_hot_reload_resolve_dynamic_raster_desc :: (logical_raster_desc: Gpu_Raster_Desc, pass_desc: Gpu_Render_Pass_Desc) -> (Gpu_Raster_Desc, bool) {
+resolve_dynamic_raster_desc :: (logical_raster_desc: Gpu_Raster_Desc, pass_desc: Gpu_Render_Pass_Desc, debug_label := "") -> (Gpu_Raster_Desc, bool) {
     resolved := logical_raster_desc;
-    if !logical_raster_desc.derive_attachment_formats_from_render_pass return resolved, true;
+    if !is_dynamic(logical_raster_desc) {
+        return resolved, true;
+    }
 
     push_allocator(cpu_allocator);
+    assert(pass_desc.color_targets.count > 0, "resolve_dynamic_raster_desc: no color targets in pass_desc");
     color_targets := NewArray(pass_desc.color_targets.count, Color_Target);
     for pass_desc.color_targets {
         if it.view == 0 return .{}, false;
@@ -433,7 +436,6 @@ shader_hot_reload_resolve_dynamic_raster_desc :: (logical_raster_desc: Gpu_Raste
     }
 
     resolved.color_targets = color_targets;
-    resolved.derive_attachment_formats_from_render_pass = false;
 
     if resolved.depth_format == .UNDEFINED && pass_desc.depth_target.view != 0 {
         depth_format, ok := gpu_texture_view_format(pass_desc.depth_target.view);
@@ -451,7 +453,7 @@ shader_hot_reload_resolve_dynamic_raster_desc :: (logical_raster_desc: Gpu_Raste
 
 shader_hot_reload_release_dynamic_raster_desc :: (logical_raster_desc: Gpu_Raster_Desc, resolved_raster_desc: *Gpu_Raster_Desc) {
     if resolved_raster_desc == null return;
-    if !logical_raster_desc.derive_attachment_formats_from_render_pass return;
+    if !is_dynamic(logical_raster_desc) return;
     if resolved_raster_desc.color_targets.count != 0 && resolved_raster_desc.color_targets.data != null {
         free(resolved_raster_desc.color_targets.data,, allocator = cpu_allocator);
     }

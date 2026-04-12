@@ -13,13 +13,9 @@ fixed_shader: Shader(fullscreen_tri_vert, dynamic_graphics_test_fragment_main, .
 });
 
 dynamic_shader: Shader(fullscreen_tri_vert, dynamic_graphics_test_fragment_main, .{
-    cull = .NONE,
-    derive_attachment_formats_from_render_pass = true,
 });
 
 dynamic_noparams_shader: Shader(fullscreen_tri_vert, dynamic_graphics_test_noparams_fragment_main, .{
-    cull = .NONE,
-    derive_attachment_formats_from_render_pass = true,
 });
 
 gpu_arena: Gpu_Arena;

@@ -45,10 +45,7 @@ Material_Lab_Object :: struct {
     uv_scale: float;
 }
 
-material_lab_shader: Shader(material_lab_vertex_main, material_lab_fragment_main, .{
-    cull = .CCW,
-    derive_attachment_formats_from_render_pass = true,
-}); @init
+material_lab_shader: Shader(material_lab_vertex_main, material_lab_fragment_main, .{ cull = .CCW }); @init
 
 gpu_arena: Gpu_Arena;
 material_lab_camera: Editor_Camera = .{

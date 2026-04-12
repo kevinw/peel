@@ -27,75 +27,22 @@ Model_Scene_Sky_Params_CPU :: CPU_Struct(Model_Scene_Sky_Params);
 Grass_Shadow_Params_CPU    :: CPU_Struct(Grass_Shadow_Params);
 Model_Scene_Meshlet_Params_CPU :: CPU_Struct(Model_Scene_Meshlet_Params);
 using shaders: struct @init_group {
-    graphics_shader: Shader(model_scene_vertex_main, model_scene_fragment_main, .{
-        cull = .CW,
-        depth_format = .D32_SFLOAT,
-        color_targets = .[
-            .{format = .R16G16B16A16_SFLOAT},
-        ],
-    });
-    pick_shader: Shader(model_scene_vertex_main, model_scene_pick_fragment_main, .{
-        cull = .CW,
-        depth_format = .D32_SFLOAT,
-        color_targets = .[
-            .{format = .B8G8R8A8_UNORM},
-        ],
-    });
-    ground_shader: Shader(ground_vertex_main, ground_fragment_main, .{
-        cull = .CW,
-        depth_format = .D32_SFLOAT,
-        color_targets = .[
-            .{format = .R16G16B16A16_SFLOAT},
-        ],
-    });
-    ground_shadow_shader: Shader(ground_shadow_vertex_main, ground_shadow_fragment_main, .{
-        cull = .NONE,
-        depth_format = .D32_SFLOAT,
-        color_targets = .[
-            .{format = .R32_SFLOAT},
-        ],
-    });
-    shadow_shader: Shader(model_scene_shadow_vertex_main, model_scene_shadow_fragment_main, .{
-        cull = .NONE,
-        depth_format = .D32_SFLOAT,
-        color_targets = .[
-            .{format = .R32_SFLOAT},
-        ],
-    });
+    graphics_shader: Shader(model_scene_vertex_main, model_scene_fragment_main, .{ cull = .CW });
+    pick_shader: Shader(model_scene_vertex_main, model_scene_pick_fragment_main, .{ cull = .CW });
+    ground_shader: Shader(ground_vertex_main, ground_fragment_main, .{ cull = .CW });
+    ground_shadow_shader: Shader(ground_shadow_vertex_main, ground_shadow_fragment_main);
+    shadow_shader: Shader(model_scene_shadow_vertex_main, model_scene_shadow_fragment_main);
     mesh_shader: Mesh_Shader(model_scene_mesh_main, model_scene_meshlet_fragment_main, .{
-        raster_desc = .{
-            cull = .CW,
-            derive_attachment_formats_from_render_pass = true,
-        },
+        raster_desc = .{ cull = .CW, },
         task_threads = .[1, 1, 1],
         mesh_threads = .[1, 1, 1],
         max_total_threadgroups_per_mesh_grid = 1024,
     }, model_scene_task_main);
-    grass_shader: Shader(model_scene_grass_vertex_main, model_scene_grass_fragment_main, .{
-        cull = .CCW,
-        depth_format = .D32_SFLOAT,
-        color_targets = .[ {format = .R16G16B16A16_SFLOAT}, ],
-    });
-    grass_shadow_shader: Shader(model_scene_grass_shadow_vertex_main, model_scene_grass_shadow_fragment_main, .{
-        cull = .CCW,
-        depth_format = .D32_SFLOAT,
-        color_targets = .[ {format = .R32_SFLOAT}, ],
-    });
-    debug_shadow_shader: Shader(model_scene_debug_shadow_vertex_main, model_scene_debug_shadow_fragment_main, .{
-        cull = .CW,
-        depth_format = .D32_SFLOAT,
-        color_targets = .[ {format = .R16G16B16A16_SFLOAT}, ],
-    });
-    debug_pick_shader: Shader(model_scene_debug_shadow_vertex_main, model_scene_debug_pick_fragment_main, .{
-        cull = .CW,
-        depth_format = .D32_SFLOAT,
-        color_targets = .[ {format = .R16G16B16A16_SFLOAT}, ],
-    });
-    sky_shader: Shader(model_scene_sky_vertex_main, model_scene_sky_fragment_main, .{
-        cull = .NONE,
-        depth_format = .D32_SFLOAT,
-        color_targets = .[ {format = .R16G16B16A16_SFLOAT}, ],
-    });
+    grass_shader: Shader(model_scene_grass_vertex_main, model_scene_grass_fragment_main, .{ cull = .CCW });
+    grass_shadow_shader: Shader(model_scene_grass_shadow_vertex_main, model_scene_grass_shadow_fragment_main, .{ cull = .CCW });
+    debug_shadow_shader: Shader(model_scene_debug_shadow_vertex_main, model_scene_debug_shadow_fragment_main, .{ cull = .CW  });
+    debug_pick_shader: Shader(model_scene_debug_shadow_vertex_main, model_scene_debug_pick_fragment_main, .{ cull = .CW });
+    sky_shader: Shader(model_scene_sky_vertex_main, model_scene_sky_fragment_main);
 };
 gpu_arena: Gpu_Arena;
 scene_geo: Scene_Geo;
@@ -393,17 +340,8 @@ tick :: () {
             }
             Checkbox("Show Shadow Debug", *show_shadow_debug);
             Checkbox("Show Pick Debug", *show_pick_debug);
-            albedo_debug := graphics_shader_constants.debug_mode == .ALBEDO;
-            if Checkbox("Albedo Debug", *albedo_debug) {
-                graphics_shader_constants.debug_mode = ifx albedo_debug then .ALBEDO else .SHADED;
-                mesh_shader_constants.debug_mode = ifx albedo_debug then .ALBEDO else .SHADED;
-            }
+            inspect("Shader Debug", *graphics_shader_constants.debug_mode);
             do_ui(*outdoor_rig);
-            if Button("Focus Mediapipe Demo") {
-                control_mode = .Editor;
-                scene_camera.position = mediapipe_runtime.focus + .{-3.4, 1.9, 4.8};
-                editor_camera_set_look_at(*scene_camera, mediapipe_runtime.focus);
-            }
             if animated_batches.count > 0 {
                 max_batch_index := cast(s32) animated_batches.count - 1;
             }
@@ -751,8 +689,7 @@ tick :: () {
     if scene_shadows_enabled {
         saved_shadow_skin_counts: [..]u32;
         defer array_free(saved_shadow_skin_counts);
-
-        gpu_begin_scoped_render_pass(cmd_buff, .{
+        shadow_pass_desc: Gpu_Render_Pass_Desc = {
             depth_target = .{
                 view = shadow_map.depth_view,
                 load_op = .CLEAR,
@@ -770,27 +707,33 @@ tick :: () {
                     clear_color._float = .[1.0, 1.0, 1.0, 1.0],
                 },
             ],
-        }, .COLOR_ATTACHMENT_WRITE, .SHADER_READ);
+        };
+        gpu_begin_scoped_render_pass(cmd_buff, shadow_pass_desc, .COLOR_ATTACHMENT_WRITE, .SHADER_READ);
         gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .LESS, depth_mode = .READ | .WRITE});
-        gpu_set_pipeline(cmd_buff, ground_shadow_shader.pipeline);
+
+        // ground shadow
+        gpu_set_pipeline(cmd_buff, pipeline(*ground_shadow_shader, shadow_pass_desc));
         gpu_draw_instanced_direct(cmd_buff, current_ground_shadow_params.gpu, ground_index_count, 1);
-        gpu_set_pipeline(cmd_buff, shadow_shader.pipeline);
+
+        // grass shadow
         if render_grass && current_grass_shadow_params.cpu != null && grass_shadow_instance_count > 0 {
-            gpu_set_pipeline(cmd_buff, grass_shadow_shader.pipeline);
+            gpu_set_pipeline(cmd_buff, pipeline(*grass_shadow_shader, shadow_pass_desc));
             gpu_draw_instanced_direct(cmd_buff, current_grass_shadow_params.gpu, 6, grass_shadow_instance_count);
-            gpu_set_pipeline(cmd_buff, shadow_shader.pipeline);
         }
+
+        shadow_pipeline := pipeline(*shadow_shader, shadow_pass_desc);
+        gpu_set_pipeline(cmd_buff, shadow_pipeline);
         for batch: scene_batches {
             if it_index < shadow_skip_batch.count && shadow_skip_batch[it_index] continue;
             mesh := scene_geo.meshes[batch.mesh_index];
             params_gpu := current_scene_draw_params.gpu + (it_index * size_of(Scene_Draw_Params_CPU)).(Gpu_Ptr);
             gpu_draw_instanced_direct(cmd_buff, params_gpu, mesh.index_count, batch.instance_count);
         }
-        draw_shadow(*horde_runtime, cmd_buff, shadow_shader.pipeline);
+        draw_shadow(*horde_runtime, cmd_buff, shadow_pipeline);
     }
 
     if scene_pick.render_this_frame && scene_pick.view != 0 {
-        gpu_begin_scoped_render_pass(cmd_buff, .{
+        scene_pick_pass_desc:  Gpu_Render_Pass_Desc =  {
             depth_target = .{
                 view = texture_ring_current_view(*scene_depth),
                 load_op = .CLEAR,
@@ -808,9 +751,10 @@ tick :: () {
                     clear_color._float = .[0.0, 0.0, 0.0, 0.0],
                 },
             ],
-        }, .COLOR_ATTACHMENT_WRITE, .COLOR_ATTACHMENT_WRITE);
+        };
+        gpu_begin_scoped_render_pass(cmd_buff, scene_pick_pass_desc, .COLOR_ATTACHMENT_WRITE, .COLOR_ATTACHMENT_WRITE);
         gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .LESS, depth_mode = .READ | .WRITE});
-        gpu_set_pipeline(cmd_buff, pick_shader.pipeline);
+        gpu_set_pipeline(cmd_buff, SHR.pipeline(*pick_shader, scene_pick_pass_desc));
         for batch: scene_batches {
             if it_index >= batch_pick_object_ids.count || batch_pick_object_ids[it_index] == 0 continue;
             mesh := scene_geo.meshes[batch.mesh_index];
@@ -848,16 +792,19 @@ tick :: () {
             ],
         };
         gpu_begin_scoped_render_pass(cmd_buff, main_pass_desc, .COLOR_ATTACHMENT_WRITE, .SHADER_READ);
-        gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
-        gpu_set_pipeline(cmd_buff, sky_shader.pipeline);
+
+        // sky
         if current_sky_draw_params.cpu != null {
+            gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
+            gpu_set_pipeline(cmd_buff, pipeline(*sky_shader, main_pass_desc));
             gpu_draw_instanced_direct(cmd_buff, current_sky_draw_params.gpu, 6, 1);
         }
+
         gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .LESS, depth_mode = .READ | .WRITE});
-        gpu_set_pipeline(cmd_buff, pipeline(*ground_shader, graphics_shader_constants));
+        gpu_set_pipeline(cmd_buff, pipeline(*ground_shader, main_pass_desc, graphics_shader_constants));
         gpu_draw_instanced_direct(cmd_buff, current_ground_draw_params.gpu, ground_index_count, 1);
         if render_grass && current_grass_draw_params.cpu != null && grass_instance_count > 0 {
-            gpu_set_pipeline(cmd_buff, grass_shader.pipeline);
+            gpu_set_pipeline(cmd_buff, pipeline(*grass_shader, main_pass_desc));
             gpu_draw_instanced_direct(cmd_buff, current_grass_draw_params.gpu, 6, grass_instance_count);
         }
         for batch: scene_batches {
@@ -944,7 +891,8 @@ tick :: () {
                 object_group_start += draw_object_group_count;
             }
         }
-        graphics_pipeline := SHR.pipeline(*graphics_shader, graphics_shader_constants);
+
+        graphics_pipeline := pipeline(*graphics_shader, main_pass_desc, graphics_shader_constants);
         gpu_set_pipeline(cmd_buff, graphics_pipeline);
         draw_main(*horde_runtime, cmd_buff, graphics_pipeline);
 
@@ -956,12 +904,13 @@ tick :: () {
 
         if show_shadow_debug {
             gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
-            gpu_set_pipeline(cmd_buff, debug_shadow_shader.pipeline);
+            gpu_set_pipeline(cmd_buff, pipeline(*debug_shadow_shader, main_pass_desc));
             gpu_draw_instanced_direct(cmd_buff, current_scene_draw_params.gpu, 6, 1);
         }
+
         if show_pick_debug && current_debug_pick_params.cpu != null {
             gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
-            gpu_set_pipeline(cmd_buff, debug_pick_shader.pipeline);
+            gpu_set_pipeline(cmd_buff, pipeline(*debug_pick_shader, main_pass_desc));
             gpu_draw_instanced_direct(cmd_buff, current_debug_pick_params.gpu, 6, 1);
         }
     }

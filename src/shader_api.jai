@@ -19,7 +19,7 @@ Shader_Base :: struct {
     function_constant_variant_generation: u64;
 }
 
-Shader :: struct(vert: $V, frag: $F, raster: Gpu_Raster_Desc) {
+Shader :: struct(vert: $V, frag: $F, raster: Gpu_Raster_Desc = .{}) {
     using #as base: Shader_Base;
 
     Vertex_Function :: vert;
@@ -370,7 +370,7 @@ graphics_init_code :: (
         return tprint(#string END
 G :: #import,file "%";
 shader_source, shader_meta := %, %;
-if shader_hot_reload_raster_desc_is_dynamic(raster_desc) {
+if is_dynamic(raster_desc) {
     shader.pipeline = 0;
     shader_hot_reload_reset_function_constant_variants(cast(*Shader_Base) shader);
     return true;
@@ -389,7 +389,7 @@ END, path_to_shader_module, source_expr, meta_expr, default_constants_expr, vert
     return tprint(#string END
 G :: #import,file "%";
 shader_source, shader_meta := %, %;
-if shader_hot_reload_raster_desc_is_dynamic(raster_desc) {
+if is_dynamic(raster_desc) {
     shader.pipeline = 0;
     shader_hot_reload_reset_function_constant_variants(cast(*Shader_Base) shader);
     return true;
@@ -410,7 +410,7 @@ graphics_init_with_constants_code :: (
     return tprint(#string END
 G :: #import,file "%";
 shader_source, shader_meta := %, %;
-if shader_hot_reload_raster_desc_is_dynamic(raster_desc) {
+if is_dynamic(raster_desc) {
     shader.pipeline = 0;
     shader_hot_reload_reset_function_constant_variants(cast(*Shader_Base) shader);
     return true;
@@ -450,8 +450,8 @@ graphics_render_pass_variant_code :: (
     shader_source, shader_meta := %, %;
     resolved_raster_desc := raster_desc;
     resolved_dynamic_raster_desc := false;
-    if shader_hot_reload_raster_desc_is_dynamic(raster_desc) {
-        dynamic_raster_desc, ok := shader_hot_reload_resolve_dynamic_raster_desc(raster_desc, pass_desc);
+    if is_dynamic(raster_desc) {
+        dynamic_raster_desc, ok := resolve_dynamic_raster_desc(raster_desc, pass_desc, debug_label="graphics_render_pass_variant_code(constants)");
         assert(ok, "Could not resolve dynamic render-target layout for graphics shader.");
         resolved_raster_desc = dynamic_raster_desc;
         resolved_dynamic_raster_desc = true;
@@ -470,8 +470,8 @@ END, path_to_shader_module, source_expr, meta_expr, default_constants_expr);
     shader_source, shader_meta := %, %;
     resolved_raster_desc := raster_desc;
     resolved_dynamic_raster_desc := false;
-    if shader_hot_reload_raster_desc_is_dynamic(raster_desc) {
-        dynamic_raster_desc, ok := shader_hot_reload_resolve_dynamic_raster_desc(raster_desc, pass_desc);
+    if is_dynamic(raster_desc) {
+        dynamic_raster_desc, ok := resolve_dynamic_raster_desc(raster_desc, pass_desc, "graphics_render_pass_variant_code(no constants)");
         assert(ok, "Could not resolve dynamic render-target layout for graphics shader.");
         resolved_raster_desc = dynamic_raster_desc;
         resolved_dynamic_raster_desc = true;
@@ -493,8 +493,8 @@ graphics_render_pass_variant_with_constants_code :: (
     shader_source, shader_meta := %, %;
     resolved_raster_desc := raster_desc;
     resolved_dynamic_raster_desc := false;
-    if shader_hot_reload_raster_desc_is_dynamic(raster_desc) {
-        dynamic_raster_desc, ok := shader_hot_reload_resolve_dynamic_raster_desc(raster_desc, pass_desc);
+    if is_dynamic(raster_desc) {
+        dynamic_raster_desc, ok := resolve_dynamic_raster_desc(raster_desc, pass_desc);
         assert(ok, "Could not resolve dynamic render-target layout for graphics shader.");
         resolved_raster_desc = dynamic_raster_desc;
         resolved_dynamic_raster_desc = true;
@@ -549,7 +549,7 @@ shader_api_mesh_init_code :: (
         if default_constants_expr.count != 0 {
             return tprint(#string END
 %
-if shader_hot_reload_raster_desc_is_dynamic(mesh_desc.raster_desc) {
+if is_dynamic(mesh_desc.raster_desc) {
     mesh_shader.pipeline = 0;
     shader_hot_reload_reset_function_constant_variants(cast(*Shader_Base) mesh_shader);
     return true;
@@ -563,7 +563,7 @@ END, binding_code, default_constants_expr, task_name, mesh_name, fragment_name, 
         }
         return tprint(#string END
 %
-if shader_hot_reload_raster_desc_is_dynamic(mesh_desc.raster_desc) {
+if is_dynamic(mesh_desc.raster_desc) {
     mesh_shader.pipeline = 0;
     shader_hot_reload_reset_function_constant_variants(cast(*Shader_Base) mesh_shader);
     return true;
@@ -578,7 +578,7 @@ END, binding_code, task_name, mesh_name, fragment_name, task_name, mesh_name, fr
     if default_constants_expr.count != 0 {
         return tprint(#string END
 %
-if shader_hot_reload_raster_desc_is_dynamic(mesh_desc.raster_desc) {
+if is_dynamic(mesh_desc.raster_desc) {
     mesh_shader.pipeline = 0;
     shader_hot_reload_reset_function_constant_variants(cast(*Shader_Base) mesh_shader);
     return true;
@@ -593,7 +593,7 @@ END, binding_code, default_constants_expr, mesh_name, fragment_name, mesh_name, 
 
     return tprint(#string END
 %
-if shader_hot_reload_raster_desc_is_dynamic(mesh_desc.raster_desc) {
+if is_dynamic(mesh_desc.raster_desc) {
     mesh_shader.pipeline = 0;
     shader_hot_reload_reset_function_constant_variants(cast(*Shader_Base) mesh_shader);
     return true;
@@ -616,7 +616,7 @@ mesh_init_with_constants_code :: (
     if task_name.count != 0 {
         return tprint(#string END
 %
-if shader_hot_reload_raster_desc_is_dynamic(mesh_desc.raster_desc) {
+if is_dynamic(mesh_desc.raster_desc) {
     mesh_shader.pipeline = 0;
     shader_hot_reload_reset_function_constant_variants(cast(*Shader_Base) mesh_shader);
     return true;
@@ -630,7 +630,7 @@ END, binding_code, task_name, mesh_name, fragment_name, task_name, mesh_name, fr
 
     return tprint(#string END
 %
-if shader_hot_reload_raster_desc_is_dynamic(mesh_desc.raster_desc) {
+if is_dynamic(mesh_desc.raster_desc) {
     mesh_shader.pipeline = 0;
     shader_hot_reload_reset_function_constant_variants(cast(*Shader_Base) mesh_shader);
     return true;
@@ -667,8 +667,8 @@ shader_api_mesh_render_pass_variant_code :: (
     %
     resolved_mesh_desc := mesh_desc;
     resolved_dynamic_raster_desc := false;
-    if shader_hot_reload_raster_desc_is_dynamic(mesh_desc.raster_desc) {
-        resolved_raster_desc, ok := shader_hot_reload_resolve_dynamic_raster_desc(mesh_desc.raster_desc, pass_desc);
+    if is_dynamic(mesh_desc.raster_desc) {
+        resolved_raster_desc, ok := resolve_dynamic_raster_desc(mesh_desc.raster_desc, pass_desc, debug_label="render_pass_variant");
         assert(ok, "Could not resolve dynamic render-target layout for mesh shader.");
         resolved_mesh_desc.raster_desc = resolved_raster_desc;
         resolved_dynamic_raster_desc = true;
@@ -686,8 +686,8 @@ END, binding_code, default_constants_expr);
     %
     resolved_mesh_desc := mesh_desc;
     resolved_dynamic_raster_desc := false;
-    if shader_hot_reload_raster_desc_is_dynamic(mesh_desc.raster_desc) {
-        resolved_raster_desc, ok := shader_hot_reload_resolve_dynamic_raster_desc(mesh_desc.raster_desc, pass_desc);
+    if is_dynamic(mesh_desc.raster_desc) {
+        resolved_raster_desc, ok := resolve_dynamic_raster_desc(mesh_desc.raster_desc, pass_desc, debug_label="render_pass_variant2");
         assert(ok, "Could not resolve dynamic render-target layout for mesh shader.");
         resolved_mesh_desc.raster_desc = resolved_raster_desc;
         resolved_dynamic_raster_desc = true;
@@ -709,8 +709,8 @@ shader_api_mesh_render_pass_variant_with_constants_code :: (
     %
     resolved_mesh_desc := mesh_desc;
     resolved_dynamic_raster_desc := false;
-    if shader_hot_reload_raster_desc_is_dynamic(mesh_desc.raster_desc) {
-        resolved_raster_desc, ok := shader_hot_reload_resolve_dynamic_raster_desc(mesh_desc.raster_desc, pass_desc);
+    if is_dynamic(mesh_desc.raster_desc) {
+        resolved_raster_desc, ok := resolve_dynamic_raster_desc(mesh_desc.raster_desc, pass_desc, debug_label="mesh shader");
         assert(ok, "Could not resolve dynamic render-target layout for mesh shader.");
         resolved_mesh_desc.raster_desc = resolved_raster_desc;
         resolved_dynamic_raster_desc = true;

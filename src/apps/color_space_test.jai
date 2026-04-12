@@ -2,8 +2,6 @@
 #load "shaders/color_space_test_shader.jai";
 
 color_space_test_shader: Shader(fullscreen_tri_vert, color_space_test_fragment_main, .{
-    cull = .NONE,
-    derive_attachment_formats_from_render_pass = true,
 });
 
 Color_Space_Test_Params_CPU :: CPU_Struct(Color_Space_Test_Params);
