@@ -588,7 +588,7 @@ draw_ui :: () {
 
 #load "../SGPU_App_Common.jai";
 #load "../editor_camera.jai";
-#load "procedural_geometry.jai";
+#import "Procedural_Geometry";
 #import "Jai-Shader-Transpiler";
 #import "Jai-Shader-Transpiler/modules/ShaderFuncs";
 #import "Jai-Shader-Transpiler/modules/ShaderLib";

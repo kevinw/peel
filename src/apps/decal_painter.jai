@@ -422,7 +422,7 @@ decal_painter_ray_intersect_plane :: (ray_origin: Vector3, ray_dir: Vector3, pla
 
 #load "../SGPU_App_Common.jai";
 #load "../editor_camera.jai";
-#load "procedural_geometry.jai";
+#import "Procedural_Geometry";
 #import "Jai-Shader-Transpiler";
 #import "Jai-Shader-Transpiler/modules/ShaderFuncs";
 #import "Math";
