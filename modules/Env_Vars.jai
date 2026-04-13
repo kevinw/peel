@@ -1,9 +1,12 @@
-try_parse_env_int :: (name: string, into_value: *$T) {
+try_parse_env_int :: (name: string, into_value: *$T) -> bool {
     assert(into_value != null);
     env_val, set := try_parse_env_int(name);
     if set {
         into_value.* = cast(T)env_val;
+        return true;
     }
+
+    return false;
 }
 
 try_parse_env_int :: (name: string) -> (s64, bool) {

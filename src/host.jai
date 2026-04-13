@@ -14,14 +14,20 @@ Note: this host doesn't even open a window, or initialize a graphics API.
 */
 
 #load "app_list.jai";
+
+gpu_validation := !RELEASE;
+
 #if OS == .MACOS && !SINGLE_BINARY {
     #load "Peel_MacOS_Runtime.jai";
 }
+
 
 main :: () {
     start := seconds_since_init();
 
     VERBOSE :: true;
+
+    parse_globals_file();
 
     #if !RELEASE {
         Debug.init();
@@ -94,11 +100,8 @@ main :: () {
 
     env_max_frames, did_parse := try_parse_env_int("PEEL_MAX_FRAMES");
     if did_parse {
-        if max_frames == 0
-            max_frames = env_max_frames;
-        else
-            max_frames = min(env_max_frames, max_frames);
-    } else {
+        if max_frames == 0 max_frames = env_max_frames;
+        else max_frames = min(env_max_frames, max_frames);
     }
 
 
@@ -197,13 +200,12 @@ main :: () {
 #scope_file
 
 setup_env_vars :: () {
-    #if RELEASE return;
-
     #if OS == .MACOS {
-        if !perf_gpu_validation_enabled() return;
+        validation_enabled := perf_gpu_validation_enabled();
+        if !validation_enabled return;
 
-        using,only(setenv) POSIX :: #import "POSIX";
-        setenv("MTL_SHADER_VALIDATION", "1", 1);
+        log("Enabling Metal Validation Layers...");
+        setenv("MTL_SHADER_VALIDATION", "1", __overwrite=1);
         setenv("MTL_SHADER_VALIDATION_REPORT_TO_STDERR", "1", 1);
         setenv("MTL_LOG_TO_STDERR", "1", 1);
         setenv("MTL_DEBUG_LAYER", "1", 1);
@@ -213,17 +215,19 @@ setup_env_vars :: () {
 }
 
 #if OS == .MACOS {
+
     perf_gpu_validation_enabled :: () -> bool {
-        using,only(getenv) POSIX :: #import "POSIX";
-        v := getenv("PEEL_GPU_VALIDATION");
-        if v == null return true;
-        if v[0] == #char "0" return false;
-        return true;
+        if !gpu_validation {
+            return false;
+        }
+        env_val: bool;
+        if try_parse_env_int("PEEL_GPU_VALIDATION", *env_val) {
+            return env_val;
+        }
+        return !RELEASE;
     }
 } else {
-    perf_gpu_validation_enabled :: () -> bool {
-        return false;
-    }
+    perf_gpu_validation_enabled :: () -> bool { return false; }
 }
 
 
@@ -368,9 +372,13 @@ File_Utilities :: #import "File_Utilities";
 #import "Basic";
 #import "Host_App_Common";
 #if OS == {
-case .WINDOWS; #load "./Windows_DLL_Paths.jai";
-case .MACOS;   #import "Objective_C";
+case .WINDOWS;
+    #load "./Windows_DLL_Paths.jai";
+case .MACOS;
+    #import "Objective_C";
+    using,only(setenv) POSIX :: #import "POSIX";
 }
 Debug :: #import "Debug"(USE_GRAPHICS=false);
 did_render_first_frame := false;
 #import "Env_Vars";
+#load "config_file.jai";
