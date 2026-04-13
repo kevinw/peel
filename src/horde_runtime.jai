@@ -139,9 +139,9 @@ Horde_Runtime :: struct {
     bindings: Horde_Bindings;
 
     gpu_arena: Gpu_Arena;
-    instances: Gpu_View(Scene_Instance);
-    draw_params: Gpu_View(Scene_Draw_Params_CPU);
-    indirect_args: Gpu_View(Indexed_Indirect_Draw_Args);
+    instances: Gpu_Frame_View(Scene_Instance);
+    draw_params: Gpu_Frame_View(Scene_Draw_Params_CPU);
+    indirect_args: Gpu_Frame_View(Indexed_Indirect_Draw_Args);
 
     mask_model_index: s32 = -1;
 
@@ -377,44 +377,48 @@ reset :: (using runtime: *Horde_Runtime, horde_bindings: Horde_Bindings, camera_
 
     max_instance_count := cast(s64) max_count * render_meshes.count;
     arena_bytes :=
-        max(cast(s64) 1, max_instance_count) * size_of(Scene_Instance) +
-        max(cast(s64) 1, draw_groups.count) * size_of(Scene_Draw_Params_CPU) +
-        max(cast(s64) 1, draw_groups.count) * size_of(Indexed_Indirect_Draw_Args) +
+        max(cast(s64) 1, max_instance_count) * size_of(Scene_Instance) * SGPU_FRAMES_IN_FLIGHT +
+        max(cast(s64) 1, draw_groups.count) * size_of(Scene_Draw_Params_CPU) * SGPU_FRAMES_IN_FLIGHT +
+        max(cast(s64) 1, draw_groups.count) * size_of(Indexed_Indirect_Draw_Args) * SGPU_FRAMES_IN_FLIGHT +
         1024;
     gpu_arena = gpu_make_arena(arena_bytes, label = "horde runtime arena");
     assert(gpu_arena.cpu != null, "Failed to create horde runtime arena.");
-    instances = gpu_alloc_view(*gpu_arena, Scene_Instance, max_instance_count);
-    draw_params = gpu_alloc_view(*gpu_arena, Scene_Draw_Params_CPU, draw_groups.count);
-    indirect_args = gpu_alloc_view(*gpu_arena, Indexed_Indirect_Draw_Args, draw_groups.count);
+    instances = sgpu_make_frame_view(*gpu_arena, Scene_Instance, max_instance_count);
+    draw_params = sgpu_make_frame_view(*gpu_arena, Scene_Draw_Params_CPU, draw_groups.count);
+    indirect_args = sgpu_make_frame_view(*gpu_arena, Indexed_Indirect_Draw_Args, draw_groups.count);
     gpu_commit_residency();
 
-    for group, group_index: draw_groups {
-        mesh := scene_geo.meshes[group.mesh_index];
-        draw_params.cpu[group_index] = .{
-            vertices = scene_geo.vertices.gpu,
-            indices = scene_geo.indices.gpu + (mesh.first_index * size_of(u32)).(Gpu_Ptr),
-            materials = scene_geo.materials.gpu,
-            instances = 0,
-            morph_vertex_deltas = 0,
-            morph_weights = 0,
-            skin_matrices = 0,
-            view_proj = Matrix4_Identity,
-            light_dir = normalize(Vector3.{0.35, -1.0, 0.25}),
-            sun_params = .{sun_strength, time_of_day, 0.0, 0.0},
-            camera_pos = camera_pos,
-            material_index = mesh.material_index,
-            object_id = 0,
-            mesh_base_vertex = mesh.base_vertex,
-            skin_matrix_count = 0,
-            morph_target_count = 0,
-            morph_vertex_count = 0,
-        };
-        indirect_args.cpu[group_index] = .{
-            vertex_count = mesh.index_count,
-            instance_count = 0,
-            vertex_start = 0,
-            base_instance = 0,
-        };
+    for frame_i: 0..SGPU_FRAMES_IN_FLIGHT-1 {
+        frame_draw_params := sgpu_frame_view_slot(*draw_params, frame_i);
+        frame_indirect_args := sgpu_frame_view_slot(*indirect_args, frame_i);
+        for group, group_index: draw_groups {
+            mesh := scene_geo.meshes[group.mesh_index];
+            frame_draw_params.cpu[group_index] = .{
+                vertices = scene_geo.vertices.gpu,
+                indices = scene_geo.indices.gpu + (mesh.first_index * size_of(u32)).(Gpu_Ptr),
+                materials = scene_geo.materials.gpu,
+                instances = 0,
+                morph_vertex_deltas = 0,
+                morph_weights = 0,
+                skin_matrices = 0,
+                view_proj = Matrix4_Identity,
+                light_dir = normalize(Vector3.{0.35, -1.0, 0.25}),
+                sun_params = .{sun_strength, time_of_day, 0.0, 0.0},
+                camera_pos = camera_pos,
+                material_index = mesh.material_index,
+                object_id = 0,
+                mesh_base_vertex = mesh.base_vertex,
+                skin_matrix_count = 0,
+                morph_target_count = 0,
+                morph_vertex_count = 0,
+            };
+            frame_indirect_args.cpu[group_index] = .{
+                vertex_count = mesh.index_count,
+                instance_count = 0,
+                vertex_start = 0,
+                base_instance = 0,
+            };
+        }
     }
 
     PhysicsSystem_OptimizeBroadPhase(Physics.physics.system);
@@ -478,7 +482,10 @@ update :: (runtime: *Horde_Runtime, dt: float) {
 }
 
 prepare_render :: (using runtime: *Horde_Runtime, view_proj: Matrix4, shadow_binding: Vector4, camera_pos: Vector3, sun_strength: float, time_of_day: float) {
-    if enemies.count == 0 || draw_groups.count == 0 || instances.cpu.data == null return;
+    current_instances := sgpu_frame_view_slot(*instances);
+    current_draw_params := sgpu_frame_view_slot(*draw_params);
+    current_indirect_args := sgpu_frame_view_slot(*indirect_args);
+    if enemies.count == 0 || draw_groups.count == 0 || current_instances.cpu.data == null return;
     visible_count_debug = 0;
     render_instance_count_debug = 0;
 
@@ -544,7 +551,7 @@ prepare_render :: (using runtime: *Horde_Runtime, view_proj: Matrix4, shadow_bin
             }
             flash_mix := clamp(it.hit_flash_t * 9.0, 0.0, 1.0);
             tint := lerp(it.tint, Vector4.{3.2, 3.2, 3.2, 1.0}, flash_mix);
-            instances.cpu[write_index] = .{
+            current_instances.cpu[write_index] = .{
                 world = world,
                 tint = tint,
                 shadow_view_proj = bindings.shadow_map.view_proj,
@@ -557,16 +564,16 @@ prepare_render :: (using runtime: *Horde_Runtime, view_proj: Matrix4, shadow_bin
 
     for group, group_index: draw_groups {
         mesh := scene_geo.meshes[group.mesh_index];
-        group_draw_params := *draw_params.cpu[group_index];
+        group_draw_params := *current_draw_params.cpu[group_index];
         group_draw_params.indices = scene_geo.indices.gpu + (mesh.first_index * size_of(u32)).(Gpu_Ptr);
-        group_draw_params.instances = instances.gpu + (group.first_instance * size_of(Scene_Instance)).(Gpu_Ptr);
+        group_draw_params.instances = current_instances.gpu + (group.first_instance * size_of(Scene_Instance)).(Gpu_Ptr);
         group_draw_params.view_proj = view_proj;
         group_draw_params.camera_pos = camera_pos;
         group_draw_params.light_dir = bindings.shadow_map.light_dir;
         group_draw_params.sun_params = .{sun_strength, time_of_day, 0.0, 0.0};
         group_draw_params.material_index = mesh.material_index;
         group_draw_params.mesh_base_vertex = mesh.base_vertex;
-        indirect_args.cpu[group_index] = .{
+        current_indirect_args.cpu[group_index] = .{
             vertex_count = mesh.index_count,
             instance_count = group.instance_count,
             vertex_start = 0,
@@ -576,32 +583,36 @@ prepare_render :: (using runtime: *Horde_Runtime, view_proj: Matrix4, shadow_bin
 }
 
 draw_shadow :: (using runtime: *Horde_Runtime, cmd_buff: Gpu_Command_Buffer, pipeline: Gpu_Pipeline) {
-    if draw_groups.count == 0 || draw_params.cpu.data == null || indirect_args.cpu.data == null return;
+    current_draw_params := sgpu_frame_view_slot(*draw_params);
+    current_indirect_args := sgpu_frame_view_slot(*indirect_args);
+    if draw_groups.count == 0 || current_draw_params.cpu.data == null || current_indirect_args.cpu.data == null return;
     gpu_set_pipeline(cmd_buff, pipeline);
     for group: draw_groups {
         if group.instance_count == 0 continue;
-        params_gpu := draw_params.gpu + (it_index * size_of(Scene_Draw_Params_CPU)).(Gpu_Ptr);
+        params_gpu := current_draw_params.gpu + (it_index * size_of(Scene_Draw_Params_CPU)).(Gpu_Ptr);
         mesh := bindings.scene_geo.meshes[group.mesh_index];
         if direct_draw_debug {
             gpu_draw_instanced_direct(cmd_buff, params_gpu, mesh.index_count, group.instance_count);
         } else {
-            args_gpu := indirect_args.gpu + (it_index * size_of(Indexed_Indirect_Draw_Args)).(Gpu_Ptr);
+            args_gpu := current_indirect_args.gpu + (it_index * size_of(Indexed_Indirect_Draw_Args)).(Gpu_Ptr);
             gpu_draw_instanced_indirect(cmd_buff, params_gpu, params_gpu, args_gpu);
         }
     }
 }
 
 draw_main :: (using runtime: *Horde_Runtime, cmd_buff: Gpu_Command_Buffer, pipeline: Gpu_Pipeline) {
-    if draw_groups.count == 0 || draw_params.cpu.data == null || indirect_args.cpu.data == null return;
+    current_draw_params := sgpu_frame_view_slot(*draw_params);
+    current_indirect_args := sgpu_frame_view_slot(*indirect_args);
+    if draw_groups.count == 0 || current_draw_params.cpu.data == null || current_indirect_args.cpu.data == null return;
     gpu_set_pipeline(cmd_buff, pipeline);
     for group: draw_groups {
         if group.instance_count == 0 continue;
-        params_gpu := draw_params.gpu + (it_index * size_of(Scene_Draw_Params_CPU)).(Gpu_Ptr);
+        params_gpu := current_draw_params.gpu + (it_index * size_of(Scene_Draw_Params_CPU)).(Gpu_Ptr);
         mesh := bindings.scene_geo.meshes[group.mesh_index];
         if direct_draw_debug {
             gpu_draw_instanced_direct(cmd_buff, params_gpu, mesh.index_count, group.instance_count);
         } else {
-            args_gpu := indirect_args.gpu + (it_index * size_of(Indexed_Indirect_Draw_Args)).(Gpu_Ptr);
+            args_gpu := current_indirect_args.gpu + (it_index * size_of(Indexed_Indirect_Draw_Args)).(Gpu_Ptr);
             gpu_draw_instanced_indirect(cmd_buff, params_gpu, params_gpu, args_gpu);
         }
     }
