@@ -20,7 +20,6 @@ Meshlet_Grid_Draw_Batch :: struct {
     max_meshlet_count: u32;
 }
 
-
 MESHLET_LIZARD_MODEL_PATH :: "models/nerdy+lizard+3d+model.glb";
 MESHLET_LIZARD_INSTANCE_COUNT :: 240;
 MESHLET_LIZARD_GRID_COLS :: 15;
@@ -78,8 +77,7 @@ on_dll_init :: () {
     model_paths := string.[MESHLET_LIZARD_MODEL_PATH];
     scene_geo_init(*geo, model_paths);
     model_index = 0;
-    assert(geo.meshlet_meshes.cpu.count == geo.meshes.count,
-        "scene_geo meshlet metadata count mismatch.");
+    assert(geo.meshlet_meshes.cpu.count == geo.meshes.count, "scene_geo meshlet metadata count mismatch.");
     assert(geo.max_meshlet_count > 0, "scene_geo meshlet generation produced no meshlets.");
 
     rebuild_meshlet_lizard_scene();
@@ -219,7 +217,6 @@ show_ui :: () {
     defer End();
     if !Begin("Meshlet Lizard Grid") return;
 
-    Text("Model: %", MESHLET_LIZARD_MODEL_PATH);
     Text("Batches: %  Instances: %", batches.count, MESHLET_LIZARD_INSTANCE_COUNT);
     Text("Max Meshlets / Mesh: %", geo.max_meshlet_count);
     Text("Mesh Grid Limit: %", mesh_grid_limit);

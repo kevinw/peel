@@ -200,6 +200,11 @@ shader_hot_reload_create_and_register_mesh_pipeline_with_entry_id :: (entry_id: 
     }
 
     if new_pipeline == 0 {
+        log_error("% falling back to source mesh compile with function constants for id=%", reload.log_prefix, entry_id);
+        new_pipeline = shader_hot_reload_mesh_pipeline_from_source_with_function_constants(shader, desc, constants);
+    }
+
+    if new_pipeline == 0 {
         shader_hot_reload_set_error(reload, tprint("% mesh pipeline creation with function constants failed for id=%", reload.log_prefix, entry_id));
     }
 
@@ -549,6 +554,63 @@ shader_hot_reload_graphics_pipeline_from_source_with_function_constants :: (
         library, library, raster_desc, vertex_function_name, fragment_function_name, vertex_constants, fragment_constants);
 }
 
+shader_hot_reload_mesh_pipeline_from_source_with_function_constants :: (
+    shader: JTS.Transpiled_Mesh_Pipeline,
+    desc: Gpu_Mesh_Pipeline_Desc,
+    constants: *$T
+) -> Gpu_Pipeline {
+    auto_release_temp();
+    mesh_library := shader_hot_reload_new_library_from_source_or_return_0(cast([]u8) shader.mesh_source, "mesh shader");
+    if mesh_library == null return 0;
+    defer release(mesh_library);
+
+    pixel_library := shader_hot_reload_new_library_from_source_or_return_0(cast([]u8) shader.pixel_source, "fragment shader");
+    if pixel_library == null return 0;
+    defer release(pixel_library);
+
+    task_library: *MTLLibrary = mesh_library;
+    if shader.task_source.count != 0 && (shader.task_source.count != shader.mesh_source.count || shader.task_source.data != shader.mesh_source.data) {
+        task_library = shader_hot_reload_new_library_from_source_or_return_0(cast([]u8) shader.task_source, "task shader");
+        if task_library == null return 0;
+    }
+    defer if task_library != mesh_library {
+        release(task_library);
+    }
+
+    mesh_function_name := tprint("%_MeshMain", shader.meta.request_name);
+    fragment_function_name := tprint("%_FragmentMain", shader.meta.request_name);
+    task_function_name := tprint("%_ObjectMain", shader.meta.request_name);
+
+    mesh_function := shader_hot_reload_get_function_from_library(mesh_library, mesh_function_name, "MeshMain");
+    assert(mesh_function != null, "Failed to find mesh function '%' in source mesh shader.", mesh_function_name);
+    defer release(mesh_function);
+
+    fragment_function := shader_hot_reload_get_function_from_library(pixel_library, fragment_function_name, "FragmentMain");
+    assert(fragment_function != null, "Failed to find fragment function '%' in source fragment shader.", fragment_function_name);
+    defer release(fragment_function);
+
+    task_constants: *MTLFunctionConstantValues;
+    if shader.task_source.count != 0 {
+        object_function := shader_hot_reload_get_function_from_library(task_library, task_function_name, "ObjectMain");
+        assert(object_function != null, "Failed to find task function '%' in source task shader.", task_function_name);
+        defer release(object_function);
+        task_constants = shader_hot_reload_build_function_constant_values_for_function(object_function, constants);
+    }
+
+    mesh_constants := shader_hot_reload_build_function_constant_values_for_function(mesh_function, constants);
+    fragment_constants := shader_hot_reload_build_function_constant_values_for_function(fragment_function, constants);
+    defer if task_constants != null release(task_constants);
+    defer if mesh_constants != null release(mesh_constants);
+    defer if fragment_constants != null release(fragment_constants);
+
+    final_desc := desc;
+    final_desc.task_shader = cast([]u8) shader.task_source;
+    final_desc.mesh_shader = cast([]u8) shader.mesh_source;
+    final_desc.pixel_shader = cast([]u8) shader.pixel_source;
+    final_desc.payload_memory_length = cast(u32) shader.payload_memory_length;
+    return gpu_create_mesh_pipeline_with_function_constants(final_desc, task_constants, mesh_constants, fragment_constants);
+}
+
 create_graphics_pipeline_with_function_constants :: (
     source: []u8,
     shader_meta: JTS.Shader_Meta,
@@ -593,40 +655,41 @@ create_mesh_pipeline_with_function_constants :: (
     constants: *$T
 ) -> Gpu_Pipeline {
     reload := shader_hot_reload_current_ctx();
-    assert(shader.meta.entry_id.count > 0, "Missing shader hot-reload entry id for mesh pipeline.");
-    if reload == null || !reload.enabled return 0;
+    if reload != null && reload.enabled && shader.meta.entry_id.count != 0 {
+        entry := SRM.shader_reload_manifest_find_entry(*reload.watcher.manifest, shader.meta.entry_id);
+        if entry != null {
+            metallib_path, found := SRM.shader_reload_manifest_find_entry_metallib_for_manifest(*reload.watcher.manifest, entry, *reload.watcher.paths);
+            if found && entry.metal_mesh_entry.count != 0 && entry.metal_fragment_entry.count != 0 {
+                constants_bytes, info_storage := shader_hot_reload_capture_function_constant_state(constants);
+                defer free(constants_bytes.data);
+                defer {
+                    for info_storage {
+                        if it.name.count != 0 free(it.name.data);
+                    }
+                    if info_storage.count != 0 free(info_storage.data);
+                }
 
-    entry := SRM.shader_reload_manifest_find_entry(*reload.watcher.manifest, shader.meta.entry_id);
-    if entry == null return 0;
+                task_constants: *MTLFunctionConstantValues;
+                if entry.metal_task_entry.count != 0 {
+                    task_constants = shader_hot_reload_build_function_constant_values_for_metallib_function(
+                        metallib_path, entry.metal_task_entry, constants_bytes, info_storage);
+                }
+                mesh_constants := shader_hot_reload_build_function_constant_values_for_metallib_function(
+                    metallib_path, entry.metal_mesh_entry, constants_bytes, info_storage);
+                fragment_constants := shader_hot_reload_build_function_constant_values_for_metallib_function(
+                    metallib_path, entry.metal_fragment_entry, constants_bytes, info_storage);
+                defer if task_constants != null release(task_constants);
+                defer if mesh_constants != null release(mesh_constants);
+                defer if fragment_constants != null release(fragment_constants);
 
-    metallib_path, found := SRM.shader_reload_manifest_find_entry_metallib_for_manifest(*reload.watcher.manifest, entry, *reload.watcher.paths);
-    if !found return 0;
-
-    constants_bytes, info_storage := shader_hot_reload_capture_function_constant_state(constants);
-    defer free(constants_bytes.data);
-    defer {
-        for info_storage {
-            if it.name.count != 0 free(it.name.data);
+                return gpu_create_mesh_pipeline_from_metallib_with_function_constants(
+                    metallib_path, entry.metal_task_entry, entry.metal_mesh_entry, entry.metal_fragment_entry, desc,
+                    task_constants, mesh_constants, fragment_constants);
+            }
         }
-        if info_storage.count != 0 free(info_storage.data);
     }
 
-    task_constants: *MTLFunctionConstantValues;
-    if entry.metal_task_entry.count != 0 {
-        task_constants = shader_hot_reload_build_function_constant_values_for_metallib_function(
-            metallib_path, entry.metal_task_entry, constants_bytes, info_storage);
-    }
-    mesh_constants := shader_hot_reload_build_function_constant_values_for_metallib_function(
-        metallib_path, entry.metal_mesh_entry, constants_bytes, info_storage);
-    fragment_constants := shader_hot_reload_build_function_constant_values_for_metallib_function(
-        metallib_path, entry.metal_fragment_entry, constants_bytes, info_storage);
-    defer if task_constants != null release(task_constants);
-    defer if mesh_constants != null release(mesh_constants);
-    defer if fragment_constants != null release(fragment_constants);
-
-    return gpu_create_mesh_pipeline_from_metallib_with_function_constants(
-        metallib_path, entry.metal_task_entry, entry.metal_mesh_entry, entry.metal_fragment_entry, desc,
-        task_constants, mesh_constants, fragment_constants);
+    return shader_hot_reload_mesh_pipeline_from_source_with_function_constants(shader, desc, constants);
 }
 
 shader_hot_reload_get_or_create_graphics_pipeline_variant :: (
