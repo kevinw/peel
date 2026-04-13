@@ -42,6 +42,14 @@ editor_camera_forward :: (using camera: Editor_Camera) -> Vector3 {
 }
 
 editor_camera_basis :: (using camera: Editor_Camera, forward: *Vector3, right: *Vector3, up: *Vector3) {
+    f, r, u := editor_camera_basis(camera);
+
+    forward.* = f;
+    right.* = r;
+    up.* = u;
+}
+
+editor_camera_basis :: (using camera: Editor_Camera) -> (forward: Vector3, right: Vector3, up: Vector3) {
     f := editor_camera_forward_from_angles(yaw, pitch);
     normalize(*f, fallback = .{0.0, 0.0, -1.0});
 
@@ -56,9 +64,7 @@ editor_camera_basis :: (using camera: Editor_Camera, forward: *Vector3, right: *
     u := cross(r, f);
     normalize(*u, fallback = up_axis);
 
-    forward.* = f;
-    right.* = r;
-    up.* = u;
+    return f, r, u;
 }
 
 editor_camera_make_view :: (camera: *Editor_Camera) -> Matrix4 {
