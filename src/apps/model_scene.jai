@@ -2,6 +2,17 @@
 
 SCENE_ROOT_PATH :: "./scenes/model_scene.scene";
 
+render_toggle: enum_flags {
+    GRASS;
+    SHADOWS;
+    HORDE;
+    SKY;
+    GROUND;
+    PHYSICS_GIZMOS;
+    SHADOW_DEBUG;
+    PICK_DEBUG;
+} = .GRASS | .SHADOWS | .HORDE | .SKY | .GROUND;
+
 Draw_Batch :: struct {
     mesh_index: u32;
     first_instance: u32;
@@ -99,7 +110,7 @@ sky_draw_params: Gpu_Buffer_Ring(Model_Scene_Sky_Params_CPU);
 debug_pick_params: Gpu_Buffer_Ring(Scene_Draw_Params_CPU);
 grass_instance_count: u32;
 grass_shadow_instance_count: u32;
-render_grass: bool = true;
+
 grass_density_scale: float = 4.0;
 grass_shadow_density_scale: float = 1.05;
 grass_jitter: float = 0.28;
@@ -109,7 +120,6 @@ grass_fade_end: float = 26.0;
 grass_far_shade_start: float = 16.0;
 grass_shadow_fade_start: float = 7.0;
 grass_shadow_fade_end: float = 16.0;
-scene_shadows_enabled: bool = true;
 ground_physics_body: u32;
 ground_physics_body_valid: bool;
 stone_physics_bodies: [..]u32;
@@ -131,9 +141,6 @@ scene_pending_select_node_index: s32 = -1;
 scene_place_palette_index: s32 = -1;
 scene_debug_logged: bool;
 autopilot_enabled: bool;
-physics_gizmos_enabled: bool;
-show_shadow_debug: bool;
-show_pick_debug: bool;
 control_mode: enum { Player; Editor; } = .Player;
 outdoor_rig: Outdoor_Rig = .{};
 graphics_shader_constants: Model_Scene_Meshlet_Constants;
@@ -315,13 +322,10 @@ tick :: () {
         using ImGui;
         if Begin("Model Scene", flags = .AlwaysAutoResize) {
             Checkbox("Autopilot", *autopilot_enabled);
-            if Checkbox("Physics Gizmos", *physics_gizmos_enabled) {
-                Physics.debug_draw_enabled = physics_gizmos_enabled;
-            }
             SliderFloat("Mesh LOD Screen Radius", *lod_screen_radius, 8.0, 1024.0, "%.1f");
             SliderFloat("Mesh LOD Power", *lod_distance_power, 0.5, 2.0, "%.2f");
+            inspect("Render Toggle", *render_toggle);
             if CollapsingHeader("Grass") {
-                Checkbox("Render Grass", *render_grass);
                 SliderFloat("Grass Density", *grass_density_scale, 0.25, 9.0, "%.2f");
                 SliderFloat("Grass Shadow Density", *grass_shadow_density_scale, 0.0, 2.0, "%.2f");
                 SliderFloat("Grass Fade Start", *grass_fade_start, 1.0, 64.0, "%.1f");
@@ -330,7 +334,6 @@ tick :: () {
                 SliderFloat("Grass Shadow Fade Start", *grass_shadow_fade_start, 1.0, 64.0, "%.1f");
                 SliderFloat("Grass Shadow Fade End", *grass_shadow_fade_end, 2.0, 96.0, "%.1f");
             }
-            Checkbox("Scene Shadows", *scene_shadows_enabled);
             do_ui(*horde_runtime);
             if Checkbox("Mediapipe Body Casts Shadows", *mediapipe_runtime.body_casts_shadows) {
                 scene_rebuild_pending = true;
@@ -338,8 +341,6 @@ tick :: () {
             if Checkbox("Mediapipe Face Casts Shadows", *mediapipe_runtime.face_casts_shadows) {
                 scene_rebuild_pending = true;
             }
-            Checkbox("Show Shadow Debug", *show_shadow_debug);
-            Checkbox("Show Pick Debug", *show_pick_debug);
             inspect("Shader Debug", *graphics_shader_constants.debug_mode);
             do_ui(*outdoor_rig);
             if animated_batches.count > 0 {
@@ -497,7 +498,7 @@ tick :: () {
     if horde_runtime.restart_requested {
         horde_reset_pending = true;
     }
-    if physics_gizmos_enabled {
+    if (render_toggle & .PHYSICS_GIZMOS != 0) {
         append_player_physics_gizmos();
         draw_physics_debug(*horde_runtime, *gizmo_ctx);
     }
@@ -509,8 +510,7 @@ tick :: () {
             scene_manip_objects_dirty = false;
         }
         process_scene_pick_result_if_ready();
-        cam_forward, cam_right, cam_up: Vector3;
-        editor_camera_basis(scene_camera, *cam_forward, *cam_right, *cam_up);
+        cam_forward, cam_right, cam_up :=  editor_camera_basis(scene_camera);
         frame := Manip_Frame_Input.{
             viewport = .{cast(float) win_w, cast(float) win_h},
             camera_pos = scene_camera.position,
@@ -562,7 +562,7 @@ tick :: () {
     ensure_scene_pick_target(cast(u32) max(1, win_w), cast(u32) max(1, win_h));
 
     update(*outdoor_rig, *shadow_map);
-    shadow_binding := ifx scene_shadows_enabled then shadow_map_binding(*shadow_map) else Vector4.{0.0, 0.0, 2.0, 0.0};
+    shadow_binding := ifx (render_toggle & .SHADOWS != 0) then shadow_map_binding(*shadow_map) else Vector4.{0.0, 0.0, 2.0, 0.0};
     prepare_render(*horde_runtime, view_proj, shadow_binding, scene_camera.position, outdoor_rig.sun_strength, outdoor_rig.time_of_day);
     maybe_log(*horde_runtime);
 
@@ -686,7 +686,7 @@ tick :: () {
 
     main_queue := gpu_get_queue(.MAIN, 0);
     result=, cmd_buff := gpu_start_command_recording(main_queue);
-    if scene_shadows_enabled {
+    if render_toggle & .SHADOWS != 0 {
         saved_shadow_skin_counts: [..]u32;
         defer array_free(saved_shadow_skin_counts);
         shadow_pass_desc: Gpu_Render_Pass_Desc = {
@@ -716,7 +716,7 @@ tick :: () {
         gpu_draw_instanced_direct(cmd_buff, current_ground_shadow_params.gpu, ground_index_count, 1);
 
         // grass shadow
-        if render_grass && current_grass_shadow_params.cpu != null && grass_shadow_instance_count > 0 {
+        if render_toggle & .GRASS != 0 && current_grass_shadow_params.cpu != null && grass_shadow_instance_count > 0 {
             gpu_set_pipeline(cmd_buff, pipeline(*grass_shadow_shader, shadow_pass_desc));
             gpu_draw_instanced_direct(cmd_buff, current_grass_shadow_params.gpu, 6, grass_shadow_instance_count);
         }
@@ -729,7 +729,9 @@ tick :: () {
             params_gpu := current_scene_draw_params.gpu + (it_index * size_of(Scene_Draw_Params_CPU)).(Gpu_Ptr);
             gpu_draw_instanced_direct(cmd_buff, params_gpu, mesh.index_count, batch.instance_count);
         }
-        draw_shadow(*horde_runtime, cmd_buff, shadow_pipeline);
+        if render_toggle & .HORDE != 0 {
+            draw_shadow(*horde_runtime, cmd_buff, shadow_pipeline);
+        }
     }
 
     if scene_pick.render_this_frame && scene_pick.view != 0 {
@@ -794,16 +796,18 @@ tick :: () {
         gpu_begin_scoped_render_pass(cmd_buff, main_pass_desc, .COLOR_ATTACHMENT_WRITE, .SHADER_READ);
 
         // sky
-        if current_sky_draw_params.cpu != null {
+        if render_toggle & .SKY != 0 && current_sky_draw_params.cpu != null {
             gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
             gpu_set_pipeline(cmd_buff, pipeline(*sky_shader, main_pass_desc));
             gpu_draw_instanced_direct(cmd_buff, current_sky_draw_params.gpu, 6, 1);
         }
 
-        gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .LESS, depth_mode = .READ | .WRITE});
-        gpu_set_pipeline(cmd_buff, pipeline(*ground_shader, main_pass_desc, graphics_shader_constants));
-        gpu_draw_instanced_direct(cmd_buff, current_ground_draw_params.gpu, ground_index_count, 1);
-        if render_grass && current_grass_draw_params.cpu != null && grass_instance_count > 0 {
+        if render_toggle & .GROUND != 0 {
+            gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .LESS, depth_mode = .READ | .WRITE});
+            gpu_set_pipeline(cmd_buff, pipeline(*ground_shader, main_pass_desc, graphics_shader_constants));
+            gpu_draw_instanced_direct(cmd_buff, current_ground_draw_params.gpu, ground_index_count, 1);
+        }
+        if render_toggle & .GRASS != 0 && current_grass_draw_params.cpu != null && grass_instance_count > 0 {
             gpu_set_pipeline(cmd_buff, pipeline(*grass_shader, main_pass_desc));
             gpu_draw_instanced_direct(cmd_buff, current_grass_draw_params.gpu, 6, grass_instance_count);
         }
@@ -819,7 +823,7 @@ tick :: () {
 
             animated_batch_index := find_animated_batch_index_for_batch(cast(s32) it_index);
             meshlet_flags := Model_Scene_Meshlet_Flags.HAS_LODS;
-            if scene_shadows_enabled meshlet_flags |= .HAS_SHADOWS;
+            if render_toggle & .SHADOWS != 0 meshlet_flags |= .HAS_SHADOWS;
             if mesh.morph_target_count > 0 meshlet_flags |= .HAS_MORPHS;
             if animated_batch_index >= 0 meshlet_flags |= .HAS_SKINNING;
             mesh_constants := Model_Scene_Meshlet_Constants.{
@@ -892,23 +896,25 @@ tick :: () {
             }
         }
 
-        graphics_pipeline := pipeline(*graphics_shader, main_pass_desc, graphics_shader_constants);
-        gpu_set_pipeline(cmd_buff, graphics_pipeline);
-        draw_main(*horde_runtime, cmd_buff, graphics_pipeline);
+        if render_toggle & .HORDE {
+            graphics_pipeline := pipeline(*graphics_shader, main_pass_desc, graphics_shader_constants);
+            gpu_set_pipeline(cmd_buff, graphics_pipeline);
+            draw_main(*horde_runtime, cmd_buff, graphics_pipeline);
+        }
 
-        should_draw_gizmos := physics_gizmos_enabled || control_mode == .Editor || horde_runtime.projectile_active_count > 0 || horde_runtime.spider_active_count > 0 || horde_runtime.powerup_active_count > 0 || horde_runtime.pillar_active_count > 0;
+        should_draw_gizmos := (render_toggle & .PHYSICS_GIZMOS != 0) || control_mode == .Editor || horde_runtime.projectile_active_count > 0 || horde_runtime.spider_active_count > 0 || horde_runtime.powerup_active_count > 0 || horde_runtime.pillar_active_count > 0;
         if should_draw_gizmos {
             Gizmo_Render.gizmo_render_draw(*gizmo_render_ctx, cmd_buff, *gizmo_ctx, viewport, depth_mode = .TEST);
             Gizmo_Render.gizmo_render_draw(*gizmo_overlay_render_ctx, cmd_buff, *gizmo_overlay_ctx, viewport, depth_mode = .NONE);
         }
 
-        if show_shadow_debug {
+        if render_toggle & .SHADOW_DEBUG != 0 {
             gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
             gpu_set_pipeline(cmd_buff, pipeline(*debug_shadow_shader, main_pass_desc));
             gpu_draw_instanced_direct(cmd_buff, current_scene_draw_params.gpu, 6, 1);
         }
 
-        if show_pick_debug && current_debug_pick_params.cpu != null {
+        if render_toggle & .PICK_DEBUG != 0 && current_debug_pick_params.cpu != null {
             gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
             gpu_set_pipeline(cmd_buff, pipeline(*debug_pick_shader, main_pass_desc));
             gpu_draw_instanced_direct(cmd_buff, current_debug_pick_params.gpu, 6, 1);
