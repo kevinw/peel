@@ -311,7 +311,7 @@ do_ui :: (using board: *Inspiration_Board) {
     last_canvas_min = .{canvas_min.x, canvas_min.y};
     last_canvas_max = .{canvas_min.x + canvas_size.x, canvas_min.y + canvas_size.y};
     canvas_hovered = IsItemHovered();
-    inspiration_consume_dropped_paths(board);
+    consume_dropped_paths(board);
 
     draw := GetWindowDrawList();
     canvas_max := ImVec2.{canvas_min.x + canvas_size.x, canvas_min.y + canvas_size.y};
@@ -330,7 +330,7 @@ do_ui :: (using board: *Inspiration_Board) {
     }
 
     if selected_index >= 0 && IsKeyPressed(.Delete) {
-        inspiration_remove_selected(board);
+        remove_selected(board);
     }
     if dirty save(board);
 }
@@ -364,8 +364,8 @@ process_input_events :: (using board: *Inspiration_Board, events: []Input.Event)
 shutdown :: (using board: *Inspiration_Board) {
     if !initialized return;
     if content_loaded save(board);
-    for *items {
-        inspiration_release_item(it);
+    for * items {
+        release_item(it);
     }
     for dropped_paths {
         if it.count != 0 free(it);
@@ -382,7 +382,7 @@ inspiration_board_on_unload :: () {
 
 #scope_file
 
-inspiration_add_image :: (using board: *Inspiration_Board, path: string, drop_world: Vector2) {
+add_image :: (using board: *Inspiration_Board, path: string, drop_world: Vector2) {
     #if _VERBOSE log("Inspiration Add: begin '%'", path);
     if !inspiration_path_looks_like_image(path) return;
 
@@ -422,9 +422,9 @@ inspiration_add_image :: (using board: *Inspiration_Board, path: string, drop_wo
         width = 320.0,
         height = 240.0,
     };
-    item.thumb_cache_path = inspiration_thumbnail_cache_path(item.source_path, item.source_modtime, item.source_size);
+    item.thumb_cache_path = thumbnail_cache_path(item.source_path, item.source_modtime, item.source_size);
     #if _VERBOSE log("Inspiration Add: thumb cache path '%'", item.thumb_cache_path);
-    inspiration_generate_thumbnail_if_needed(*item);
+    generate_thumbnail_if_needed(*item);
     #if _VERBOSE log("Inspiration Add: thumbnail ready/load attempt '%'", item.source_path);
     inspiration_load_item_thumbnail(board.*, *item);
     if item.image_width > 0 && item.image_height > 0 {
@@ -436,35 +436,35 @@ inspiration_add_image :: (using board: *Inspiration_Board, path: string, drop_wo
     #if _VERBOSE log("Inspiration Add: added '%', items=% thumb_view=% full_view=% size=%x%", item.source_path, items.count, item.thumb_view, item.full_view, item.image_width, item.image_height);
 }
 
-inspiration_consume_dropped_paths :: (using board: *Inspiration_Board) {
+consume_dropped_paths :: (using board: *Inspiration_Board) {
     if dropped_paths.count <= 0 return;
     #if _VERBOSE log("Inspiration DnD: consuming % queued dropped paths", dropped_paths.count);
     drop_world := inspiration_safe_drop_world(board);
     for path: dropped_paths {
         #if _VERBOSE log("Inspiration DnD: consume '%'", path);
-        inspiration_add_image(board, path, drop_world);
+        add_image(board, path, drop_world);
         if path.count != 0 free(path);
     }
     array_reset(*dropped_paths);
     #if _VERBOSE log("Inspiration DnD: consume complete");
 }
 
-inspiration_remove_selected :: (using board: *Inspiration_Board) {
+remove_selected :: (using board: *Inspiration_Board) {
     if selected_index < 0 || selected_index >= items.count return;
     item := items[selected_index];
     array_ordered_remove_by_index(*items, cast(int) selected_index);
     inspiration_delete_item_files(item);
-    inspiration_release_item(*item);
+    release_item(*item);
     if selected_index >= items.count selected_index = cast(s32) items.count - 1;
     dirty = true;
 }
 
-inspiration_release_item :: (item: *Inspiration_Item) {
-    if item.thumb_view != 0 gpu_free_texture_view(item.thumb_view);
-    if item.full_view != 0 gpu_free_texture_view(item.full_view);
-    if item.source_path.count != 0 free(item.source_path);
-    if item.url.count != 0 free(item.url);
-    if item.thumb_cache_path.count != 0 free(item.thumb_cache_path);
+release_item :: (using item: *Inspiration_Item) {
+    if thumb_view != 0 gpu_free_texture_view(thumb_view);
+    if full_view != 0 gpu_free_texture_view(full_view);
+    if source_path.count != 0 free(source_path);
+    if url.count != 0 free(url);
+    if thumb_cache_path.count != 0 free(thumb_cache_path);
     item.* = .{};
 }
 
@@ -581,11 +581,11 @@ inspiration_draw_items :: (using board: *Inspiration_Board, draw: *ImGui.ImDrawL
 
         hovered := inspiration_point_in_rect(mouse_v, min_screen, max_screen);
         selected := selected_index == cast(s32) it_index;
-        handle_hover_mode := ifx selected then inspiration_resize_handle_hit(board.*, it.*, mouse_v) else .NONE;
+        handle_hover_mode := ifx selected then resize_handle_hit(board.*, it.*, mouse_v) else .NONE;
         interactive_hovered := hovered || handle_hover_mode != .NONE;
         if interactive_hovered hovered_index = cast(s32) it_index;
         if handle_hover_mode != .NONE && drag_mode == .NONE {
-            SetMouseCursor(inspiration_resize_cursor(handle_hover_mode));
+            SetMouseCursor(resize_cursor(handle_hover_mode));
         } else if hovered && it.url.count != 0 && drag_mode == .NONE {
             SetMouseCursor(.Hand);
         }
@@ -596,7 +596,7 @@ inspiration_draw_items :: (using board: *Inspiration_Board, draw: *ImGui.ImDrawL
         if interactive_hovered && drag_mode == .NONE && IsMouseClicked(.Right, false) {
             selected_index = cast(s32) it_index;
             context_item_index = cast(s32) it_index;
-            inspiration_set_url_buffer(board, it.url);
+            set_url_buffer(board, it.url);
             OpenPopup("InspirationItemMenu");
         }
 
@@ -621,7 +621,7 @@ inspiration_draw_items :: (using board: *Inspiration_Board, draw: *ImGui.ImDrawL
         }
     }
 
-    if drag_mode == .MOVE_ITEM || inspiration_drag_mode_is_resize(drag_mode) {
+    if drag_mode == .MOVE_ITEM || drag_mode_is_resize(drag_mode) {
         if !IsMouseDown(.Left) {
             if click_open_candidate_index >= 0 && drag_item_index == click_open_candidate_index {
                 delta_screen := mouse_v - drag_mouse_start_screen;
@@ -690,7 +690,7 @@ inspiration_draw_context_popup :: (using board: *Inspiration_Board) {
     Separator();
     if MenuItem("Delete", "Del") {
         selected_index = context_item_index;
-        inspiration_remove_selected(board);
+        remove_selected(board);
         context_item_index = -1;
         CloseCurrentPopup();
     }
@@ -698,12 +698,12 @@ inspiration_draw_context_popup :: (using board: *Inspiration_Board) {
 
 inspiration_draw_resize_handles :: (using board: Inspiration_Board, draw: *ImGui.ImDrawList, item: Inspiration_Item) {
     col := ImGui.GetColorU32(ImGui.ImVec4.{1.0, 0.78, 0.2, 1.0});
-    for handle: inspiration_handle_points(board, item) {
+    for handle: handle_points(board, item) {
         ImGui.ImDrawList.AddRectFilled(draw, .{handle.x - 4.0, handle.y - 4.0}, .{handle.x + 4.0, handle.y + 4.0}, col, 1.0);
     }
 }
 
-inspiration_handle_points :: (using board: Inspiration_Board, item: Inspiration_Item) -> [4]Vector2 {
+handle_points :: (using board: Inspiration_Board, item: Inspiration_Item) -> [4]Vector2 {
     tl := inspiration_world_to_screen(board, .{item.x, item.y});
     tr := inspiration_world_to_screen(board, .{item.x + item.width, item.y});
     bl := inspiration_world_to_screen(board, .{item.x, item.y + item.height});
@@ -711,12 +711,12 @@ inspiration_handle_points :: (using board: Inspiration_Board, item: Inspiration_
     return .[tl, tr, bl, br];
 }
 
-inspiration_resize_handle_hit :: (using board: Inspiration_Board, item: Inspiration_Item, mouse_screen: Vector2) -> Inspiration_Drag_Mode {
-    points := inspiration_handle_points(board, item);
-    if inspiration_point_near(mouse_screen, points[0], 8.0) return .RESIZE_TL;
-    if inspiration_point_near(mouse_screen, points[1], 8.0) return .RESIZE_TR;
-    if inspiration_point_near(mouse_screen, points[2], 8.0) return .RESIZE_BL;
-    if inspiration_point_near(mouse_screen, points[3], 8.0) return .RESIZE_BR;
+resize_handle_hit :: (using board: Inspiration_Board, item: Inspiration_Item, mouse_screen: Vector2) -> Inspiration_Drag_Mode {
+    points := handle_points(board, item);
+    if point_near(mouse_screen, points[0], 8.0) return .RESIZE_TL;
+    if point_near(mouse_screen, points[1], 8.0) return .RESIZE_TR;
+    if point_near(mouse_screen, points[2], 8.0) return .RESIZE_BL;
+    if point_near(mouse_screen, points[3], 8.0) return .RESIZE_BR;
     return .NONE;
 }
 
@@ -842,7 +842,7 @@ inspiration_load_item_thumbnail :: (using board: Inspiration_Board, item: *Inspi
     #if _VERBOSE log("Inspiration Thumb: load complete '%', texture=% view=% size=%x%", item.thumb_cache_path, texture, view, width, height);
 }
 
-inspiration_generate_thumbnail_if_needed :: (item: *Inspiration_Item) {
+generate_thumbnail_if_needed :: (item: *Inspiration_Item) {
     if File_Utilities.file_exists(item.thumb_cache_path) {
         #if _VERBOSE log("Inspiration Thumb: cache hit '%'", item.thumb_cache_path);
         return;
@@ -927,16 +927,16 @@ inspiration_point_in_rect :: (p: Vector2, min: Vector2, max: Vector2) -> bool {
     return p.x >= min.x && p.y >= min.y && p.x <= max.x && p.y <= max.y;
 }
 
-inspiration_point_near :: (a: Vector2, b: Vector2, radius: float) -> bool {
+point_near :: (a: Vector2, b: Vector2, radius: float) -> bool {
     d := a - b;
     return dot(d, d) <= radius * radius;
 }
 
-inspiration_drag_mode_is_resize :: (mode: Inspiration_Drag_Mode) -> bool {
+drag_mode_is_resize :: (mode: Inspiration_Drag_Mode) -> bool {
     return mode == .RESIZE_TL || mode == .RESIZE_TR || mode == .RESIZE_BL || mode == .RESIZE_BR;
 }
 
-inspiration_resize_cursor :: (mode: Inspiration_Drag_Mode) -> ImGui.MouseCursor {
+resize_cursor :: (mode: Inspiration_Drag_Mode) -> ImGui.MouseCursor {
     if mode == {
     case .RESIZE_TL; #through;
     case .RESIZE_BR; return .ResizeNWSE;
@@ -946,7 +946,7 @@ inspiration_resize_cursor :: (mode: Inspiration_Drag_Mode) -> ImGui.MouseCursor 
     return .Arrow;
 }
 
-inspiration_thumbnail_cache_path :: (source_path: string, modtime: Apollo_Time, size: s64) -> string {
+thumbnail_cache_path :: (source_path: string, modtime: Apollo_Time, size: s64) -> string {
     key_source := tprint("%|%|%:%", source_path, size, modtime.low, modtime.high);
     key_hash := Hash.fnv1a_hash(key_source.data, key_source.count);
     return copy_string(sprint("%/%_thumb.png", INSPIRATION_THUMB_DIR, key_hash));
@@ -1129,12 +1129,12 @@ inspiration_parse_item_line :: (line: string) -> (*Inspiration_Item, bool) {
         width = cast(float) w,
         height = cast(float) h,
     };
-    item.thumb_cache_path = inspiration_thumbnail_cache_path(item.source_path, item.source_modtime, item.source_size);
-    inspiration_generate_thumbnail_if_needed(item);
+    item.thumb_cache_path = thumbnail_cache_path(item.source_path, item.source_modtime, item.source_size);
+    generate_thumbnail_if_needed(item);
     return item, true;
 }
 
-inspiration_set_url_buffer :: (using board: *Inspiration_Board, url: string) {
+set_url_buffer :: (using board: *Inspiration_Board, url: string) {
     count := min(url.count, url_input_buffer.count - 1);
     for i: 0..count-1 url_input_buffer[i] = url[i];
     url_input_buffer[count] = 0;
