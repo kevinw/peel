@@ -12,6 +12,17 @@ BroadPhaseLayers :: struct {
     NUM_LAYERS :: 2;
 }
 
+destroy :: (shape_ptr: **Shape) {
+    if shape_ptr == null return;
+
+    shape := shape_ptr.*;
+    if shape {
+        Shape_Destroy(shape);
+    }
+
+    shape_ptr.* = null;
+}
+
 set_debug_draw_procs :: () {
     using physics.debug;
 

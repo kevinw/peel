@@ -1,10 +1,3 @@
-Indexed_Indirect_Draw_Args :: struct #type_info_none {
-    vertex_count: u32;
-    instance_count: u32;
-    vertex_start: u32;
-    base_instance: u32;
-}
-
 Enemy_Collider_Kind :: enum u8 {
     SPHERE;
     CAPSULE;
@@ -53,9 +46,9 @@ Pillar_Params :: struct {
     interact_radius: float = 1.8;
     fill_duration: float = 7.0;
     world_margin: float = 8.0;
-    base_radius: float = 0.52;
-    min_height: float = 2.3;
-    max_height: float = 3.8;
+    base_radius: float = 0.7;
+    min_height: float = 5.2;
+    max_height: float = 8.2;
 }
 
 Spider_Leg_Runtime :: struct {
@@ -111,27 +104,13 @@ Pillar_Runtime :: struct {
     position: Vector3;
 }
 
-Enemy_Render_Mesh :: struct {
-    node_index: s32;
-    base_mesh_index: u32;
-    lod_mesh_start: u32;
-    lod_mesh_count: u32;
-}
-
-Enemy_Draw_Group :: struct {
-    render_mesh_index: u32;
-    lod_level: u32;
-    mesh_index: u32;
-    first_instance: u32;
-    instance_count: u32;
-}
-
 Horde_Bindings :: struct {
     scene_geo: *Scene_Geo;
     shadow_map: *Shadow_Map;
     player_controller: *Character_Controller;
     ground: *Scene_File.Scene_Procedural_Ground_Desc;
     mask_import_basis: Matrix4 = Matrix4_Identity;
+    pillar_import_basis: Matrix4 = Matrix4_Identity;
 }
 
 Horde_Runtime :: struct {
@@ -139,11 +118,12 @@ Horde_Runtime :: struct {
     bindings: Horde_Bindings;
 
     gpu_arena: Gpu_Arena;
-    instances: Gpu_Frame_View(Scene_Instance);
-    draw_params: Gpu_Frame_View(Scene_Draw_Params_CPU);
-    indirect_args: Gpu_Frame_View(Indexed_Indirect_Draw_Args);
+    meshlet_params: Gpu_Frame_Param_Allocator(Model_Scene_Meshlet_Params_CPU);
+    mask_draw_set: Mesh_Draw_Set;
+    pillar_draw_set: Mesh_Draw_Set;
 
     mask_model_index: s32 = -1;
+    pillar_model_index: s32 = -1;
 
     spawn_params: Enemy_Spawn_Params = .{};
     auto_fire_params: Auto_Fire_Params = .{};
@@ -166,6 +146,8 @@ Horde_Runtime :: struct {
     collider_kind: Enemy_Collider_Kind = .SPHERE;
     model_scale: float = 1.0;
     model_root_offset_y: float;
+    pillar_model_height: float = 1.0;
+    pillar_model_root_offset_y: float;
     mask_shape: *Shape;
     spider_shape: *Shape;
     spider_body_radius: float = 0.58;
@@ -195,8 +177,14 @@ Horde_Runtime :: struct {
     projectiles: [..]Projectile_Runtime;
     powerups: [..]Powerup_Runtime;
     pillars: [..]Pillar_Runtime;
-    render_meshes: [..]Enemy_Render_Mesh;
-    draw_groups: [..]Enemy_Draw_Group;
+
+    render_view_proj: Matrix4 = Matrix4_Identity;
+    render_camera_pos: Vector3;
+    render_shadow_binding: Vector4;
+    render_sun_strength: float;
+    render_time_of_day: float;
+    render_view_height: float = 1.0;
+    spawn_camera_pos: Vector3;
 }
 
 maybe_log :: (using horde_runtime: *Horde_Runtime) {
@@ -207,7 +195,7 @@ maybe_log :: (using horde_runtime: *Horde_Runtime) {
         alive_count,
         visible_count_debug,
         render_instance_count_debug,
-        draw_groups.count,
+        mask_draw_set.groups.count + pillar_draw_set.groups.count,
         player_health,
         spawn_params.target_alive,
         spawn_params.enabled);
@@ -226,30 +214,34 @@ enemy_body_user_data_index :: (user_data: u64) -> s32, bool {
     return cast(s32) user_data - 1, true;
 }
 
+matrix_max_scale :: (m: Matrix4) -> float {
+    axis_x := Vector3.{m._11, m._12, m._13};
+    axis_y := Vector3.{m._21, m._22, m._23};
+    axis_z := Vector3.{m._31, m._32, m._33};
+    return max(length(axis_x), max(length(axis_y), length(axis_z)));
+}
+
 
 clear :: (using runtime: *Horde_Runtime) {
-    for enemies {
-        if !it.active continue;
-        Physics.destroy_body(it.body_id);
-        if it.shape != null && it.shape != mask_shape && it.shape != spider_shape {
-            Shape_Destroy(it.shape);
+    for * enemies {
+        using it;
+        if !active continue;
+        Physics.destroy_body(body_id);
+        if shape != null && shape != mask_shape && shape != spider_shape {
+            Physics.destroy(*shape);
         }
     }
-    if mask_shape != null {
-        Shape_Destroy(mask_shape);
-        runtime.mask_shape = null;
-    }
-    if spider_shape != null {
-        Shape_Destroy(spider_shape);
-        runtime.spider_shape = null;
-    }
+
+    Physics.destroy(*mask_shape);
+    Physics.destroy(*spider_shape);
+
     if runtime.gpu_arena.cpu != null gpu_free_arena(runtime.gpu_arena);
+    clear(*mask_draw_set);
+    clear(*pillar_draw_set);
     array_reset(*enemies);
     array_reset(*projectiles);
     array_reset(*powerups);
     array_reset(*pillars);
-    array_reset(*render_meshes);
-    array_reset(*draw_groups);
     runtime.* = {};
 }
 
@@ -258,8 +250,8 @@ deinit :: (using runtime: *Horde_Runtime) {
     array_free(projectiles);
     array_free(powerups);
     array_free(pillars);
-    array_free(render_meshes);
-    array_free(draw_groups);
+    deinit(*mask_draw_set);
+    deinit(*pillar_draw_set);
     clear(runtime);
 }
 
@@ -304,6 +296,7 @@ reset :: (using runtime: *Horde_Runtime, horde_bindings: Horde_Bindings, camera_
     death_reset_delay = max(0.25, preserved_death_reset_delay);
     death_reset_t = death_reset_delay;
     bindings = horde_bindings;
+    spawn_camera_pos = camera_pos;
 
     scene_geo := horde_bindings.scene_geo;
     mask_model_index = scene_geo_model_index_by_name(scene_geo, "mask");
@@ -340,86 +333,50 @@ reset :: (using runtime: *Horde_Runtime, horde_bindings: Horde_Bindings, camera_
     array_resize(*pillars, max(cast(s64) 0, pillar_params.count));
     for *pillars it.* = .{};
 
-    model := scene_geo.models[mask_model_index];
-    for node_index: model.node_start .. model.node_start + model.node_count - 1 {
-        node := scene_geo.nodes[node_index];
-        if node.mesh_ref_count == 0 continue;
-        for mesh_ref_offset: 0..node.mesh_ref_count-1 {
-            mesh_index := scene_geo.node_mesh_refs[node.first_mesh_ref + mesh_ref_offset];
-            mesh := scene_geo.meshes[mesh_index];
-            array_add(*render_meshes, .{
-                node_index = cast(s32) node_index,
-                base_mesh_index = mesh_index,
-                lod_mesh_start = mesh.lod_mesh_start,
-                lod_mesh_count = mesh.lod_mesh_count,
-            });
-        }
+    append_model_meshes(*mask_draw_set, scene_geo, mask_model_index);
+
+    pillar_model_index = scene_geo_model_index_by_name(scene_geo, "ancient_egyptian_column");
+    if pillar_model_index < 0 {
+        log_error("no model named 'ancient_egyptian_column' found in scene geo");
+    } else {
+        pillar_bounds := scene_geo_model_bounds(scene_geo, pillar_model_index);
+        pillar_import_scale := max(matrix_max_scale(bindings.pillar_import_basis), 0.0001);
+        pillar_model_height = max((pillar_bounds.max.y - pillar_bounds.min.y) * pillar_import_scale, 0.001);
+        pillar_model_root_offset_y = -pillar_bounds.min.y * pillar_import_scale;
+        append_model_meshes(*pillar_draw_set, scene_geo, pillar_model_index);
     }
-    if render_meshes.count == 0 return;
+
+    if mask_draw_set.render_meshes.count == 0 return;
 
     #if LOG_HORDE_STATS {
         log("ENEMY_HORDE init model=% render_meshes=% collider=% radius=% half_height=% scale=%",
-            scene_geo.models[mask_model_index].name, render_meshes.count, collider_kind, collider_radius, collider_half_height, model_scale);
+            scene_geo.models[mask_model_index].name, mask_draw_set.render_meshes.count, collider_kind, collider_radius, collider_half_height, model_scale);
     }
 
-    for render_mesh: render_meshes {
-        lod_count := 1 + cast(s32) render_mesh.lod_mesh_count;
-        for lod_level: 0..lod_count-1 {
-            mesh_index := render_mesh.base_mesh_index;
-            if lod_level > 0 mesh_index = render_mesh.lod_mesh_start + cast(u32) (lod_level - 1);
-            array_add(*draw_groups, .{
-                render_mesh_index = cast(u32) it_index,
-                lod_level = cast(u32) lod_level,
-                mesh_index = mesh_index,
-            });
-        }
+    init_groups(*mask_draw_set);
+    init_groups(*pillar_draw_set);
+    max_instance_count := cast(s64) max_count * mask_draw_set.render_meshes.count;
+    max_pillar_instance_count := cast(s64) pillars.count * pillar_draw_set.render_meshes.count;
+    max_meshlet_param_count: s64 = 1;
+    for mask_draw_set.render_meshes {
+        meshlet_chunk_count := max(cast(s64) 1, (cast(s64) horde_mesh_max_meshlet_count(scene_geo, it.base_mesh_index) + TASK_EMIT_MESHLET_COUNT - 1) / TASK_EMIT_MESHLET_COUNT);
+        max_meshlet_param_count += cast(s64) max_count * meshlet_chunk_count;
     }
-
-    max_instance_count := cast(s64) max_count * render_meshes.count;
+    for pillar_draw_set.render_meshes {
+        meshlet_chunk_count := max(cast(s64) 1, (cast(s64) horde_mesh_max_meshlet_count(scene_geo, it.base_mesh_index) + TASK_EMIT_MESHLET_COUNT - 1) / TASK_EMIT_MESHLET_COUNT);
+        max_meshlet_param_count += cast(s64) pillars.count * meshlet_chunk_count;
+    }
     arena_bytes :=
-        max(cast(s64) 1, max_instance_count) * size_of(Scene_Instance) * SGPU_FRAMES_IN_FLIGHT +
-        max(cast(s64) 1, draw_groups.count) * size_of(Scene_Draw_Params_CPU) * SGPU_FRAMES_IN_FLIGHT +
-        max(cast(s64) 1, draw_groups.count) * size_of(Indexed_Indirect_Draw_Args) * SGPU_FRAMES_IN_FLIGHT +
+        max(cast(s64) 1, max_instance_count) * size_of(Model_Scene_Meshlet_Instance) * SGPU_FRAMES_IN_FLIGHT +
+        max(cast(s64) 1, max_pillar_instance_count) * size_of(Model_Scene_Meshlet_Instance) * SGPU_FRAMES_IN_FLIGHT +
+        max(cast(s64) 1, max_meshlet_param_count) * size_of(Model_Scene_Meshlet_Params_CPU) * SGPU_FRAMES_IN_FLIGHT +
         1024;
     gpu_arena = gpu_make_arena(arena_bytes, label = "horde runtime arena");
     assert(gpu_arena.cpu != null, "Failed to create horde runtime arena.");
-    instances = sgpu_make_frame_view(*gpu_arena, Scene_Instance, max_instance_count);
-    draw_params = sgpu_make_frame_view(*gpu_arena, Scene_Draw_Params_CPU, draw_groups.count);
-    indirect_args = sgpu_make_frame_view(*gpu_arena, Indexed_Indirect_Draw_Args, draw_groups.count);
+    allocate_dynamic_instances(*mask_draw_set, *gpu_arena, max_instance_count);
+    allocate_dynamic_instances(*pillar_draw_set, *gpu_arena, max_pillar_instance_count);
+    meshlet_params = sgpu_make_frame_param_allocator(*gpu_arena, Model_Scene_Meshlet_Params_CPU, max(cast(s64) 1, max_meshlet_param_count));
     gpu_commit_residency();
-
-    for frame_i: 0..SGPU_FRAMES_IN_FLIGHT-1 {
-        frame_draw_params := sgpu_frame_view_slot(*draw_params, frame_i);
-        frame_indirect_args := sgpu_frame_view_slot(*indirect_args, frame_i);
-        for group, group_index: draw_groups {
-            mesh := scene_geo.meshes[group.mesh_index];
-            frame_draw_params.cpu[group_index] = .{
-                vertices = scene_geo.vertices.gpu,
-                indices = scene_geo.indices.gpu + (mesh.first_index * size_of(u32)).(Gpu_Ptr),
-                materials = scene_geo.materials.gpu,
-                instances = 0,
-                morph_vertex_deltas = 0,
-                morph_weights = 0,
-                skin_matrices = 0,
-                view_proj = Matrix4_Identity,
-                light_dir = normalize(Vector3.{0.35, -1.0, 0.25}),
-                sun_params = .{sun_strength, time_of_day, 0.0, 0.0},
-                camera_pos = camera_pos,
-                material_index = mesh.material_index,
-                object_id = 0,
-                mesh_base_vertex = mesh.base_vertex,
-                skin_matrix_count = 0,
-                morph_target_count = 0,
-                morph_vertex_count = 0,
-            };
-            frame_indirect_args.cpu[group_index] = .{
-                vertex_count = mesh.index_count,
-                instance_count = 0,
-                vertex_start = 0,
-                base_instance = 0,
-            };
-        }
-    }
 
     PhysicsSystem_OptimizeBroadPhase(Physics.physics.system);
 
@@ -481,52 +438,96 @@ update :: (runtime: *Horde_Runtime, dt: float) {
     update_projectiles_pre_physics(runtime, dt);
 }
 
-prepare_render :: (using runtime: *Horde_Runtime, view_proj: Matrix4, shadow_binding: Vector4, camera_pos: Vector3, sun_strength: float, time_of_day: float) {
-    current_instances := sgpu_frame_view_slot(*instances);
-    current_draw_params := sgpu_frame_view_slot(*draw_params);
-    current_indirect_args := sgpu_frame_view_slot(*indirect_args);
-    if enemies.count == 0 || draw_groups.count == 0 || current_instances.cpu.data == null return;
+prepare_render :: (using runtime: *Horde_Runtime, view_proj: Matrix4, shadow_binding: Vector4, camera_pos: Vector3, sun_strength: float, time_of_day: float, view_height: float) {
+    render_view_proj = view_proj;
+    render_camera_pos = camera_pos;
+    render_shadow_binding = shadow_binding;
+    render_sun_strength = sun_strength;
+    render_time_of_day = time_of_day;
+    render_view_height = view_height;
     visible_count_debug = 0;
     render_instance_count_debug = 0;
 
-    for *draw_groups {
-        it.first_instance = 0;
-        it.instance_count = 0;
+    begin_frame(*mask_draw_set);
+    begin_frame(*pillar_draw_set);
+    current_mask_instances := current_instances(*mask_draw_set);
+    current_pillar_instances := current_instances(*pillar_draw_set);
+    if current_mask_instances.cpu.data == null return;
+
+    mask_group_instance_counts: [..]u32;
+    mask_group_instance_counts.allocator = temp;
+    array_resize(*mask_group_instance_counts, mask_draw_set.groups.count);
+    for *mask_group_instance_counts it.* = 0;
+
+    pillar_group_instance_counts: [..]u32;
+    pillar_group_instance_counts.allocator = temp;
+    array_resize(*pillar_group_instance_counts, pillar_draw_set.groups.count);
+    for *pillar_group_instance_counts it.* = 0;
+
+    USE_BATCH_PHYSICS_READ :: true;
+
+    #if USE_BATCH_PHYSICS_READ {
+        body_ids: [..]BodyID;
+        body_ids.allocator = temp;
+        array_resize(*body_ids, enemies.count);
+        positions: [..]Vector3;
+        positions.allocator = temp;
+        array_resize(*positions, enemies.count);
+        for * enemies body_ids[it_index] = it.body_id;
+        lock_interface := PhysicsSystem_GetBodyLockInterface(Physics.physics.system);
+        body_interface_no_lock := PhysicsSystem_GetBodyInterfaceNoLock(Physics.physics.system);
+        {
+            body_lock_multi_read := BodyLockInterface_LockMultiRead(lock_interface, body_ids.data, cast(u32)body_ids.count);
+            defer BodyLockMultiRead_Destroy(body_lock_multi_read);
+            for body_id: body_ids {
+                body_pos := cast,force(Vector3) BodyInterface_GetPosition(body_interface_no_lock, body_id);
+                positions[it_index] = body_pos;
+            }
+        }
     }
 
-    group_instance_counts: [..]u32;
-    group_instance_counts.allocator = temp;
-    array_resize(*group_instance_counts, draw_groups.count);
-    for *group_instance_counts it.* = 0;
 
     scene_geo := bindings.scene_geo;
-    model := scene_geo.models[mask_model_index];
+    mask_model := scene_geo.models[mask_model_index];
     visible_enemy_count: s32;
     for *enemies {
         if !it.active continue;
-        body_pos := cast,force(Vector3) BodyInterface_GetPosition(Physics.physics.body_interface, it.body_id);
+        #if USE_BATCH_PHYSICS_READ {
+            body_pos := positions[it_index];
+        } else {
+            body_pos := cast,force(Vector3) BodyInterface_GetPosition(Physics.physics.body_interface, it.body_id);
+        }
         distance_to_camera := length(camera_pos - body_pos);
         if distance_to_camera > spawn_params.despawn_radius continue;
         visible_enemy_count += 1;
         if it.kind != .MASK continue;
-        for render_mesh, render_mesh_index: render_meshes {
-            lod_level := enemy_lod_level_for_distance(render_mesh, distance_to_camera);
-            group_index := draw_group_index(runtime, render_mesh_index, lod_level);
-            if group_index >= 0 group_instance_counts[group_index] += 1;
+        for _, render_mesh_index: mask_draw_set.render_meshes {
+            group_idx := group_index(*mask_draw_set, render_mesh_index);
+            assert(group_idx >= 0, "Missing horde mask group for render mesh %.", render_mesh_index);
+            mask_group_instance_counts[group_idx] += 1;
+        }
+    }
+    for pillars {
+        if !it.active continue;
+        for render_mesh_index: 0..pillar_draw_set.render_meshes.count-1 {
+            group_idx := group_index(*pillar_draw_set, render_mesh_index);
+            assert(group_idx >= 0, "Missing pillar draw group for render mesh %.", render_mesh_index);
+            pillar_group_instance_counts[group_idx] += 1;
         }
     }
 
-    running_first_instance: u32;
-    for *draw_groups {
-        it.first_instance = running_first_instance;
-        it.instance_count = group_instance_counts[it_index];
-        running_first_instance += it.instance_count;
-    }
+    assign_counts(*mask_draw_set, mask_group_instance_counts);
+    assign_counts(*pillar_draw_set, pillar_group_instance_counts);
 
-    group_write_offsets: [..]u32;
-    group_write_offsets.allocator = temp;
-    array_resize(*group_write_offsets, draw_groups.count);
-    for *group_write_offsets it.* = draw_groups[it_index].first_instance;
+    mask_group_write_offsets: [..]u32;
+    mask_group_write_offsets.allocator = temp;
+    array_resize(*mask_group_write_offsets, mask_draw_set.groups.count);
+    for *mask_group_write_offsets it.* = mask_draw_set.groups[it_index].first_instance;
+
+    pillar_group_write_offsets: [..]u32;
+    pillar_group_write_offsets.allocator = temp;
+    array_resize(*pillar_group_write_offsets, pillar_draw_set.groups.count);
+    for *pillar_group_write_offsets it.* = pillar_draw_set.groups[it_index].first_instance;
 
     for *enemies {
         if !it.active continue;
@@ -538,84 +539,85 @@ prepare_render :: (using runtime: *Horde_Runtime, view_proj: Matrix4, shadow_bin
         visual_root_pos := body_pos + .{0.0, model_root_offset_y * (it.visual_scale / max(model_scale, 0.001)), 0.0};
         visual_scale: Vector3 = .{it.visual_scale, it.visual_scale, it.visual_scale};
         world_root := make_trs_matrix(visual_root_pos, horde_quat_from_euler_deg(.{0.0, it.yaw * 180.0 / PI, 0.0}), visual_scale) * bindings.mask_import_basis;
-        for render_mesh, render_mesh_index: render_meshes {
-            lod_level := enemy_lod_level_for_distance(render_mesh, distance_to_camera);
-            group_index := draw_group_index(runtime, render_mesh_index, lod_level);
-            if group_index < 0 continue;
-            write_index := group_write_offsets[group_index];
-            group_write_offsets[group_index] += 1;
-            node_local_index := render_mesh.node_index - cast(s32) model.node_start;
+        for render_mesh, render_mesh_index: mask_draw_set.render_meshes {
+            group_idx := group_index(*mask_draw_set, render_mesh_index);
+            assert(group_idx >= 0, "Missing horde mask group for render mesh %.", render_mesh_index);
+            write_index := mask_group_write_offsets[group_idx];
+            mask_group_write_offsets[group_idx] += 1;
+            node_local_index := render_mesh.node_index - cast(s32) mask_model.node_start;
             world := world_root;
             if node_local_index >= 0 {
                 world = world_root * scene_geo.nodes[render_mesh.node_index].world;
             }
             flash_mix := clamp(it.hit_flash_t * 9.0, 0.0, 1.0);
             tint := lerp(it.tint, Vector4.{3.2, 3.2, 3.2, 1.0}, flash_mix);
-            current_instances.cpu[write_index] = .{
+            current_mask_instances.cpu[write_index] = .{
                 world = world,
                 tint = tint,
-                shadow_view_proj = bindings.shadow_map.view_proj,
-                shadow_meta = shadow_binding,
+            };
+            render_instance_count_debug += 1;
+        }
+    }
+    for pillars {
+        if !it.active continue;
+        pillar_scale := it.height / pillar_model_height;
+        base_y := it.position.y - it.height * 0.5;
+        pillar_pos: Vector3 = .{it.position.x, base_y + pillar_model_root_offset_y * pillar_scale, it.position.z};
+        progress_brightness := lerp(0.86, 1.1, it.progress_t);
+        pillar_tint := Vector4.{0.48, 0.56, 0.72, 1.0} * progress_brightness;
+        world_root := make_trs_matrix(pillar_pos, horde_quat_from_euler_deg(.{0.0, 0.0, 0.0}), .{pillar_scale, pillar_scale, pillar_scale}) * bindings.pillar_import_basis;
+        for render_mesh, render_mesh_index: pillar_draw_set.render_meshes {
+            group_idx := group_index(*pillar_draw_set, render_mesh_index);
+            assert(group_idx >= 0, "Missing pillar draw group for render mesh %.", render_mesh_index);
+            write_index := pillar_group_write_offsets[group_idx];
+            pillar_group_write_offsets[group_idx] += 1;
+            world := world_root * scene_geo.nodes[render_mesh.node_index].world;
+            current_pillar_instances.cpu[write_index] = .{
+                world = world,
+                tint = pillar_tint,
             };
             render_instance_count_debug += 1;
         }
     }
     visible_count_debug = visible_enemy_count;
-
-    for group, group_index: draw_groups {
-        mesh := scene_geo.meshes[group.mesh_index];
-        group_draw_params := *current_draw_params.cpu[group_index];
-        group_draw_params.indices = scene_geo.indices.gpu + (mesh.first_index * size_of(u32)).(Gpu_Ptr);
-        group_draw_params.instances = current_instances.gpu + (group.first_instance * size_of(Scene_Instance)).(Gpu_Ptr);
-        group_draw_params.view_proj = view_proj;
-        group_draw_params.camera_pos = camera_pos;
-        group_draw_params.light_dir = bindings.shadow_map.light_dir;
-        group_draw_params.sun_params = .{sun_strength, time_of_day, 0.0, 0.0};
-        group_draw_params.material_index = mesh.material_index;
-        group_draw_params.mesh_base_vertex = mesh.base_vertex;
-        current_indirect_args.cpu[group_index] = .{
-            vertex_count = mesh.index_count,
-            instance_count = group.instance_count,
-            vertex_start = 0,
-            base_instance = 0,
-        };
-    }
 }
 
-draw_shadow :: (using runtime: *Horde_Runtime, cmd_buff: Gpu_Command_Buffer, pipeline: Gpu_Pipeline) {
-    current_draw_params := sgpu_frame_view_slot(*draw_params);
-    current_indirect_args := sgpu_frame_view_slot(*indirect_args);
-    if draw_groups.count == 0 || current_draw_params.cpu.data == null || current_indirect_args.cpu.data == null return;
-    gpu_set_pipeline(cmd_buff, pipeline);
-    for group: draw_groups {
-        if group.instance_count == 0 continue;
-        params_gpu := current_draw_params.gpu + (it_index * size_of(Scene_Draw_Params_CPU)).(Gpu_Ptr);
-        mesh := bindings.scene_geo.meshes[group.mesh_index];
-        if direct_draw_debug {
-            gpu_draw_instanced_direct(cmd_buff, params_gpu, mesh.index_count, group.instance_count);
-        } else {
-            args_gpu := current_indirect_args.gpu + (it_index * size_of(Indexed_Indirect_Draw_Args)).(Gpu_Ptr);
-            gpu_draw_instanced_indirect(cmd_buff, params_gpu, params_gpu, args_gpu);
-        }
-    }
+draw_shadow :: (using runtime: *Horde_Runtime, cmd_buff: Gpu_Command_Buffer, pass_desc: Gpu_Render_Pass_Desc) {
+    lod_projection_scale := render_view_height / max(2.0 * max(tan(scene_camera.fov_y * 0.5), 0.0001), 0.0001);
+    shadow_params := Mesh_Draw_Set_Params.{
+        camera_vp = bindings.shadow_map.view_proj,
+        frustum_planes = horde_extract_frustum_planes(bindings.shadow_map.view_proj),
+        eye_position = render_camera_pos,
+        lod_projection_scale = lod_projection_scale,
+        lod_radius_threshold = lod_screen_radius,
+        lod_metric_power = lod_distance_power,
+        light_dir = bindings.shadow_map.light_dir,
+        sun_params = .{render_sun_strength, render_time_of_day, 0.0, 0.0},
+        camera_pos = render_camera_pos,
+        shadow_view_proj = bindings.shadow_map.view_proj,
+        shadow_meta = .{},
+    };
+    draw_meshlets(*mask_draw_set, cmd_buff, pass_desc, bindings.scene_geo, shadow_params, shadow_pass = true);
+    draw_meshlets(*pillar_draw_set, cmd_buff, pass_desc, bindings.scene_geo, shadow_params, shadow_pass = true);
 }
 
-draw_main :: (using runtime: *Horde_Runtime, cmd_buff: Gpu_Command_Buffer, pipeline: Gpu_Pipeline) {
-    current_draw_params := sgpu_frame_view_slot(*draw_params);
-    current_indirect_args := sgpu_frame_view_slot(*indirect_args);
-    if draw_groups.count == 0 || current_draw_params.cpu.data == null || current_indirect_args.cpu.data == null return;
-    gpu_set_pipeline(cmd_buff, pipeline);
-    for group: draw_groups {
-        if group.instance_count == 0 continue;
-        params_gpu := current_draw_params.gpu + (it_index * size_of(Scene_Draw_Params_CPU)).(Gpu_Ptr);
-        mesh := bindings.scene_geo.meshes[group.mesh_index];
-        if direct_draw_debug {
-            gpu_draw_instanced_direct(cmd_buff, params_gpu, mesh.index_count, group.instance_count);
-        } else {
-            args_gpu := current_indirect_args.gpu + (it_index * size_of(Indexed_Indirect_Draw_Args)).(Gpu_Ptr);
-            gpu_draw_instanced_indirect(cmd_buff, params_gpu, params_gpu, args_gpu);
-        }
-    }
+draw_main :: (using runtime: *Horde_Runtime, cmd_buff: Gpu_Command_Buffer, pass_desc: Gpu_Render_Pass_Desc) {
+    lod_projection_scale := render_view_height / max(2.0 * max(tan(scene_camera.fov_y * 0.5), 0.0001), 0.0001);
+    main_params := Mesh_Draw_Set_Params.{
+        camera_vp = render_view_proj,
+        frustum_planes = horde_extract_frustum_planes(render_view_proj),
+        eye_position = render_camera_pos,
+        lod_projection_scale = lod_projection_scale,
+        lod_radius_threshold = lod_screen_radius,
+        lod_metric_power = lod_distance_power,
+        light_dir = bindings.shadow_map.light_dir,
+        sun_params = .{render_sun_strength, render_time_of_day, 0.0, 0.0},
+        camera_pos = render_camera_pos,
+        shadow_view_proj = bindings.shadow_map.view_proj,
+        shadow_meta = render_shadow_binding,
+    };
+    draw_meshlets(*mask_draw_set, cmd_buff, pass_desc, bindings.scene_geo, main_params);
+    draw_meshlets(*pillar_draw_set, cmd_buff, pass_desc, bindings.scene_geo, main_params);
 }
 
 draw_debug :: (using runtime: *Horde_Runtime, gizmo_ctx: *Gizmo.Gizmo_Context) {
@@ -626,8 +628,6 @@ draw_debug :: (using runtime: *Horde_Runtime, gizmo_ctx: *Gizmo.Gizmo_Context) {
         color.w = 0.95;
         Gizmo.draw_sphere(gizmo_ctx, it.position, it.radius, color = color, thickness = 2.0, segments = 16);
     }
-
-    draw_pillar_debug(runtime, gizmo_ctx);
 
     spider_color := Vector4.{0.02, 0.02, 0.025, 0.96};
     spider_leg_color := Vector4.{0.01, 0.01, 0.01, 0.9};
@@ -691,28 +691,36 @@ scale_model_to_target_extent :: (scene_geo: *Scene_Geo, model_index: s32, target
     return ifx max_extent > 0.0 then target_extent / max_extent else 1.0;
 }
 
-enemy_lod_level_for_distance :: (using render_mesh: Enemy_Render_Mesh, distance_to_camera: float) -> s32 {
-    if lod_mesh_count <= 0 return 0;
-    if lod_mesh_count == 1 {
-        if distance_to_camera >= 18.0 return 1;
-        return 0;
+horde_mesh_max_meshlet_count :: (scene_geo: *Scene_Geo, mesh_index: u32) -> u32 {
+    result := scene_geo.meshlet_meshes.cpu[mesh_index].meshlet_count;
+    mesh := scene_geo.meshes[mesh_index];
+    if mesh.lod_mesh_count > 0 {
+        for lod_offset: 0..mesh.lod_mesh_count-1 {
+            lod_mesh_index := mesh.lod_mesh_start + lod_offset;
+            result = max(result, scene_geo.meshlet_meshes.cpu[lod_mesh_index].meshlet_count);
+        }
     }
-    if distance_to_camera >= 42.0 return 2;
-    if distance_to_camera >= 18.0 return 1;
-    return 0;
+    return result;
 }
 
-draw_group_index :: (using runtime: *Horde_Runtime, render_mesh_index: s64, lod_level: s32) -> s32 {
-    running_index: s32;
-    for render_meshes {
-        lod_count := 1 + cast(s32) it.lod_mesh_count;
-        if it_index == render_mesh_index {
-            if lod_level < 0 || lod_level >= lod_count return -1;
-            return running_index + lod_level;
-        }
-        running_index += lod_count;
+horde_extract_frustum_planes :: (m: Matrix4) -> [6]Vector4 {
+    row0 := Vector4.{m._11, m._12, m._13, m._14};
+    row1 := Vector4.{m._21, m._22, m._23, m._24};
+    row2 := Vector4.{m._31, m._32, m._33, m._34};
+    row3 := Vector4.{m._41, m._42, m._43, m._44};
+
+    planes: [6]Vector4;
+    planes[0] = row3 + row0;
+    planes[1] = row3 - row0;
+    planes[2] = row3 + row1;
+    planes[3] = row3 - row1;
+    planes[4] = row3 + row2;
+    planes[5] = row3 - row2;
+    for *planes {
+        len := length(it.xyz);
+        if len > 1.0e-6 it.* /= len;
     }
-    return -1;
+    return planes;
 }
 
 kill_enemy :: (using runtime: *Horde_Runtime, enemy_index: s32) {
@@ -1086,14 +1094,31 @@ init_pillars :: (runtime: *Horde_Runtime) {
     ground_half_x := max(6.0, runtime.bindings.ground.size_x * 0.5 - runtime.pillar_params.world_margin);
     ground_half_z := max(6.0, runtime.bindings.ground.size_z * 0.5 - runtime.pillar_params.world_margin);
     player_pos := character_controller_position(runtime.bindings.player_controller);
+    camera_forward := player_pos - runtime.spawn_camera_pos;
+    camera_forward.y = 0.0;
+    if length(camera_forward) <= 0.001 {
+        camera_forward = .{0.0, 0.0, -1.0};
+    } else {
+        camera_forward = normalize(camera_forward);
+    }
+    camera_forward_yaw := atan2(camera_forward.z, camera_forward.x);
+    placement_radius_min := 12.0;
+    placement_radius_max := min(min(ground_half_x, ground_half_z) - 2.0, 28.0);
+    placement_radius_max = max(placement_radius_max, placement_radius_min + 0.5);
     desired_count := min(runtime.pillars.count, max(cast(s64) 0, runtime.pillar_params.count));
     placed_count: s32;
     for pillar_index: 0..desired_count-1 {
         placed := false;
         for attempt: 0..31 {
             seed := cast(u32) pillar_index * cast(u32) 0x9e3779b9 + cast(u32) attempt * cast(u32) 0x85ebca6b + 17;
-            spawn_x := lerp(-ground_half_x, ground_half_x, horde_hash01(seed ^ 0x243f6a88));
-            spawn_z := lerp(-ground_half_z, ground_half_z, horde_hash01(seed ^ 0xb7e15162));
+            spawn_angle := camera_forward_yaw + lerp(-1.15, 1.15, horde_hash01(seed ^ 0x243f6a88));
+            spawn_radius := lerp(placement_radius_min, placement_radius_max, horde_hash01(seed ^ 0xb7e15162));
+            if pillar_index == 0 && attempt == 0 {
+                spawn_angle = camera_forward_yaw;
+                spawn_radius = min(11.0, placement_radius_max);
+            }
+            spawn_x := clamp(player_pos.x + cos(spawn_angle) * spawn_radius, -ground_half_x, ground_half_x);
+            spawn_z := clamp(player_pos.z + sin(spawn_angle) * spawn_radius, -ground_half_z, ground_half_z);
             position := Vector3.{spawn_x, 0.0, spawn_z};
             to_player := position - player_pos;
             to_player.y = 0.0;
@@ -1113,6 +1138,10 @@ init_pillars :: (runtime: *Horde_Runtime) {
 
             radius := runtime.pillar_params.base_radius * lerp(0.85, 1.2, horde_hash01(seed ^ 0x52dce729));
             height := lerp(runtime.pillar_params.min_height, runtime.pillar_params.max_height, horde_hash01(seed ^ 0x7f4a7c15));
+            if pillar_index == 0 && attempt == 0 {
+                radius = runtime.pillar_params.base_radius;
+                height = runtime.pillar_params.max_height;
+            }
             base_y := horde_ground_height_at(runtime.bindings.ground.*, spawn_x, spawn_z);
             runtime.pillars[pillar_index] = .{
                 active = true,
@@ -1140,23 +1169,6 @@ draw_pillar_debug :: (runtime: *Horde_Runtime, gizmo_ctx: *Gizmo.Gizmo_Context) 
         if !it.active continue;
         base_center := it.position - .{0.0, it.height * 0.5, 0.0};
         top_center := it.position + .{0.0, it.height * 0.5, 0.0};
-        pillar_color := Vector4.{0.55, 0.76, 0.96, 0.88};
-        pillar_color *= lerp(0.75, 1.2, it.progress_t);
-        pillar_color.w = 0.88;
-        for seg: 0..ring_segments-1 {
-            seg_t0 := cast(float) seg / cast(float) ring_segments;
-            seg_t1 := cast(float) (seg + 1) / cast(float) ring_segments;
-            angle0 := seg_t0 * PI * 2.0;
-            angle1 := seg_t1 * PI * 2.0;
-            ring0 := Vector3.{cos(angle0) * it.radius, 0.0, sin(angle0) * it.radius};
-            ring1 := Vector3.{cos(angle1) * it.radius, 0.0, sin(angle1) * it.radius};
-            Gizmo.draw_line(gizmo_ctx, base_center + ring0, base_center + ring1, color = pillar_color, thickness = 2.0);
-            Gizmo.draw_line(gizmo_ctx, top_center + ring0, top_center + ring1, color = pillar_color, thickness = 2.0);
-            if (seg & 3) == 0 {
-                Gizmo.draw_line(gizmo_ctx, base_center + ring0, top_center + ring0, color = pillar_color, thickness = 2.0);
-            }
-        }
-
         interact_radius := runtime.pillar_params.interact_radius;
         if interact_radius > 0.0 {
             interact_color := Vector4.{0.18, 0.95, 0.72, 0.26};

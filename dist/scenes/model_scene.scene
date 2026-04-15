@@ -1,5 +1,9 @@
 [1]
 scene "Model Scene" {
+  asset "ancient_egyptian_column" {
+    model "./models/ancient_egyptian_column.fbx"
+  }
+
   asset "Tree" {
     model "./models/Tree/Tree.fbx"
   }

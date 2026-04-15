@@ -301,11 +301,22 @@ scene_geo_init_from_imported :: (using geo: *Scene_Geo, imported: *Imported_Scen
         array_free(cpu_meshlet_bounds);
     }
 
+    texture_bindless_capacity := gpu_texture_bindless_capacity_2d();
     for it: imported.textures {
         texture, view := create_texture_from_imported_texture(it);
+        if texture_bindless_capacity > 0 {
+            assert(cast(s32) view < texture_bindless_capacity,
+                "Scene_Geo texture '%' received bindless view handle %, but this backend supports only custom 2D handles 1..% (slot 0 is reserved for fallback black).",
+                it.key, view, texture_bindless_capacity - 1);
+        }
         array_add(*textures, texture);
         array_add(*texture_views, view);
         array_add(*texture_keys, copy_string(it.key));
+    }
+    if texture_bindless_capacity > 0 {
+        assert(texture_views.count < texture_bindless_capacity,
+            "Scene_Geo imported % texture views, but this backend supports only % custom 2D bindless views (slot 0 is reserved for fallback black).",
+            texture_views.count, texture_bindless_capacity - 1);
     }
 
     total_bytes :=
@@ -1489,6 +1500,11 @@ imported_scene_patch_geometry_assets :: (
             patched_mesh.base_vertex += vertex_base;
             patched_mesh.first_index += index_base;
             original_mesh := scene.meshes[variant_indices[variant_i]];
+            patched_mesh.material_index = original_mesh.material_index;
+            patched_mesh.skin_bone_start = original_mesh.skin_bone_start;
+            patched_mesh.skin_bone_count = original_mesh.skin_bone_count;
+            patched_mesh.morph_target_start = original_mesh.morph_target_start;
+            patched_mesh.morph_target_count = original_mesh.morph_target_count;
             patched_mesh.lod_mesh_start = original_mesh.lod_mesh_start;
             patched_mesh.lod_mesh_count = original_mesh.lod_mesh_count;
             scene.meshes[variant_indices[variant_i]] = patched_mesh;
@@ -2128,7 +2144,6 @@ load_model_into_imported_scene :: (imported: *Imported_Scene, path: string) {
     scene := ai.ImportFileEx(temp_c_string(path), cast,no_check(u32) load_flags, null);
     assert(scene != null, "Assimp import failed for %", path);
     defer ai.FreeScene(scene);
-
     model_name := String.path_strip_extension(String.path_filename(path));
     model_dir := String.path_strip_filename(path);
 
@@ -2169,7 +2184,6 @@ load_model_into_imported_scene :: (imported: *Imported_Scene, path: string) {
             address_mode_v = cast(u32) base_color_load.map_mode_v,
         });
     }
-
     root_node_index := append_ai_node_recursive(imported, scene, scene.mRootNode, -1, mesh_start, *node_name_to_index);
     compute_world_matrices(imported.nodes, node_start, cast(u32) imported.nodes.count - node_start);
 

@@ -38,13 +38,22 @@ Model_Scene_Sky_Params_CPU :: CPU_Struct(Model_Scene_Sky_Params);
 Grass_Shadow_Params_CPU    :: CPU_Struct(Grass_Shadow_Params);
 Model_Scene_Meshlet_Params_CPU :: CPU_Struct(Model_Scene_Meshlet_Params);
 using shaders: struct @init_group {
-    graphics_shader: Shader(model_scene_vertex_main, model_scene_fragment_main, .{ cull = .CW });
+    graphics_shader: Shader(model_scene_vertex_main, model_scene_fragment_main, .{ cull = .NONE });
     pick_shader: Shader(model_scene_vertex_main, model_scene_pick_fragment_main, .{ cull = .CW });
     ground_shader: Shader(ground_vertex_main, ground_fragment_main, .{ cull = .CW });
     ground_shadow_shader: Shader(ground_shadow_vertex_main, ground_shadow_fragment_main);
     shadow_shader: Shader(model_scene_shadow_vertex_main, model_scene_shadow_fragment_main);
     mesh_shader: Mesh_Shader(model_scene_mesh_main, model_scene_meshlet_fragment_main, .{
-        raster_desc = .{ cull = .CW, },
+        raster_desc = .{ cull = .NONE, },
+        task_threads = .[1, 1, 1],
+        mesh_threads = .[1, 1, 1],
+        max_total_threadgroups_per_mesh_grid = 1024,
+    }, model_scene_task_main);
+    mesh_shadow_shader: Mesh_Shader(model_scene_mesh_main, model_scene_meshlet_shadow_fragment_main, .{
+        raster_desc = .{
+            cull = .NONE,
+            depth_format = .D32_SFLOAT,
+        },
         task_threads = .[1, 1, 1],
         mesh_threads = .[1, 1, 1],
         max_total_threadgroups_per_mesh_grid = 1024,
@@ -139,7 +148,6 @@ scene_manip_apply_pending: bool;
 scene_dirty: bool;
 scene_pending_select_node_index: s32 = -1;
 scene_place_palette_index: s32 = -1;
-scene_debug_logged: bool;
 autopilot_enabled: bool;
 control_mode: enum { Player; Editor; } = .Player;
 outdoor_rig: Outdoor_Rig = .{};
@@ -563,7 +571,7 @@ tick :: () {
 
     update(*outdoor_rig, *shadow_map);
     shadow_binding := ifx (render_toggle & .SHADOWS != 0) then shadow_map_binding(*shadow_map) else Vector4.{0.0, 0.0, 2.0, 0.0};
-    prepare_render(*horde_runtime, view_proj, shadow_binding, scene_camera.position, outdoor_rig.sun_strength, outdoor_rig.time_of_day);
+    prepare_render(*horde_runtime, view_proj, shadow_binding, scene_camera.position, outdoor_rig.sun_strength, outdoor_rig.time_of_day, cast(float) win_h);
     maybe_log(*horde_runtime);
 
     fill_sky_params(outdoor_rig, current_sky_draw_params.cpu, cam_forward, cam_right, cam_up, proj, shadow_map.light_dir);
@@ -682,8 +690,6 @@ tick :: () {
     Gizmo_Render.gizmo_render_set_view_projection(*gizmo_render_ctx, view_proj);
     Gizmo_Render.gizmo_render_set_view_projection(*gizmo_overlay_render_ctx, view_proj);
 
-    if !scene_debug_logged scene_debug_logged = true;
-
     main_queue := gpu_get_queue(.MAIN, 0);
     result=, cmd_buff := gpu_start_command_recording(main_queue);
     if render_toggle & .SHADOWS != 0 {
@@ -694,10 +700,7 @@ tick :: () {
                 view = shadow_map.depth_view,
                 load_op = .CLEAR,
                 store_op = .STORE,
-                clear_value = .{
-                    depth = 1.0,
-                    stencil = 0,
-                },
+                clear_value = .{ depth = 1.0, stencil = 0, },
             },
             color_targets = .[
                 .{
@@ -730,12 +733,12 @@ tick :: () {
             gpu_draw_instanced_direct(cmd_buff, params_gpu, mesh.index_count, batch.instance_count);
         }
         if render_toggle & .HORDE != 0 {
-            draw_shadow(*horde_runtime, cmd_buff, shadow_pipeline);
+            draw_shadow(*horde_runtime, cmd_buff, shadow_pass_desc);
         }
     }
 
     if scene_pick.render_this_frame && scene_pick.view != 0 {
-        scene_pick_pass_desc:  Gpu_Render_Pass_Desc =  {
+        scene_pick_pass_desc:  Gpu_Render_Pass_Desc = {
             depth_target = .{
                 view = texture_ring_current_view(*scene_depth),
                 load_op = .CLEAR,
@@ -793,6 +796,7 @@ tick :: () {
                 },
             ],
         };
+
         gpu_begin_scoped_render_pass(cmd_buff, main_pass_desc, .COLOR_ATTACHMENT_WRITE, .SHADER_READ);
 
         // sky
@@ -807,12 +811,22 @@ tick :: () {
             gpu_set_pipeline(cmd_buff, pipeline(*ground_shader, main_pass_desc, graphics_shader_constants));
             gpu_draw_instanced_direct(cmd_buff, current_ground_draw_params.gpu, ground_index_count, 1);
         }
+
         if render_toggle & .GRASS != 0 && current_grass_draw_params.cpu != null && grass_instance_count > 0 {
             gpu_set_pipeline(cmd_buff, pipeline(*grass_shader, main_pass_desc));
             gpu_draw_instanced_direct(cmd_buff, current_grass_draw_params.gpu, 6, grass_instance_count);
         }
+
+        graphics_pipeline := pipeline(*graphics_shader, main_pass_desc, graphics_shader_constants);
         for batch: scene_batches {
             mesh := scene_geo.meshes[batch.mesh_index];
+            animated_batch_index := find_animated_batch_index_for_batch(cast(s32) it_index);
+            if animated_batch_index >= 0 {
+                gpu_set_pipeline(cmd_buff, graphics_pipeline);
+                params_gpu := current_scene_draw_params.gpu + (it_index * size_of(Scene_Draw_Params_CPU)).(Gpu_Ptr);
+                gpu_draw_instanced_direct(cmd_buff, params_gpu, mesh.index_count, batch.instance_count);
+                continue;
+            }
             total_task_slots := batch.max_meshlet_count;
             if total_task_slots == 0 continue;
             draw_first_instance := batch.first_instance;
@@ -821,17 +835,15 @@ tick :: () {
             max_object_groups_per_draw := max(cast(u32) 1, mesh_grid_limit / TASK_EMIT_MESHLET_COUNT);
             total_object_groups := draw_instance_total * meshlet_chunk_count;
 
-            animated_batch_index := find_animated_batch_index_for_batch(cast(s32) it_index);
             meshlet_flags := Model_Scene_Meshlet_Flags.HAS_LODS;
             if render_toggle & .SHADOWS != 0 meshlet_flags |= .HAS_SHADOWS;
             if mesh.morph_target_count > 0 meshlet_flags |= .HAS_MORPHS;
-            if animated_batch_index >= 0 meshlet_flags |= .HAS_SKINNING;
             mesh_constants := Model_Scene_Meshlet_Constants.{
                 flags = meshlet_flags,
                 debug_mode = mesh_shader_constants.debug_mode,
             };
 
-            gpu_set_pipeline(cmd_buff, SHR.pipeline(*mesh_shader, main_pass_desc, mesh_constants));
+            gpu_set_pipeline(cmd_buff, pipeline(*mesh_shader, main_pass_desc, mesh_constants));
             object_group_start: u32;
             while object_group_start < total_object_groups {
                 draw_object_group_count := min(max_object_groups_per_draw, total_object_groups - object_group_start);
@@ -897,9 +909,7 @@ tick :: () {
         }
 
         if render_toggle & .HORDE {
-            graphics_pipeline := pipeline(*graphics_shader, main_pass_desc, graphics_shader_constants);
-            gpu_set_pipeline(cmd_buff, graphics_pipeline);
-            draw_main(*horde_runtime, cmd_buff, graphics_pipeline);
+            draw_main(*horde_runtime, cmd_buff, main_pass_desc);
         }
 
         should_draw_gizmos := (render_toggle & .PHYSICS_GIZMOS != 0) || control_mode == .Editor || horde_runtime.projectile_active_count > 0 || horde_runtime.spider_active_count > 0 || horde_runtime.powerup_active_count > 0 || horde_runtime.pillar_active_count > 0;
@@ -1323,6 +1333,9 @@ rebuild_scene_runtime :: () {
         mask_import_basis = ifx compiled_scene_find_asset_index_by_name_for_runtime("mask") >= 0
             then compiled_asset_import_matrix(compiled_scene.assets[compiled_scene_find_asset_index_by_name_for_runtime("mask")])
             else Matrix4_Identity,
+        pillar_import_basis = ifx compiled_scene_find_asset_index_by_name_for_runtime("ancient_egyptian_column") >= 0
+            then compiled_asset_import_matrix(compiled_scene.assets[compiled_scene_find_asset_index_by_name_for_runtime("ancient_egyptian_column")])
+            else Matrix4_Identity,
     }, scene_camera.position, outdoor_rig.sun_strength, outdoor_rig.time_of_day);
     gpu_commit_residency();
 }
@@ -1434,7 +1447,7 @@ append_compiled_scatter_instances :: (instances_cpu: *[..]Scene_Instance, root_t
         set_from_axis_and_angle(*q, .{0.0, 1.0, 0.0}, yaw_deg * PI / 180.0);
 
         scatter_world := node.world
-            * make_trs_matrix(.{x, y, z}, q, model_scale)
+            * make_trs_matrix({x, y, z}, q, model_scale)
             * compiled_asset_import_matrix(asset);
 
         array_reset(root_transforms);
@@ -1517,17 +1530,12 @@ init_player_from_compiled_node :: (instances_cpu: *[..]Scene_Instance, total_ski
                 world = player_runtime.root,
                 tint = .{1.0, 1.0, 1.0, 1.0},
                 shadow_view_proj = Matrix4_Identity,
-                //shadow_view_proj_0 = .{1.0, 0.0, 0.0, 0.0},
-                //shadow_view_proj_1 = .{0.0, 1.0, 0.0, 0.0},
-                //shadow_view_proj_2 = .{0.0, 0.0, 1.0, 0.0},
-                //shadow_view_proj_3 = .{0.0, 0.0, 0.0, 1.0},
             });
             array_add(*player_runtime.instances, .{
                 instance_index = instance_index,
                 node_index = cast(s32) geo_node_index,
                 mesh_index = mesh_index,
             });
-
             if mesh.skin_bone_count > 0 {
                 array_add(*animated_batches, .{
                     batch_index = cast(s32) scene_batches.count - 1,
@@ -1617,6 +1625,10 @@ reset_player_and_horde_game :: () {
 scene_model_index_for_compiled_asset :: (asset_index: s32) -> s32 {
     if asset_index < 0 || asset_index >= compiled_scene.assets.count return -1;
     asset := compiled_scene.assets[asset_index];
+    if asset.name.count > 0 {
+        model_index := scene_geo_model_index_by_name(*scene_geo, asset.name);
+        if model_index >= 0 return model_index;
+    }
     model_name := String.path_strip_extension(String.path_filename(asset.model_path));
     return scene_geo_model_index_by_name(*scene_geo, model_name);
 }
@@ -2179,6 +2191,7 @@ mesh_max_meshlet_count :: (mesh_index: u32) -> u32 {
 #load "../scene_anim.jai";
 #load "./model_scene_animated_model_runtime.jai";
 #load "./model_scene_mediapipe_runtime.jai";
+#load "./model_scene_mesh_draw_set.jai";
 #load "../horde_runtime.jai";
 #load "../scene_pick.jai";
 #load "../outdoor_rig.jai";

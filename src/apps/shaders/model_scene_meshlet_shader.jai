@@ -442,3 +442,15 @@ model_scene_meshlet_fragment_main :: (
     lit_color = model_scene_apply_atmosphere(lit_color, world_pos, params.camera_pos, sun_dir);
     return .{lit_color.x, lit_color.y, lit_color.z, alpha};
 } @fragment_shader
+
+model_scene_meshlet_shadow_fragment_main :: (
+    using input: Model_Scene_Meshlet_Fragment_In,
+    params: *Model_Scene_Meshlet_Params,
+    using constants: Model_Scene_Meshlet_Constants,
+) -> struct { out_color: Vector4; } {
+    _ = constants;
+    alpha := model_scene_meshlet_alpha(params, uv, tint.w);
+    if params.alpha_mode == SCENE_ALPHA_MODE_MASK && alpha < params.alpha_cutoff discard();
+    d := clamp(position.z, 0.0, 1.0);
+    return .{out_color = .{d, d, d, 1.0}};
+} @fragment_shader
