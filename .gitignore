@@ -104,3 +104,4 @@ dist/color_space_test.dylib
 dist/dynamic_graphics_pipeline_test
 dist/material_lab
 dist/material_lab.dylib
+tools/build_darwin_release
