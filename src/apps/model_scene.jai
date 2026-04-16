@@ -215,11 +215,11 @@ on_dll_init :: () {
     scene_manip_objects_dirty = true;
     scene_manip_apply_pending = false;
 
-    _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
-    if dims_ok && win_w > 0 && win_h > 0 {
-        ensure_scene_depth_target(cast(u32) win_w, cast(u32) win_h);
-        assert(linear_present_ensure_color_target(*scene_present, cast(u32) win_w, cast(u32) win_h), "Failed to create model_scene color target.");
-        ensure_scene_pick_target(cast(u32) win_w, cast(u32) win_h);
+    render_w, render_h := app_current_render_dimensions();
+    if render_w > 0 && render_h > 0 {
+        ensure_scene_depth_target(render_w, render_h);
+        assert(linear_present_ensure_color_target(*scene_present, render_w, render_h), "Failed to create model_scene color target.");
+        ensure_scene_pick_target(render_w, render_h);
     }
 
     gpu_commit_residency();
@@ -305,14 +305,22 @@ tick :: () {
     current_sky_draw_params := gpu_buffer_ring_slot(*sky_draw_params);
     current_debug_pick_params := gpu_buffer_ring_slot(*debug_pick_params);
 
-    _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
+    render_w, render_h := app_current_render_dimensions();
     mx, my, mouse_ok := get_mouse_pointer_position(true);
-    if dims_ok && win_w > 0 && win_h > 0 {
-        ensure_scene_depth_target(cast(u32) win_w, cast(u32) win_h);
-        assert(linear_present_ensure_color_target(*scene_present, cast(u32) win_w, cast(u32) win_h), "Failed to create model_scene color target.");
+    game_mx, game_my, game_mouse_ok := app_game_view_mouse_pos_pixels();
+    dims_ok := render_w > 0 && render_h > 0;
+    win_w := cast(s32) render_w;
+    win_h := cast(s32) render_h;
+    if dims_ok {
+        ensure_scene_depth_target(render_w, render_h);
+        assert(linear_present_ensure_color_target(*scene_present, render_w, render_h), "Failed to create model_scene color target.");
     }
 
     io := ImGui.GetIO();
+    app_mouse_ok := ifx app_should_render_to_game_view() then game_mouse_ok else mouse_ok;
+    app_mx := ifx app_should_render_to_game_view() then game_mx else mx;
+    app_my := ifx app_should_render_to_game_view() then game_my else my;
+    app_mouse_allowed := ifx app_should_render_to_game_view() then game_mouse_ok else !io.WantCaptureMouse;
     _, p_pressed := input_down("P");
     if p_pressed toggle_control_mode();
 
@@ -433,8 +441,8 @@ tick :: () {
     controller_forward, controller_right, controller_up: Vector3;
     if #complete control_mode == {
     case .Player;
-        if right_down && mouse_ok && !io.WantCaptureMouse {
-            mouse := Vector2.{cast(float) mx, cast(float) my};
+        if right_down && app_mouse_ok && app_mouse_allowed {
+            mouse := Vector2.{cast(float) app_mx, cast(float) app_my};
             if orbit_have_prev_mouse {
                 delta := mouse - orbit_prev_mouse;
                 orbit_yaw += delta.x * scene_camera.mouse_sensitivity;
@@ -455,10 +463,10 @@ tick :: () {
             camera_dt = editor_dt;
         }
 
-        _ = editor_camera_update(*scene_camera, camera_dt, mx, my, mouse_ok,
+        _ = editor_camera_update(*scene_camera, camera_dt, app_mx, app_my, app_mouse_ok,
             allow_move = !io.WantCaptureKeyboard,
-            allow_look = right_down && !io.WantCaptureMouse,
-            allow_zoom = !io.WantCaptureMouse);
+            allow_look = right_down && app_mouse_allowed,
+            allow_zoom = app_mouse_allowed);
         editor_camera_basis(scene_camera, *controller_forward, *controller_right, *controller_up);
     }
 
@@ -526,14 +534,14 @@ tick :: () {
             camera_right = cam_right,
             camera_up = cam_up,
             fov_y = scene_camera.fov_y,
-            mouse_pos = .{cast(float) mx, cast(float) my},
-            mouse_valid = mouse_ok,
+            mouse_pos = .{cast(float) app_mx, cast(float) app_my},
+            mouse_valid = app_mouse_ok,
             mouse_down = left_down,
             mouse_pressed = left_pressed,
             mouse_released = left_released,
-            block_mouse = io.WantCaptureMouse,
+            block_mouse = !app_mouse_allowed,
         };
-        if scene_place_palette_index >= 0 && left_pressed && !io.WantCaptureMouse {
+        if scene_place_palette_index >= 0 && left_pressed && app_mouse_allowed {
             scene_place_selected_palette_at_cursor(frame);
         } else {
             manip_result := manip_update(*scene_manip_ctx, *gizmo_ctx, scene_manip_objects, frame, *gizmo_overlay_ctx);
@@ -541,8 +549,8 @@ tick :: () {
                 scene_manip_apply_pending = true;
                 scene_apply_manip_live_to_runtime();
             }
-            if left_pressed && !io.WantCaptureMouse && !scene_manip_ctx.active {
-                queue_scene_pick_request(cast(s32) mx, cast(s32) my);
+            if left_pressed && app_mouse_allowed && !scene_manip_ctx.active {
+                queue_scene_pick_request(cast(s32) app_mx, cast(s32) app_my);
             }
             if scene_manip_apply_pending && left_released {
                 scene_apply_manip_back_to_doc();

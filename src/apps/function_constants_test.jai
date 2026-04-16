@@ -82,12 +82,12 @@ tick :: () {
     result, swapchain_image := app_swapchain_acquire();
     if !swapchain_image return;
 
-    _, _, win_w, _, dims_ok := get_dimensions(cast(Window_Type) window, true);
-    if !dims_ok || win_w == 0 return;
+    render_w, _ := app_current_render_dimensions();
+    if render_w == 0 return;
 
     params := sgpu_frame_ring_slot(*params_ring);
     params.cpu.* = .{
-        viewport_width = cast(float) win_w,
+        viewport_width = cast(float) render_w,
         test_color = color.xyz,
         time = cast(float)time,
     };

@@ -245,6 +245,8 @@ ui_prepare_game_view_windows :: () {
     game_view.visible_this_frame = false;
     game_view.hovered_this_frame = false;
     game_view.focused_this_frame = false;
+    game_view.image_min_screen = .{};
+    game_view.image_max_screen = .{};
     game_view.requested_width = GAME_VIEW_FALLBACK_RENDER_WIDTH;
     game_view.requested_height = GAME_VIEW_FALLBACK_RENDER_HEIGHT;
 
@@ -353,6 +355,8 @@ ui_draw_game_view_image :: (id: *u8, bounds: ImVec2, preserve_aspect: bool) {
         image_min = fit_min;
         image_max = fit_max;
     }
+    game_view.image_min_screen = .{image_min.x, image_min.y};
+    game_view.image_max_screen = .{image_max.x, image_max.y};
     ImDrawList.AddImage(draw_list, tex_ref, image_min, image_max);
 }
 
@@ -369,8 +373,8 @@ ui_set_game_view_render_request :: (bounds: ImVec2) {
         return;
     }
 
-    game_view.requested_width = max(cast(u32) round(bounds.x * scale_x), 1);
-    game_view.requested_height = max(cast(u32) round(bounds.y * scale_y), 1);
+    game_view.requested_width = max(cast(u32) floor(bounds.x * scale_x + 0.5), 1);
+    game_view.requested_height = max(cast(u32) floor(bounds.y * scale_y + 0.5), 1);
 }
 
 game_view_size_mode_label :: (mode: Game_View_Size_Mode) -> string {

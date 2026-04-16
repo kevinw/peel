@@ -24,14 +24,14 @@ tick :: () {
     assert(result == .SUCCESS);
     if !swapchain_image return;
 
-    _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
+    render_w, render_h := app_current_render_dimensions();
     mx, my, mouse_ok := get_mouse_pointer_position(true);
-    if dims_ok && win_w > 0 && win_h > 0 {
-        resolution = {cast(float) win_w, cast(float) win_h};
+    if render_w > 0 && render_h > 0 {
+        resolution = {cast(float) render_w, cast(float) render_h};
     }
-    if mouse_ok && dims_ok && win_w > 0 && win_h > 0 {
-        u := clamp(cast(float) mx / cast(float) win_w, 0, 1);
-        v := clamp(cast(float) my / cast(float) win_h, 0, 1);
+    if mouse_ok && render_w > 0 && render_h > 0 {
+        u := clamp(cast(float) mx / cast(float) render_w, 0, 1);
+        v := clamp(cast(float) my / cast(float) render_h, 0, 1);
         mouse_uv = .{u, v};
     }
     current_time = cast(float) frame_count * (1.0 / 60.0);

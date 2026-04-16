@@ -215,11 +215,11 @@ tetris_pixels_to_ndc :: (x_px: float, y_px: float) -> Vector2 {
 }
 
 tetris_update_layout :: () {
-    _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
-    if !dims_ok || win_w <= 0 || win_h <= 0 return;
+    render_w, render_h := app_current_render_dimensions();
+    if render_w == 0 || render_h == 0 return;
 
-    w := cast(float) win_w;
-    h := cast(float) win_h;
+    w := cast(float) render_w;
+    h := cast(float) render_h;
     layout_win_w_px = w;
     layout_win_h_px = h;
 

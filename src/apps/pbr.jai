@@ -125,10 +125,10 @@ on_dll_init :: () {
         num_instances = 1,
     };
 
-    _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
-    if dims_ok && win_w > 0 && win_h > 0 {
-        ensure_depth_target(cast(u32) win_w, cast(u32) win_h);
-        aspect := cast(float) win_w / cast(float) win_h;
+    render_w, render_h := app_current_render_dimensions();
+    if render_w > 0 && render_h > 0 {
+        ensure_depth_target(render_w, render_h);
+        aspect := cast(float) render_w / cast(float) render_h;
         view := editor_camera_make_view(*pbr_camera);
         proj := editor_camera_make_projection(*pbr_camera, aspect, 0.05, 50.0);
         pbr_params.cpu.view_proj = proj * view;
@@ -161,23 +161,28 @@ tick :: () {
 
     {
         mx, my, mouse_ok := get_mouse_pointer_position(true);
-        _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
+        game_mx, game_my, game_mouse_ok := app_game_view_mouse_pos_pixels();
+        render_w, render_h := app_current_render_dimensions();
         io := ImGui.GetIO();
+        app_mx := ifx app_should_render_to_game_view() then game_mx else mx;
+        app_my := ifx app_should_render_to_game_view() then game_my else my;
+        app_mouse_ok := ifx app_should_render_to_game_view() then game_mouse_ok else mouse_ok;
+        app_mouse_allowed := ifx app_should_render_to_game_view() then game_mouse_ok else !io.WantCaptureMouse;
         right_down := (Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_RIGHT] & .DOWN) != 0;
-        _ = editor_camera_update(*pbr_camera, cast(float) dt, mx, my, mouse_ok,
+        _ = editor_camera_update(*pbr_camera, cast(float) dt, app_mx, app_my, app_mouse_ok,
             allow_move = !io.WantTextInput,
-            allow_look = right_down && !io.WantCaptureMouse,
-            allow_zoom = !io.WantCaptureMouse);
-        if dims_ok && win_w > 0 && win_h > 0 {
-            pbr_params.cpu.resolution_x = cast(float) win_w;
-            pbr_params.cpu.resolution_y = cast(float) win_h;
-            ensure_depth_target(cast(u32) win_w, cast(u32) win_h);
+            allow_look = right_down && app_mouse_allowed,
+            allow_zoom = app_mouse_allowed);
+        if render_w > 0 && render_h > 0 {
+            pbr_params.cpu.resolution_x = cast(float) render_w;
+            pbr_params.cpu.resolution_y = cast(float) render_h;
+            ensure_depth_target(render_w, render_h);
         }
         t := cast(float) frame_count * (1.0 / 60.0);
         pbr_params.cpu.time = t;
-        if mouse_ok && dims_ok && win_w > 0 && win_h > 0 {
-            u := cast(float) mx / cast(float) win_w;
-            v := cast(float) my / cast(float) win_h;
+        if app_mouse_ok && render_w > 0 && render_h > 0 {
+            u := cast(float) app_mx / cast(float) render_w;
+            v := cast(float) app_my / cast(float) render_h;
             if u < 0.0 u = 0.0;
             if u > 1.0 u = 1.0;
             if v < 0.0 v = 0.0;
@@ -196,8 +201,8 @@ tick :: () {
         pbr_params.cpu.camera_pos_z = pbr_camera.position.z;
         pbr_params.cpu.indices = pbr_geometry_indices.gpu + cast(Gpu_Ptr) pbr_meshes[pbr_geometry].first_index * size_of(u32);
         draw_data.num_vertices = pbr_meshes[pbr_geometry].index_count;
-        if dims_ok && win_w > 0 && win_h > 0 {
-            aspect := cast(float) win_w / cast(float) win_h;
+        if render_w > 0 && render_h > 0 {
+            aspect := cast(float) render_w / cast(float) render_h;
             view := editor_camera_make_view(*pbr_camera);
             proj := editor_camera_make_projection(*pbr_camera, aspect, 0.05, 50.0);
             pbr_params.cpu.view_proj = proj * view;

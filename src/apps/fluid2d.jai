@@ -96,10 +96,10 @@ tick :: () {
     control.cpu.cursor_active = 0;
 
     mx, my, mouse_ok := get_mouse_pointer_position(true);
-    _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
-    if mouse_ok && dims_ok && win_w > 0 && win_h > 0 {
-        u := cast(float) mx / cast(float) win_w;
-        v := cast(float) my / cast(float) win_h;
+    render_w, render_h := app_current_render_dimensions();
+    if mouse_ok && render_w > 0 && render_h > 0 {
+        u := cast(float) mx / cast(float) render_w;
+        v := cast(float) my / cast(float) render_h;
         if u < 0.0 u = 0.0;
         if u > 1.0 u = 1.0;
         if v < 0.0 v = 0.0;

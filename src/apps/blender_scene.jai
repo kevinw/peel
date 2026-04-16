@@ -159,6 +159,7 @@ tick :: () {
     if !swapchain_image return;
 
     mx, my, mouse_ok := get_mouse_pointer_position(true);
+    game_mx, game_my, game_mouse_ok := app_game_view_mouse_pos_pixels();
     render_w, render_h := app_current_render_dimensions();
     if render_w == 0 || render_h == 0 return;
 
@@ -167,10 +168,14 @@ tick :: () {
     depth_view := depth_views[depth_slot];
     assert(depth_view != 0, "Depth view missing for slot %", depth_slot);
 
+    app_mx := ifx app_should_render_to_game_view() then game_mx else mx;
+    app_my := ifx app_should_render_to_game_view() then game_my else my;
+    app_mouse_ok := ifx app_should_render_to_game_view() then game_mouse_ok else mouse_ok;
+    app_mouse_allowed := ifx app_should_render_to_game_view() then game_mouse_ok else true;
     allow_look := (Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_RIGHT] & .DOWN) != 0;
-    editor_camera_update(*camera, editor_dt, mx, my, mouse_ok,
+    editor_camera_update(*camera, editor_dt, app_mx, app_my, app_mouse_ok,
         allow_move = true,
-        allow_look = allow_look);
+        allow_look = allow_look && app_mouse_allowed);
 
     if auto_orbit {
         orbit_time += editor_dt;

@@ -113,10 +113,8 @@ on_dll_init :: () {
     hex_tactics_model_init(*hex_tactics_model);
     hex_tactics_rebuild_render(*hex_tactics_model, *hex_tactics_render);
 
-    _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
-    if dims_ok && win_w > 0 && win_h > 0 {
-        hex_tactics_ensure_depth_target(cast(u32) win_w, cast(u32) win_h);
-    }
+    render_w, render_h := app_current_render_dimensions();
+    if render_w > 0 && render_h > 0 hex_tactics_ensure_depth_target(render_w, render_h);
 
     editor_camera_set_look_at(*hex_tactics_camera, hex_tactics_orbit_target);
     hex_tactics_camera.position = hex_tactics_orbit_target - editor_camera_forward(hex_tactics_camera) * hex_tactics_orbit_distance;
@@ -142,40 +140,43 @@ tick :: () {
     if app_ui_enabled hex_tactics_ui();
 
     mx, my, mouse_ok := get_mouse_pointer_position(true);
-    _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
-    if dims_ok && win_w > 0 && win_h > 0 {
-        hex_tactics_ensure_depth_target(cast(u32) win_w, cast(u32) win_h);
-    }
+    game_mx, game_my, game_mouse_ok := app_game_view_mouse_pos_pixels();
+    render_w, render_h := app_current_render_dimensions();
+    if render_w > 0 && render_h > 0 hex_tactics_ensure_depth_target(render_w, render_h);
     io := ImGui.GetIO();
+    app_mx := ifx app_should_render_to_game_view() then game_mx else mx;
+    app_my := ifx app_should_render_to_game_view() then game_my else my;
+    app_mouse_ok := ifx app_should_render_to_game_view() then game_mouse_ok else mouse_ok;
+    app_mouse_allowed := ifx app_should_render_to_game_view() then game_mouse_ok else !io.WantCaptureMouse;
     right_down := input_down(.MOUSE_BUTTON_RIGHT);
     alt_down := input_down(.ALT);
 
-    orbit_start := alt_down && input_pressed(.MOUSE_BUTTON_LEFT) && !io.WantCaptureMouse && !right_down && mouse_ok;
+    orbit_start := alt_down && input_pressed(.MOUSE_BUTTON_LEFT) && app_mouse_allowed && !right_down && app_mouse_ok;
     if orbit_start {
-        hex_tactics_orbit_prev_mouse = .{cast(float) mx, cast(float) my};
+        hex_tactics_orbit_prev_mouse = .{cast(float) app_mx, cast(float) app_my};
         hex_tactics_orbit_have_prev_mouse = true;
         hex_tactics_orbit_distance = max(distance(hex_tactics_camera.position, hex_tactics_orbit_target), 1.2);
         hex_tactics_orbit_drag_active = true;
     }
 
     if hex_tactics_orbit_drag_active {
-        if !alt_down || !input_down(.MOUSE_BUTTON_LEFT) || io.WantCaptureMouse || !mouse_ok {
+        if !alt_down || !input_down(.MOUSE_BUTTON_LEFT) || !app_mouse_allowed || !app_mouse_ok {
             hex_tactics_orbit_drag_active = false;
             hex_tactics_orbit_have_prev_mouse = false;
         } else {
-            hex_tactics_orbit_update_camera(.{cast(float) mx, cast(float) my});
+            hex_tactics_orbit_update_camera(.{cast(float) app_mx, cast(float) app_my});
         }
     }
 
-    _ = editor_camera_update(*hex_tactics_camera, cast(float) dt, mx, my, mouse_ok,
+    _ = editor_camera_update(*hex_tactics_camera, cast(float) dt, app_mx, app_my, app_mouse_ok,
         allow_move = !io.WantTextInput && !hex_tactics_orbit_drag_active,
-        allow_look = right_down && !io.WantCaptureMouse && !hex_tactics_orbit_drag_active,
-        allow_zoom = !io.WantCaptureMouse && !hex_tactics_orbit_drag_active);
+        allow_look = right_down && app_mouse_allowed && !hex_tactics_orbit_drag_active,
+        allow_zoom = app_mouse_allowed && !hex_tactics_orbit_drag_active);
 
     cam_forward, cam_right, cam_up: Vector3;
     editor_camera_basis(hex_tactics_camera, *cam_forward, *cam_right, *cam_up);
     view := editor_camera_make_view(*hex_tactics_camera);
-    aspect := ifx dims_ok && win_h > 0 then cast(float) win_w / cast(float) win_h else 1.0;
+    aspect := ifx render_h > 0 then cast(float) render_w / cast(float) render_h else 1.0;
     proj := editor_camera_make_projection(*hex_tactics_camera, aspect, 0.05, 120.0);
     view_proj := proj * view;
 

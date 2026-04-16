@@ -129,11 +129,9 @@ tick :: () {
     if !swapchain_image return;
 
     mx, my, mouse_ok := get_mouse_pointer_position(true);
-    _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
-    if !dims_ok || win_w <= 0 || win_h <= 0 return;
-
-    width := cast(u32) win_w;
-    height := cast(u32) win_h;
+    game_mx, game_my, game_mouse_ok := app_game_view_mouse_pos_pixels();
+    width, height := app_current_render_dimensions();
+    if width == 0 || height == 0 return;
     if !linear_present_ensure_color_target(*material_lab_present, width, height) return;
     assert(ensure_texture_ring(*material_lab_depth, .{
         dimensions = .[width, height, 1],
@@ -143,11 +141,15 @@ tick :: () {
     gpu_commit_residency();
 
     io := ImGui.GetIO();
+    app_mx := ifx app_should_render_to_game_view() then game_mx else mx;
+    app_my := ifx app_should_render_to_game_view() then game_my else my;
+    app_mouse_ok := ifx app_should_render_to_game_view() then game_mouse_ok else mouse_ok;
+    app_mouse_allowed := ifx app_should_render_to_game_view() then game_mouse_ok else !io.WantCaptureMouse;
     right_down := (Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_RIGHT] & .DOWN) != 0;
-    _ = editor_camera_update(*material_lab_camera, cast(float) dt, mx, my, mouse_ok,
+    _ = editor_camera_update(*material_lab_camera, cast(float) dt, app_mx, app_my, app_mouse_ok,
         allow_move = !io.WantTextInput,
-        allow_look = right_down && !io.WantCaptureMouse,
-        allow_zoom = !io.WantCaptureMouse);
+        allow_look = right_down && app_mouse_allowed,
+        allow_zoom = app_mouse_allowed);
 
     if material_lab_auto_orbit {
         material_lab_orbit_time += cast(float) editor_dt;
@@ -158,7 +160,7 @@ tick :: () {
         editor_camera_set_look_at(*material_lab_camera, .{0.0, 0.6, 0.0});
     }
 
-    aspect := cast(float) win_w / cast(float) win_h;
+    aspect := cast(float) width / cast(float) height;
     view := editor_camera_make_view(*material_lab_camera);
     proj := editor_camera_make_projection(*material_lab_camera, aspect, 0.05, 80.0);
     view_proj := proj * view;
@@ -255,7 +257,7 @@ tick :: () {
             assert(draw_result == .SUCCESS, "material_lab draw failed for object % (%): %", object_index, object.name, draw_result);
         }
 
-        viewport := Vector2.{cast(float) win_w, cast(float) win_h};
+        viewport := Vector2.{cast(float) width, cast(float) height};
         gizmo_draw_result := Gizmo_Render.gizmo_render_draw(*material_lab_gizmo_render_ctx, cmd_buff, *material_lab_gizmo_ctx, viewport, depth_mode = .TEST);
         assert(gizmo_draw_result == .SUCCESS, "material_lab gizmo draw failed: %", gizmo_draw_result);
     }

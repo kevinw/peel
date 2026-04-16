@@ -655,12 +655,20 @@ tick :: () {
         next_atlas_index = compact_next;
     }
 
-    _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
+    render_w, render_h := app_current_render_dimensions();
+    win_w := cast(s32) render_w;
+    win_h := cast(s32) render_h;
+    dims_ok := render_w > 0 && render_h > 0;
     mx, my, mouse_ok := get_mouse_pointer_position(true);
+    game_mx, game_my, game_mouse_ok := app_game_view_mouse_pos_pixels();
 
     ui();
     validation_begin_frame();
     io := ImGui.GetIO();
+    app_mx := ifx app_should_render_to_game_view() then game_mx else mx;
+    app_my := ifx app_should_render_to_game_view() then game_my else my;
+    app_mouse_ok := ifx app_should_render_to_game_view() then game_mouse_ok else mouse_ok;
+    app_mouse_allowed := ifx app_should_render_to_game_view() then game_mouse_ok else !io.WantCaptureMouse;
     left_down := (Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_LEFT] & .DOWN) != 0;
     right_down := (Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_RIGHT] & .DOWN) != 0;
     alt_down := (Input.input_button_states[Input.Key_Code.ALT] & .DOWN) != 0;
@@ -696,14 +704,14 @@ tick :: () {
         }
     }
 
-    orbit_start := alt_down && left_pressed && !io.WantCaptureMouse && !right_down && mouse_ok && dims_ok && win_w > 0 && win_h > 0;
+    orbit_start := alt_down && left_pressed && app_mouse_allowed && !right_down && app_mouse_ok && dims_ok && win_w > 0 && win_h > 0;
     if orbit_start {
         cam_forward, cam_right, cam_up: Vector3;
         editor_camera_basis(camera, *cam_forward, *cam_right, *cam_up);
         ray_origin, ray_dir, ray_ok := mouse_world_ray(
             .{cast(float) win_w, cast(float) win_h}, tan((PI / 3.0) * 0.5),
             camera.position, cam_forward, cam_right, cam_up,
-            .{cast(float) mx, cast(float) my}, mouse_ok);
+            .{cast(float) app_mx, cast(float) app_my}, app_mouse_ok);
         pick_i: s32 = -1;
         if ray_ok {
             pick_i = pick_edit_from_bvh(ray_origin, ray_dir);
@@ -718,27 +726,27 @@ tick :: () {
             orbit_target = camera.position + cam_forward * 8.0;
         }
         orbit_distance = max(distance(camera.position, orbit_target), 0.6);
-        orbit_prev_mouse = .{cast(float) mx, cast(float) my};
+        orbit_prev_mouse = .{cast(float) app_mx, cast(float) app_my};
         orbit_have_prev_mouse = true;
         orbit_drag_active = true;
         focus_active = false;
     }
 
     if orbit_drag_active {
-        if !alt_down || !left_down || io.WantCaptureMouse || !mouse_ok {
+        if !alt_down || !left_down || !app_mouse_allowed || !app_mouse_ok {
             orbit_drag_active = false;
             orbit_have_prev_mouse = false;
         } else {
-            orbit_update_camera(.{cast(float) mx, cast(float) my});
+            orbit_update_camera(.{cast(float) app_mx, cast(float) app_my});
         }
     }
 
     camera_input: Editor_Camera_Update_Result;
     if control_mode == .Editor {
-        camera_input = editor_camera_update(*camera, dt, mx, my, mouse_ok,
+        camera_input = editor_camera_update(*camera, dt, app_mx, app_my, app_mouse_ok,
             allow_move = !io.WantTextInput && !orbit_drag_active,
-            allow_look = right_down && !io.WantCaptureMouse && !orbit_drag_active,
-            allow_zoom = !io.WantCaptureMouse && !orbit_drag_active);
+            allow_look = right_down && app_mouse_allowed && !orbit_drag_active,
+            allow_zoom = app_mouse_allowed && !orbit_drag_active);
     } else {
         camera_input = .{};
     }
@@ -817,7 +825,7 @@ tick :: () {
     render_scale = clamp(render_scale, 0.25, 1.0);
     if dims_ok && win_w > 0 && win_h > 0 {
         if debug_render_direct_swapchain {
-            params.cpu.resolution = .{cast(float) win_w, cast(float) win_h};
+            params.cpu.resolution = .{cast(float) render_w, cast(float) render_h};
         } else {
             if !ensure_render_target(*upscaler, win_w, win_h, render_scale) {
                 return;
@@ -871,7 +879,7 @@ tick :: () {
     hovered_edit = -1;
     draw_any_gizmo := (draw_brick_debug || (edit_manip_enabled && control_mode == .Editor) || physics_gizmos_enabled) && dims_ok && win_w > 0 && win_h > 0;
     if draw_any_gizmo {
-        viewport := Vector2.{cast(float) win_w, cast(float) win_h};
+        viewport := Vector2.{cast(float) render_w, cast(float) render_h};
         view := editor_camera_make_view(*camera);
         proj := make_projection_matrix(params.cpu.camera_fov_y, viewport.x / max(viewport.y, 1.0), 0.05, 160.0);
         Gizmo_Render.gizmo_render_set_view_projection(*gizmo_render_ctx, proj * view);
@@ -885,9 +893,9 @@ tick :: () {
             ray_origin, ray_dir, ray_ok := mouse_world_ray(
                 .{cast(float) win_w, cast(float) win_h}, params.cpu.camera_tan_half_fov,
                 camera.position, params.cpu.camera_forward, params.cpu.camera_right, params.cpu.camera_up,
-                .{cast(float) mx, cast(float) my}, mouse_ok);
+                .{cast(float) app_mx, cast(float) app_my}, app_mouse_ok);
             hovered_edit = -1;
-            if ray_ok && !io.WantCaptureMouse && !right_down {
+            if ray_ok && app_mouse_allowed && !right_down {
                 hovered_edit = pick_edit_from_bvh(ray_origin, ray_dir);
             }
 
@@ -898,12 +906,12 @@ tick :: () {
                 camera_right = params.cpu.camera_right,
                 camera_up = params.cpu.camera_up,
                 fov_y = params.cpu.camera_fov_y,
-                mouse_pos = .{cast(float) mx, cast(float) my},
-                mouse_valid = mouse_ok,
+                mouse_pos = .{cast(float) app_mx, cast(float) app_my},
+                mouse_valid = app_mouse_ok,
                 mouse_down = left_down,
                 mouse_pressed = left_pressed,
                 mouse_released = left_released,
-                block_mouse = io.WantCaptureMouse || right_down,
+                block_mouse = !app_mouse_allowed || right_down,
             };
 
             manip_result: Manip_Result;
@@ -937,7 +945,7 @@ tick :: () {
             // Scene picking should only be blocked by actual gizmo-handle interaction.
             // `manip_result.captured_mouse` is broader (includes selected-object hover), which prevents re-selection.
             handle_hovered := manip_ctx.hovered_axis >= 0 || manip_ctx.hovered_plane >= 0 || manip_ctx.hovered_orbit;
-            can_pick_scene := left_pressed && !alt_down && !io.WantCaptureMouse && !right_down && !manip_ctx.active && !handle_hovered;
+            can_pick_scene := left_pressed && !alt_down && app_mouse_allowed && !right_down && !manip_ctx.active && !handle_hovered;
             if can_pick_scene {
                 if ray_ok {
                     picked_edit := pick_edit_from_bvh(ray_origin, ray_dir);
@@ -1231,7 +1239,7 @@ tick :: () {
         draw_result := gpu_draw_instanced_direct(cmd_buff, params.gpu, 3, 1);
         assert(draw_result == .SUCCESS, tprint("Brickmap draw failed: %", draw_result));
         if draw_any_gizmo {
-            viewport := Vector2.{cast(float) win_w, cast(float) win_h};
+            viewport := Vector2.{cast(float) render_w, cast(float) render_h};
             gizmo_draw_result := Gizmo_Render.gizmo_render_draw(*gizmo_render_ctx, cmd_buff, *gizmo_ctx, viewport, depth_mode = .NONE);
             assert(gizmo_draw_result == .SUCCESS, tprint("Brickmap gizmo draw failed: %", gizmo_draw_result));
         }
@@ -1267,7 +1275,7 @@ tick :: () {
             assert(blit_draw_result == .SUCCESS, tprint("Brickmap MetalFX blit draw failed: %", blit_draw_result));
         }
         if draw_any_gizmo {
-            viewport := Vector2.{cast(float) win_w, cast(float) win_h};
+            viewport := Vector2.{cast(float) render_w, cast(float) render_h};
             gizmo_draw_result := Gizmo_Render.gizmo_render_draw(*gizmo_render_ctx, cmd_buff, *gizmo_ctx, viewport, depth_mode = .NONE);
             assert(gizmo_draw_result == .SUCCESS, tprint("Brickmap gizmo draw failed: %", gizmo_draw_result));
         }

@@ -68,11 +68,8 @@ tick :: () {
     result, swapchain_image := app_swapchain_acquire();
     if result != .SUCCESS || !swapchain_image return;
 
-    _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
-    if !dims_ok || win_w <= 0 || win_h <= 0 return;
-
-    width := cast(u32) win_w;
-    height := cast(u32) win_h;
+    width, height := app_current_render_dimensions();
+    if width == 0 || height == 0 return;
     if !linear_present_ensure_color_target(*scene_present, width, height) return;
 
     main_queue := gpu_get_queue(.MAIN, 0);

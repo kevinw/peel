@@ -62,6 +62,8 @@ game_view: struct {
     visible_this_frame: bool;
     hovered_this_frame: bool;
     focused_this_frame: bool;
+    image_min_screen: Vector2;
+    image_max_screen: Vector2;
 };
 
 current_app_render_view: Gpu_Texture_View;
@@ -581,6 +583,47 @@ app_current_render_dimensions :: () -> u32, u32 {
 app_current_readback_view :: () -> Gpu_Texture_View {
     if current_app_render_view != 0 return current_app_render_view;
     return gpu_current_swapchain_view();
+}
+
+app_game_view_mouse_inside_image :: () -> bool {
+    if !app_should_render_to_game_view() return false;
+    using,only(GetCurrentContext, GetIO) _ :: #import "ImGui";
+    if GetCurrentContext() == null || game_view.width == 0 || game_view.height == 0 return false;
+    mouse := GetIO().MousePos;
+    return mouse.x >= game_view.image_min_screen.x &&
+           mouse.y >= game_view.image_min_screen.y &&
+           mouse.x < game_view.image_max_screen.x &&
+           mouse.y < game_view.image_max_screen.y;
+}
+
+app_game_view_mouse_pos_pixels :: () -> s64, s64, bool {
+    if !app_should_render_to_game_view() {
+        mx, my, mouse_ok := get_mouse_pointer_position(true);
+        return mx, my, mouse_ok;
+    }
+
+    using,only(GetCurrentContext, GetIO) _ :: #import "ImGui";
+    if GetCurrentContext() == null || game_view.width == 0 || game_view.height == 0 return 0, 0, false;
+
+    image_size := game_view.image_max_screen - game_view.image_min_screen;
+    if image_size.x <= 0.0 || image_size.y <= 0.0 return 0, 0, false;
+
+    mouse := GetIO().MousePos;
+    if mouse.x < game_view.image_min_screen.x ||
+       mouse.y < game_view.image_min_screen.y ||
+       mouse.x >= game_view.image_max_screen.x ||
+       mouse.y >= game_view.image_max_screen.y {
+        return 0, 0, false;
+    }
+
+    local_x := (mouse.x - game_view.image_min_screen.x) * cast(float) game_view.width / image_size.x;
+    local_y := (mouse.y - game_view.image_min_screen.y) * cast(float) game_view.height / image_size.y;
+    local_x = clamp(local_x, 0.0, max(cast(float) game_view.width - 1.0, 0.0));
+    local_y = clamp(local_y, 0.0, max(cast(float) game_view.height - 1.0, 0.0));
+    local_x_i := cast(s64) floor(local_x);
+    local_y_i := cast(s64) floor(local_y);
+    local_y_i = cast(s64) game_view.height - 1 - local_y_i;
+    return local_x_i, local_y_i, true;
 }
 
 #scope_file

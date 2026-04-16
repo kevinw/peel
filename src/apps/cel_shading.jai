@@ -163,10 +163,10 @@ tick :: () {
     if !swapchain_image return;
 
     mx, my, mouse_ok := get_mouse_pointer_position(true);
-    _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
-    if !dims_ok || win_w <= 0 || win_h <= 0 return;
+    render_w, render_h := app_current_render_dimensions();
+    if render_w == 0 || render_h == 0 return;
 
-    ensure_render_targets(cast(u32) win_w, cast(u32) win_h);
+    ensure_render_targets(render_w, render_h);
 
     allow_look := (Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_RIGHT] & .DOWN) != 0;
     _ = editor_camera_update(*camera, editor_dt, mx, my, mouse_ok,
@@ -184,7 +184,7 @@ tick :: () {
         editor_camera_set_look_at(*camera, scene_center + .{0.0, 1.1, 0.0});
     }
 
-    aspect := cast(float) win_w / max(cast(float) win_h, 1.0);
+    aspect := cast(float) render_w / max(cast(float) render_h, 1.0);
     view := editor_camera_make_view(*camera);
     proj := editor_camera_make_projection(*camera, aspect, 0.05, 120.0);
     view_proj = proj * view;
@@ -227,7 +227,7 @@ tick :: () {
             horizon_color = .{0.98, 0.76, 0.60, 1.0},
             zenith_color = .{0.24, 0.45, 0.84, 1.0},
             sun_color = .{1.0, 0.92, 0.76, 1.0},
-            resolution_time = .{cast(float) win_w, cast(float) win_h, current_time, 0.0},
+            resolution_time = .{cast(float) render_w, cast(float) render_h, current_time, 0.0},
             sky_params = .{tan(camera.fov_y * 0.5), aspect, 0.18, 0.06},
         };
         gpu_draw_instanced_direct(cmd_buff, sky.gpu, 3, 1);
@@ -290,7 +290,7 @@ tick :: () {
         scene_texture_index = gpu_texture_view_index(scene_view),
         edge_texture_index = gpu_texture_view_index(edge_view),
         sampler_index = cast(u32) composite_sampler - 1,
-        resolution = .{cast(float) win_w, cast(float) win_h},
+        resolution = .{cast(float) render_w, cast(float) render_h},
         outline_thickness = draw.outline_thickness,
         ink_color = draw.ink_color,
     };

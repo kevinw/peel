@@ -84,13 +84,14 @@ tick :: () {
     assert(result == .SUCCESS);
     if !swapchain_image return;
 
-    _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
     mx, my, mouse_ok := get_mouse_pointer_position(true);
-    if dims_ok && win_w > 0 && win_h > 0 {
-        raytracer_params.cpu.aspect = cast(float) win_w / cast(float) win_h;
+    game_mx, game_my, game_mouse_ok := app_game_view_mouse_pos_pixels();
+    render_w, render_h := app_current_render_dimensions();
+    if render_w > 0 && render_h > 0 {
+        raytracer_params.cpu.aspect = cast(float) render_w / cast(float) render_h;
         raytracer_params.cpu.inv_viewport = .{
-            1.0 / cast(float) win_w,
-            1.0 / cast(float) win_h,
+            1.0 / cast(float) render_w,
+            1.0 / cast(float) render_h,
         };
     }
     app_ui();
@@ -106,16 +107,20 @@ tick :: () {
     }
 
     io := ImGui.GetIO();
+    app_mouse_ok := ifx app_should_render_to_game_view() then game_mouse_ok else mouse_ok;
+    app_mx := ifx app_should_render_to_game_view() then game_mx else mx;
+    app_my := ifx app_should_render_to_game_view() then game_my else my;
+    app_mouse_allowed := ifx app_should_render_to_game_view() then game_mouse_ok else !io.WantCaptureMouse;
     left_down := (Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_LEFT] & .DOWN) != 0;
     right_down := (Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_RIGHT] & .DOWN) != 0;
     left_pressed := left_down && !raytracer_left_was_down;
     left_released := !left_down && raytracer_left_was_down;
     raytracer_left_was_down = left_down;
 
-    _ = editor_camera_update(*raytracer_camera, dt, mx, my, mouse_ok,
+    _ = editor_camera_update(*raytracer_camera, dt, app_mx, app_my, app_mouse_ok,
         allow_move = !io.WantTextInput,
-        allow_look = mouse_ok && dims_ok && win_w > 0 && win_h > 0 && right_down && !io.WantCaptureMouse,
-        allow_zoom = !io.WantCaptureMouse);
+        allow_look = app_mouse_ok && render_w > 0 && render_h > 0 && right_down && app_mouse_allowed,
+        allow_zoom = app_mouse_allowed);
 
     cam_forward, cam_right, cam_up: Vector3;
     editor_camera_basis(raytracer_camera, *cam_forward, *cam_right, *cam_up);
@@ -148,8 +153,8 @@ tick :: () {
     assert(draw_result == .SUCCESS, tprint("Raytracer draw failed: %", draw_result));
 
 
-    if raytracer_edit_objects && dims_ok && win_w > 0 && win_h > 0 {
-        viewport := Vector2.{cast(float) win_w, cast(float) win_h};
+    if raytracer_edit_objects && render_w > 0 && render_h > 0 {
+        viewport := Vector2.{cast(float) render_w, cast(float) render_h};
         // Must match shader ray setup: rd = forward + right * p.x * 0.85 + up * p.y * 0.85
         // => tan(fov_y / 2) == 0.85
         fov_y := 2.0 * atan(FOV_FACTOR);
@@ -164,12 +169,12 @@ tick :: () {
             camera_right = cam_right,
             camera_up = cam_up,
             fov_y = fov_y,
-            mouse_pos = .{cast(float) mx, cast(float) my},
-            mouse_valid = mouse_ok,
+            mouse_pos = .{cast(float) app_mx, cast(float) app_my},
+            mouse_valid = app_mouse_ok,
             mouse_down = left_down,
             mouse_pressed = left_pressed,
             mouse_released = left_released,
-            block_mouse = io.WantCaptureMouse,
+            block_mouse = !app_mouse_allowed,
         };
         Gizmo.begin_frame(*raytracer_gizmo_ctx);
         _ = manip_update(*raytracer_manip_ctx, *raytracer_gizmo_ctx, raytracer_objects, frame);

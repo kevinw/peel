@@ -106,12 +106,12 @@ tick :: () {
     build_ui();
 
     mx, my, mouse_ok := get_mouse_pointer_position(true);
-    _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
+    render_w, render_h := app_current_render_dimensions();
 
 
-    if mouse_ok && dims_ok && win_w > 0 && win_h > 0 {
-        nx := cast(float) mx / cast(float) win_w;
-        ny := cast(float) my / cast(float) win_h;
+    if mouse_ok && render_w > 0 && render_h > 0 {
+        nx := cast(float) mx / cast(float) render_w;
+        ny := cast(float) my / cast(float) render_h;
         control.cursor = .{ (nx * 2.0 - 1.0), (ny * 2.0 - 1.0) } * control.view_extent;
     } else {
         control.cursor = .{ 9999.0, 9999.0 };

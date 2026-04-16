@@ -132,39 +132,44 @@ tick :: () {
 
     if app_ui_enabled texture3d_ui();
 
-    _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
+    render_w, render_h := app_current_render_dimensions();
     mx, my, mouse_ok := get_mouse_pointer_position(true);
+    game_mx, game_my, game_mouse_ok := app_game_view_mouse_pos_pixels();
     io := ImGui.GetIO();
+    app_mx := ifx app_should_render_to_game_view() then game_mx else mx;
+    app_my := ifx app_should_render_to_game_view() then game_my else my;
+    app_mouse_ok := ifx app_should_render_to_game_view() then game_mouse_ok else mouse_ok;
+    app_mouse_allowed := ifx app_should_render_to_game_view() then game_mouse_ok else !io.WantCaptureMouse;
     left_down := (Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_LEFT] & .DOWN) != 0;
     left_pressed := (Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_LEFT] & .START) != 0;
     right_down := (Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_RIGHT] & .DOWN) != 0;
     alt_down := (Input.input_button_states[Input.Key_Code.ALT] & .DOWN) != 0;
 
-    if dims_ok && win_w > 0 && win_h > 0 {
-        texture3d_params.cpu.resolution = .{cast(float) win_w, cast(float) win_h};
+    if render_w > 0 && render_h > 0 {
+        texture3d_params.cpu.resolution = .{cast(float) render_w, cast(float) render_h};
     }
 
-    orbit_start := alt_down && left_pressed && !io.WantCaptureMouse && !right_down && mouse_ok;
+    orbit_start := alt_down && left_pressed && app_mouse_allowed && !right_down && app_mouse_ok;
     if orbit_start {
-        texture3d_orbit_prev_mouse = .{cast(float) mx, cast(float) my};
+        texture3d_orbit_prev_mouse = .{cast(float) app_mx, cast(float) app_my};
         texture3d_orbit_have_prev_mouse = true;
         texture3d_orbit_distance = max(distance(texture3d_camera.position, texture3d_orbit_target), 0.75);
         texture3d_orbit_drag_active = true;
     }
 
     if texture3d_orbit_drag_active {
-        if !alt_down || !left_down || io.WantCaptureMouse || !mouse_ok {
+        if !alt_down || !left_down || !app_mouse_allowed || !app_mouse_ok {
             texture3d_orbit_drag_active = false;
             texture3d_orbit_have_prev_mouse = false;
         } else {
-            texture3d_orbit_update_camera(.{cast(float) mx, cast(float) my});
+            texture3d_orbit_update_camera(.{cast(float) app_mx, cast(float) app_my});
         }
     }
 
-    _ = editor_camera_update(*texture3d_camera, cast(float) dt, mx, my, mouse_ok,
+    _ = editor_camera_update(*texture3d_camera, cast(float) dt, app_mx, app_my, app_mouse_ok,
         allow_move = !io.WantTextInput && !texture3d_orbit_drag_active,
-        allow_look = right_down && !io.WantCaptureMouse && !texture3d_orbit_drag_active,
-        allow_zoom = !io.WantCaptureMouse && !texture3d_orbit_drag_active);
+        allow_look = right_down && app_mouse_allowed && !texture3d_orbit_drag_active,
+        allow_zoom = app_mouse_allowed && !texture3d_orbit_drag_active);
 
     camera_forward, camera_right, camera_up: Vector3;
     editor_camera_basis(texture3d_camera, *camera_forward, *camera_right, *camera_up);

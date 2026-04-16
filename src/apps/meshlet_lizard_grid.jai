@@ -86,15 +86,16 @@ on_dll_init :: () {
 
 
 tick :: () {
+    using app;
     result, swapchain_image := app_swapchain_acquire();
     assert(result == .SUCCESS);
     if !swapchain_image return;
 
     mx, my, mouse_ok := get_mouse_pointer_position(true);
-    _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
-    if !dims_ok || win_w <= 0 || win_h <= 0 return;
+    render_w, render_h := app_current_render_dimensions();
+    if render_w == 0 || render_h == 0 return;
 
-    ensure_depth_target(cast(u32) win_w, cast(u32) win_h);
+    ensure_depth_target(render_w, render_h);
 
     allow_look := (Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_RIGHT] & .DOWN) != 0;
     _ = editor_camera_update(*camera, editor_dt, mx, my, mouse_ok,
@@ -113,13 +114,13 @@ tick :: () {
         editor_camera_set_look_at(*camera, scene_center);
     }
 
-    aspect := cast(float) win_w / max(cast(float) win_h, 1.0);
+    aspect := cast(float) render_w / max(cast(float) render_h, 1.0);
     view := editor_camera_make_view(*camera);
     proj := editor_camera_make_projection(*camera, aspect, 0.05, 300.0);
     draw.camera_vp = proj * view;
     draw.frustum_planes = extract_frustum_planes(draw.camera_vp);
     draw.eye_position = camera.position;
-    draw.lod_projection_scale = cast(float) win_h / max(2.0 * max(tan(camera.fov_y * 0.5), 0.0001), 0.0001);
+    draw.lod_projection_scale = cast(float) render_h / max(2.0 * max(tan(camera.fov_y * 0.5), 0.0001), 0.0001);
     draw.lod_radius_threshold = lod_screen_radius;
     draw.lod_metric_power = lod_distance_power;
     draw.light_dir = normalize(Vector3.{-0.45, -1.0, -0.25});
@@ -242,6 +243,7 @@ show_ui :: () {
 
 #scope_file
 init_meshlet_lizard_pipeline :: () {
+    using app;
 
     shader :: #run get_transpiled_task_mesh_pipeline(.METAL, task_main, mesh_main, fragment_main);
     mesh_source = copy_string(tprint("%\n%", shader.task_source, shader.mesh_source));

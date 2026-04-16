@@ -189,24 +189,25 @@ tick :: () {
     assert(result == .SUCCESS);
     if !swapchain_image return;
 
-    _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
-    viewport := Vector2.{1280.0, 720.0};
-    if dims_ok && win_w > 0 && win_h > 0 {
-        viewport = .{cast(float) win_w, cast(float) win_h};
-    }
+    render_w, render_h := app_current_render_dimensions();
+    viewport := Vector2.{cast(float) max(render_w, 1), cast(float) max(render_h, 1)};
     ensure_depth_target(cast(u32) viewport.x, cast(u32) viewport.y);
 
     t := cast(float) time;
     mx, my, mouse_ok := get_mouse_pointer_position(true);
-    has_dims := dims_ok && win_w > 0 && win_h > 0;
+    game_mx, game_my, game_mouse_ok := app_game_view_mouse_pos_pixels();
+    has_dims := render_w > 0 && render_h > 0;
+    app_mx := ifx app_should_render_to_game_view() then game_mx else mx;
+    app_my := ifx app_should_render_to_game_view() then game_my else my;
+    app_mouse_ok := ifx app_should_render_to_game_view() then game_mouse_ok else mouse_ok;
 
     left_mouse_down := Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_LEFT] & .DOWN;
     right_mouse_down := Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_RIGHT] & .DOWN;
     io := ImGui.GetIO();
-    camera_update := editor_camera_update(*terrain_camera, dt, mx, my, mouse_ok,
+    camera_update := editor_camera_update(*terrain_camera, dt, app_mx, app_my, app_mouse_ok,
         allow_move = !io.WantCaptureKeyboard,
-        allow_look = right_mouse_down && has_dims && !io.WantCaptureMouse,
-        allow_zoom = !io.WantCaptureMouse);
+        allow_look = right_mouse_down && has_dims && (ifx app_should_render_to_game_view() then game_mouse_ok else !io.WantCaptureMouse),
+        allow_zoom = ifx app_should_render_to_game_view() then game_mouse_ok else !io.WantCaptureMouse);
     keyboard_move := camera_update.moved;
     used_mouse_look := camera_update.looked;
 
@@ -237,8 +238,8 @@ tick :: () {
 
     Terrain_Voxel.update_streaming(*terrain_voxel_ctx, terrain_camera.position);
 
-    if left_mouse_down && mouse_ok && has_dims {
-        ray_origin, ray_dir, ray_ok := terrain_mouse_world_ray(cast(float) mx, cast(float) my, viewport, *terrain_camera);
+    if left_mouse_down && app_mouse_ok && has_dims {
+        ray_origin, ray_dir, ray_ok := terrain_mouse_world_ray(cast(float) app_mx, cast(float) app_my, viewport, *terrain_camera);
         if ray_ok {
             hit, hit_p := terrain_raycast_surface(*terrain_voxel_ctx, ray_origin, ray_dir, terrain_ray_max_dist, terrain_ray_step);
             if hit {

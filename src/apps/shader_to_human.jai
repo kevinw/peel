@@ -75,13 +75,13 @@ tick :: () {
 
     if app_ui_enabled shader_to_human_ui();
 
-    _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
+    render_w, render_h := app_current_render_dimensions();
     mx, my, mouse_ok := get_mouse_pointer_position(true);
-    if dims_ok && win_w > 0 && win_h > 0 {
-        shader_to_human_params.cpu.resolution = .{cast(float) win_w, cast(float) win_h};
+    if render_w > 0 && render_h > 0 {
+        shader_to_human_params.cpu.resolution = .{cast(float) render_w, cast(float) render_h};
     }
-    if mouse_ok && dims_ok && win_h > 0 {
-        shader_to_human_params.cpu.mouse_pos = .{cast(float) mx, cast(float) (win_h - my)};
+    if mouse_ok && render_h > 0 {
+        shader_to_human_params.cpu.mouse_pos = .{cast(float) mx, cast(float) (render_h - my)};
     } else {
         shader_to_human_params.cpu.mouse_pos = .{-1000.0, -1000.0};
     }
@@ -102,7 +102,7 @@ tick :: () {
         look_at = .{0, 0, 0},
         reference_up_vector = .{0, 1, 0},
         x_is_forward = false);
-    aspect := ifx dims_ok && win_h > 0 then cast(float) win_w / cast(float) win_h else 1.0;
+    aspect := ifx render_h > 0 then cast(float) render_w / cast(float) render_h else 1.0;
     proj := make_projection_matrix(PI / 3.1, aspect, 0.05, 40.0);
     shader_to_human_params.cpu.view_proj = proj * view;
 

@@ -110,33 +110,38 @@ tick :: () {
     if !swapchain_image return;
 
     mx, my, mouse_ok := get_mouse_pointer_position(true);
-    _, _, win_w, win_h, dims_ok := get_dimensions(cast(Window_Type) window, true);
-    if !dims_ok || win_w <= 0 || win_h <= 0 return;
+    game_mx, game_my, game_mouse_ok := app_game_view_mouse_pos_pixels();
+    render_w, render_h := app_current_render_dimensions();
+    if render_w == 0 || render_h == 0 return;
 
-    viewport := Vector2.{cast(float) win_w, cast(float) win_h};
-    ensure_depth_target(cast(u32) win_w, cast(u32) win_h);
+    viewport := Vector2.{cast(float) render_w, cast(float) render_h};
+    ensure_depth_target(render_w, render_h);
 
     using ImGui;
     io := GetIO();
+    app_mx := ifx app_should_render_to_game_view() then game_mx else mx;
+    app_my := ifx app_should_render_to_game_view() then game_my else my;
+    app_mouse_ok := ifx app_should_render_to_game_view() then game_mouse_ok else mouse_ok;
+    app_mouse_allowed := ifx app_should_render_to_game_view() then game_mouse_ok else !io.WantCaptureMouse;
     right_down := (Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_RIGHT] & .DOWN) != 0;
     left_down := (Input.input_button_states[Input.Key_Code.MOUSE_BUTTON_LEFT] & .DOWN) != 0;
     left_pressed := left_down && !left_was_down;
     left_was_down = left_down;
 
-    _ = editor_camera_update(*camera, editor_dt, mx, my, mouse_ok,
+    _ = editor_camera_update(*camera, editor_dt, app_mx, app_my, app_mouse_ok,
         allow_move = !io.WantCaptureKeyboard,
-        allow_look = right_down && !io.WantCaptureMouse,
-        allow_zoom = !io.WantCaptureMouse);
+        allow_look = right_down && app_mouse_allowed,
+        allow_zoom = app_mouse_allowed);
 
     hovered_hit_valid = false;
-    if mouse_ok {
-        ray_origin, ray_dir, ray_ok := decal_painter_mouse_world_ray(cast(float) mx, cast(float) my, viewport, camera);
+    if app_mouse_ok {
+        ray_origin, ray_dir, ray_ok := decal_painter_mouse_world_ray(cast(float) app_mx, cast(float) app_my, viewport, camera);
         if ray_ok {
             hovered_hit_valid, hovered_hit = decal_painter_ray_intersect_plane(ray_origin, ray_dir, .{0.0, 0.0, 0.0}, .{0.0, 1.0, 0.0});
         }
     }
 
-    if left_pressed && !right_down && hovered_hit_valid && !io.WantCaptureMouse {
+    if left_pressed && !right_down && hovered_hit_valid && app_mouse_allowed {
         place_or_erase_decal(hovered_hit);
     }
 
