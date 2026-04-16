@@ -74,6 +74,7 @@ Inspiration_Board :: struct {
     dirty: bool;
 
     items: [..]Inspiration_Item;
+    unparsed_lines: [..]string;
     selected_index: s32 = -1;
     hovered_index: s32 = -1;
 
@@ -126,6 +127,7 @@ ensure_init :: (using board: *Inspiration_Board) {
     if initialized return;
 
     items.allocator = context.allocator;
+    unparsed_lines.allocator = context.allocator;
     dropped_paths.allocator = context.allocator;
     full_load_worker.pending.allocator = context.allocator;
     full_load_worker.completed.allocator = context.allocator;
@@ -233,14 +235,22 @@ load :: (using board: *Inspiration_Board) {
                 view_offset = parsed.xy;
                 zoom = parsed.z;
                 #if _VERBOSE log("Inspiration Load: view parsed offset=% zoom=%", view_offset, zoom);
+            } else {
+                log_error("Inspiration: failed to parse view line; preserving raw text: %", line);
+                array_add(*unparsed_lines, copy_string(line));
             }
             continue;
         }
 
-        if !String.starts_with(line, "item ") continue;
+        if !String.starts_with(line, "item ") {
+            log_error("Inspiration: unrecognized board line; preserving raw text: %", line);
+            array_add(*unparsed_lines, copy_string(line));
+            continue;
+        }
         item, ok_item := inspiration_parse_item_line(line);
         if !ok_item {
-            #if _VERBOSE log("Inspiration Load: failed to parse item line");
+            log_error("Inspiration: failed to parse item line; preserving raw text: %", line);
+            array_add(*unparsed_lines, copy_string(line));
             continue;
         }
         inspiration_load_item_thumbnail(board.*, item);
@@ -269,6 +279,9 @@ save :: (using board: *Inspiration_Board) {
         escaped := inspiration_escape_string(it.source_path,, temp);
         escaped_url := inspiration_escape_string(it.url,, temp);
         print_to_builder(*builder, "item \"%\" % % % % \"%\"\n", escaped, it.x, it.y, it.width, it.height, escaped_url);
+    }
+    for unparsed_lines {
+        print_to_builder(*builder, "%\n", it);
     }
 
     ok := File.write_entire_file(INSPIRATION_BOARD_PATH, *builder);
@@ -370,7 +383,11 @@ shutdown :: (using board: *Inspiration_Board) {
     for dropped_paths {
         if it.count != 0 free(it);
     }
+    for unparsed_lines {
+        if it.count != 0 free(it);
+    }
     array_reset(*items);
+    array_reset(*unparsed_lines);
     array_reset(*dropped_paths);
     deinit(*full_load_worker);
     board.* = .{};
@@ -1102,6 +1119,7 @@ inspiration_parse_item_line :: (line: string) -> (*Inspiration_Item, bool) {
 
     modtime, size, exists := File_Utilities.file_modtime_and_size(path);
     if !exists {
+        log_error("Inspiration: source file missing for board item '%'. Preserving raw board line.", path);
         free(path);
         return null, false;
     }

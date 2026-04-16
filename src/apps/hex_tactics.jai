@@ -82,13 +82,15 @@ hex_tactics_camera: Editor_Camera = .{
     pitch_min = -1.45,
     pitch_max = 1.45,
 };
-hex_tactics_orbit_target := Vector3.{0.0, 1.6, 0.0};
-hex_tactics_orbit_drag_active := false;
-hex_tactics_orbit_distance: float = 13.5;
-hex_tactics_orbit_prev_mouse: Vector2;
-hex_tactics_orbit_have_prev_mouse := false;
-hex_tactics_time_of_day: float = 0.31;
-hex_tactics_sun_strength: float = 1.0;
+orbit_target := Vector3.{0.0, 1.6, 0.0};
+orbit_drag_active := false;
+orbit_distance: float = 13.5;
+orbit_prev_mouse: Vector2;
+orbit_have_prev_mouse := false;
+time_of_day: float = 0.31;
+animate_time_of_day_speed: float = 0.02;
+animate_time_of_day: bool = true;
+sun_strength: float = 1.0;
 
 hex_tactics_ui :: () {
     using ImGui;
@@ -97,8 +99,8 @@ hex_tactics_ui :: () {
     if Begin("Hex Tactics", *hex_tactics_ui_open, flags = .NoCollapse) {
         Text("3D hex tactics prototype");
         Text("RMB look, WASDQE fly, Alt+LMB orbit");
-        SliderFloat("Time of Day", *hex_tactics_time_of_day, 0.0, 1.0, "%.2f");
-        SliderFloat("Sun Strength", *hex_tactics_sun_strength, 0.0, 3.0, "%.2f");
+        SliderFloat("Time of Day", *time_of_day, 0.0, 1.0, "%.2f");
+        SliderFloat("Sun Strength", *sun_strength, 0.0, 3.0, "%.2f");
         Text("Tiles: %", hex_tactics_model.tiles.count);
         Text("Grass Clumps: %", hex_tactics_render.grass_count);
     }
@@ -116,8 +118,8 @@ on_dll_init :: () {
     render_w, render_h := app_current_render_dimensions();
     if render_w > 0 && render_h > 0 hex_tactics_ensure_depth_target(render_w, render_h);
 
-    editor_camera_set_look_at(*hex_tactics_camera, hex_tactics_orbit_target);
-    hex_tactics_camera.position = hex_tactics_orbit_target - editor_camera_forward(hex_tactics_camera) * hex_tactics_orbit_distance;
+    editor_camera_set_look_at(*hex_tactics_camera, orbit_target);
+    hex_tactics_camera.position = orbit_target - editor_camera_forward(hex_tactics_camera) * orbit_distance;
 
     gpu_commit_residency();
 } @on_dll_init
@@ -153,25 +155,25 @@ tick :: () {
 
     orbit_start := alt_down && input_pressed(.MOUSE_BUTTON_LEFT) && app_mouse_allowed && !right_down && app_mouse_ok;
     if orbit_start {
-        hex_tactics_orbit_prev_mouse = .{cast(float) app_mx, cast(float) app_my};
-        hex_tactics_orbit_have_prev_mouse = true;
-        hex_tactics_orbit_distance = max(distance(hex_tactics_camera.position, hex_tactics_orbit_target), 1.2);
-        hex_tactics_orbit_drag_active = true;
+        orbit_prev_mouse = .{cast(float) app_mx, cast(float) app_my};
+        orbit_have_prev_mouse = true;
+        orbit_distance = max(distance(hex_tactics_camera.position, orbit_target), 1.2);
+        orbit_drag_active = true;
     }
 
-    if hex_tactics_orbit_drag_active {
+    if orbit_drag_active {
         if !alt_down || !input_down(.MOUSE_BUTTON_LEFT) || !app_mouse_allowed || !app_mouse_ok {
-            hex_tactics_orbit_drag_active = false;
-            hex_tactics_orbit_have_prev_mouse = false;
+            orbit_drag_active = false;
+            orbit_have_prev_mouse = false;
         } else {
             hex_tactics_orbit_update_camera(.{cast(float) app_mx, cast(float) app_my});
         }
     }
 
     _ = editor_camera_update(*hex_tactics_camera, cast(float) dt, app_mx, app_my, app_mouse_ok,
-        allow_move = !io.WantTextInput && !hex_tactics_orbit_drag_active,
-        allow_look = right_down && app_mouse_allowed && !hex_tactics_orbit_drag_active,
-        allow_zoom = app_mouse_allowed && !hex_tactics_orbit_drag_active);
+        allow_move = !io.WantTextInput && !orbit_drag_active,
+        allow_look = right_down && app_mouse_allowed && !orbit_drag_active,
+        allow_zoom = app_mouse_allowed && !orbit_drag_active);
 
     cam_forward, cam_right, cam_up: Vector3;
     editor_camera_basis(hex_tactics_camera, *cam_forward, *cam_right, *cam_up);
@@ -180,9 +182,14 @@ tick :: () {
     proj := editor_camera_make_projection(*hex_tactics_camera, aspect, 0.05, 120.0);
     view_proj := proj * view;
 
-    hex_tactics_time_of_day = clamp(hex_tactics_time_of_day, 0.0, 1.0);
-    hex_tactics_sun_strength = clamp(hex_tactics_sun_strength, 0.0, 3.0);
-    sun_dir := hex_tactics_sun_direction(hex_tactics_time_of_day);
+    if animate_time_of_day {
+        time_of_day += cast(float) dt * animate_time_of_day_speed;
+        time_of_day = mod(time_of_day, 1.0);
+    }
+
+    time_of_day = clamp(time_of_day, 0.0, 1.0);
+    sun_strength = clamp(sun_strength, 0.0, 3.0);
+    sun_dir := hex_tactics_sun_direction(time_of_day);
     light_dir := -sun_dir;
 
     hex_tactics_render.mesh_params.cpu.* = .{
@@ -190,22 +197,22 @@ tick :: () {
         indices = hex_tactics_render.indices.gpu,
         view_proj = view_proj,
         light_dir = light_dir,
-        sun_params = .{hex_tactics_sun_strength, hex_tactics_time_of_day, 0.0, 0.0},
+        sun_params = .{sun_strength, time_of_day, 0.0, 0.0},
         camera_pos = hex_tactics_camera.position,
     };
     hex_tactics_render.grass_params.cpu.* = .{
         instances = hex_tactics_render.grass_instances.gpu,
         view_proj = view_proj,
         light_dir = light_dir,
-        sun_params = .{hex_tactics_sun_strength, hex_tactics_time_of_day, 0.0, 0.0},
+        sun_params = .{sun_strength, time_of_day, 0.0, 0.0},
         camera_pos = hex_tactics_camera.position,
         time = cast(float) time,
     };
     hex_tactics_render.sky_params.cpu.* = .{
         camera_right_proj_x = .{cam_right.x, cam_right.y, cam_right.z, proj._11},
         camera_up_proj_y = .{cam_up.x, cam_up.y, cam_up.z, proj._22},
-        camera_forward_time_of_day = .{cam_forward.x, cam_forward.y, cam_forward.z, hex_tactics_time_of_day},
-        light_dir_sun_strength = .{light_dir.x, light_dir.y, light_dir.z, hex_tactics_sun_strength},
+        camera_forward_time_of_day = .{cam_forward.x, cam_forward.y, cam_forward.z, time_of_day},
+        light_dir_sun_strength = .{light_dir.x, light_dir.y, light_dir.z, sun_strength},
     };
 
     main_queue := gpu_get_queue(.MAIN, 0);
@@ -247,26 +254,26 @@ tick :: () {
 
 #scope_file
 
-hex_tactics_model_init :: (model: *Hex_Tactics_Model) {
-    model.tiles.allocator = context.allocator;
-    model.radius = 4;
-    model.tile_radius = 1.0;
-    array_reset(*model.tiles);
+hex_tactics_model_init :: (using model: *Hex_Tactics_Model) {
+    tiles.allocator = context.allocator;
+    radius = 22;
+    tile_radius = 1.0;
+    array_reset(*tiles);
 
-    for r: -model.radius .. model.radius {
-        q_min := max(-model.radius, -r - model.radius);
-        q_max := min(model.radius, -r + model.radius);
+    for r: -radius .. radius {
+        q_min := max(-radius, -r - radius);
+        q_max := min(radius, -r + radius);
         for q: q_min .. q_max {
-            ridge := sin(cast(float) q * 0.9) * 0.42 + cos(cast(float) r * 0.73) * 0.36;
-            swell := sin(cast(float) (q + r) * 0.48) * 0.28;
-            bowl := cast(float) (abs(q) + abs(r)) * -0.05;
+            ridge := sin(cast(float) q * 0.9) * 0.62 + cos(cast(float) r * 0.73) * 0.46;
+            swell := sin(cast(float) (q + r) * 0.48) * 0.48;
+            bowl := cast(float) (abs(q) + abs(r)) * -0.15;
             height := 0.65 + ridge + swell + bowl;
-            height = clamp(height, 0.18, 2.35);
+            height = clamp(height, 0.08, 3.35);
             grass_noise := hash01_from_s32(q * 92821 + r * 68917 + 179);
             kind: u32 = ifx height > 1.55 then cast(u32) 1 else ifx height < 0.52 then cast(u32) 2 else cast(u32) 0;
             flags: Hex_Tile_Flags;
             if grass_noise > 0.38 && kind != 1 flags = .GRASS;
-            array_add(*model.tiles, .{
+            array_add(*tiles, .{
                 q = q,
                 r = r,
                 height = height,
@@ -445,14 +452,14 @@ hex_tactics_safe_normalize :: (v: Vector3, fallback: Vector3) -> Vector3 {
 
 
 hex_tactics_orbit_update_camera :: (mouse_pos: Vector2) {
-    if !hex_tactics_orbit_have_prev_mouse {
-        hex_tactics_orbit_prev_mouse = mouse_pos;
-        hex_tactics_orbit_have_prev_mouse = true;
+    if !orbit_have_prev_mouse {
+        orbit_prev_mouse = mouse_pos;
+        orbit_have_prev_mouse = true;
         return;
     }
 
-    delta := mouse_pos - hex_tactics_orbit_prev_mouse;
-    hex_tactics_orbit_prev_mouse = mouse_pos;
+    delta := mouse_pos - orbit_prev_mouse;
+    orbit_prev_mouse = mouse_pos;
     if abs(delta.x) < 0.0001 && abs(delta.y) < 0.0001 return;
 
     hex_tactics_camera.yaw += delta.x * hex_tactics_camera.mouse_sensitivity;
@@ -461,7 +468,7 @@ hex_tactics_orbit_update_camera :: (mouse_pos: Vector2) {
 
     cam_forward, cam_right, cam_up: Vector3;
     editor_camera_basis(hex_tactics_camera, *cam_forward, *cam_right, *cam_up);
-    hex_tactics_camera.position = hex_tactics_orbit_target - cam_forward * hex_tactics_orbit_distance;
+    hex_tactics_camera.position = orbit_target - cam_forward * orbit_distance;
 }
 
 hex_tactics_sun_direction :: (time_of_day: float) -> Vector3 {
