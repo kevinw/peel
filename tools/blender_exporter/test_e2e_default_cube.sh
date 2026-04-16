@@ -2,7 +2,8 @@
 
 set -euo pipefail
 
-ROOT=/Users/kev/src/peel
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 OUTPUT_PATH="${1:-/tmp/peel_e2e_default_cube.peelscene}"
 
 rm -f "$OUTPUT_PATH"

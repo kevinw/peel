@@ -1,3 +1,7 @@
+#import "Basic";
+#import "Bindings_Generator";
+#import "Compiler";
+
 // Generates Jai bindings for the on-disk .peelscene file format shared with Blender's
 // native exporter. This is the importer-side contract; export no longer goes through a Jai dylib.
 #run {
@@ -14,14 +18,9 @@ generate_peel_scene_format_bindings :: () -> bool {
     generate_compile_time_struct_checks = false;
     log_unsupported = true;
 
-    array_add(*source_files, "/Users/kev/src/blender/source/blender/io/peel/peel_scene_format.h");
+    set_working_directory("tools/blender_exporter");
+    array_add(*source_files, "../blender/source/blender/io/peel/peel_scene_format.h");
     array_add(*extra_clang_arguments, "-x", "c++");
 
     return generate_bindings(opts, "peel_scene_format_bindings.jai");
 }
-
-#scope_file
-
-#import "Basic";
-#import "Bindings_Generator";
-#import "Compiler";

@@ -2,8 +2,12 @@
 
 set -euo pipefail
 
-ROOT=/Users/kev/src/peel
-BLENDER_BIN="${BLENDER_BIN:-$HOME/src/build_darwin_release/bin/Blender.app/Contents/MacOS/Blender}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+export BLENDER_EXPORTER_SCRIPT_DIR="$SCRIPT_DIR"
+source "$SCRIPT_DIR/blender_paths.sh"
+
+ROOT="$(blender_exporter_repo_root)"
+BLENDER_BIN="$(blender_exporter_find_binary)"
 LIVE_SYNC_PY="$ROOT/tools/blender_exporter/live_sync.py"
 
 usage() {
@@ -44,11 +48,6 @@ fi
 
 INPUT_PATH="${POSITIONAL_ARGS[1]}"
 OUTPUT_PATH="${POSITIONAL_ARGS[2]:-}"
-
-if [[ ! -x "$BLENDER_BIN" ]]; then
-    echo "Missing Blender binary: $BLENDER_BIN" >&2
-    exit 1
-fi
 
 if [[ ! -f "$LIVE_SYNC_PY" ]]; then
     echo "Missing live sync script: $LIVE_SYNC_PY" >&2

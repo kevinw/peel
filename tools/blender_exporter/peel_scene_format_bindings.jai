@@ -1,7 +1,7 @@
 //
 // This file was auto-generated using the following command:
 //
-// jai /Users/kev/src/peel/tools/blender_exporter/generate.jai
+// jai tools/blender_exporter/generate.jai
 //
 
 

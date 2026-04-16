@@ -12,3 +12,7 @@
 	path = modules/tracy
 	url = git@github.com:kevinw/jai-tracy.git
 	branch = master
+[submodule "tools/blender"]
+	path = tools/blender
+	url = git@github.com:kevinw/blender
+	branch = blender-v5.1-release
