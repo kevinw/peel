@@ -1,6 +1,14 @@
 Config_Entry :: struct { name: string; value: Any; };
 
-parse_globals_file :: () -> []Config_Entry {
+free_config_entries :: (entries: [..]Config_Entry) {
+    for entries  {
+        free(it.name);
+        free(it.value.value_pointer);
+    }
+    array_free(entries);
+}
+
+parse_globals_file :: () -> [..]Config_Entry {
     #import "Text_File_Handler";
     handler: Text_File_Handler = { do_version_number = false };
     defer deinit(*handler);
@@ -8,8 +16,8 @@ parse_globals_file :: () -> []Config_Entry {
     filename :: "dev.cfg";
 
     start_file(*handler, filename, filename, optional=true);
-    if handler.failed return .[];
     entries: [..]Config_Entry;
+    if handler.failed return entries;
     while true {
         line, found := consume_next_line(*handler);
         if !found break;

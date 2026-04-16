@@ -27,7 +27,8 @@ main :: () {
 
     VERBOSE :: true;
 
-    parse_globals_file();
+    entries := parse_globals_file();
+    free_config_entries(entries);
 
     #if !RELEASE {
         Debug.init();
