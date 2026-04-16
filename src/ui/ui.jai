@@ -26,6 +26,7 @@ ui_init :: () {
     using ImGui;
     ImGui.CreateContext();
     io := GetIO();
+    io.ConfigFlags_ |= .DockingEnable;
 
     style := ImGui.GetStyle();
     style.WindowRounding = 5.0;
@@ -106,6 +107,10 @@ ui_render_pre :: () -> UI_Render_Frame_Info {
     view := NSWindow.contentView(ns_window);
     ImGui.ImplOSX_NewFrame(view);
     NewFrame();
+    if app_main_dock_enabled {
+        DockSpaceOverViewport();
+        ui_prepare_game_view_windows();
+    }
     frame_info.ready = true;
 } else {
     assert(false, "TODO: ui render setup for this platform");
@@ -134,11 +139,12 @@ ui_render :: (cmd_buff: Gpu_Command_Buffer, ui_render_frame_info: *UI_Render_Fra
         }
         ImGui.ImplMetal4_NewFrame(pass);
 
-        {
+        if app_ui_enabled {
             if ui_opts.show_imgui_demo ShowDemoWindow(*ui_opts.show_imgui_demo);
             if ui_opts.globals.show    inspect_globals(*ui_opts.globals.show);
             call_event_functions(.ui);
         }
+        call_event_functions(.overlay_ui);
 
         Render();
 
@@ -150,8 +156,9 @@ ui_render :: (cmd_buff: Gpu_Command_Buffer, ui_render_frame_info: *UI_Render_Fra
                 color_targets = .[
                     .{
                         view = gpu_current_swapchain_view(),
-                        load_op = .LOAD,
+                        load_op = ifx app_should_render_to_game_view() then .CLEAR else .LOAD,
                         store_op = .STORE,
+                        clear_color._float = .[0.06, 0.065, 0.075, 1.0],
                     }
                 ]
             });
@@ -178,12 +185,18 @@ ui_on_frame_submitted :: (frame_value: u64) {
 }
 
 dummy_on_ui :: () { } @on_ui
+dummy_on_overlay_ui :: () { } @on_overlay_ui
 
 #scope_file
 
 using ImGui :: #import "ImGui";
 using,only(file_exists) _ :: #import "File_Utilities";
 Env_Vars :: #import "Env_Vars";
+
+GAME_VIEW_FALLBACK_RENDER_WIDTH  : u32 : 640;
+GAME_VIEW_FALLBACK_RENDER_HEIGHT : u32 : 360;
+GAME_VIEW_OVERLAY_WIDTH_POINTS   :: 320.0;
+GAME_VIEW_OVERLAY_MARGIN_POINTS  :: 18.0;
 
 #if OS == .MACOS {
     #import "Metal";
@@ -224,6 +237,156 @@ load_ui_font :: (io: *ImGui.IO, font_size_px: float) -> *ImGui.ImFont {
     cfg: ImFontConfig;
     cfg.SizePixels = font_size_px;
     return io.Fonts.AddFontDefault(io.Fonts, *cfg);
+}
+
+ui_prepare_game_view_windows :: () {
+    if !app_should_render_to_game_view() return;
+
+    game_view.visible_this_frame = false;
+    game_view.hovered_this_frame = false;
+    game_view.focused_this_frame = false;
+    game_view.requested_width = GAME_VIEW_FALLBACK_RENDER_WIDTH;
+    game_view.requested_height = GAME_VIEW_FALLBACK_RENDER_HEIGHT;
+
+    ui_draw_game_window_panel();
+
+    if !game_view.visible_this_frame {
+        ui_draw_game_window_overlay();
+    }
+}
+
+ui_draw_game_window_panel :: () {
+    using ImGui;
+
+    vp := GetMainViewport();
+    SetNextWindowSize(ImVec2.{max(vp.WorkSize.x * 0.8, 640.0), max(vp.WorkSize.y * 0.8, 400.0)}, .FirstUseEver);
+    PushStyleVar(.WindowPadding, .{0, 0});
+    PushStyleVar(.WindowBorderSize, 0.0);
+    defer PopStyleVar(2);
+
+    panel_visible := Begin("Game Window", flags = .NoScrollbar | .NoScrollWithMouse);
+    game_view.hovered_this_frame = IsWindowHovered(.RootAndChildWindows);
+    game_view.focused_this_frame = IsWindowFocused(.RootAndChildWindows);
+    collapsed := IsWindowCollapsed();
+
+    if panel_visible && !collapsed {
+        game_view.visible_this_frame = true;
+
+        SHOW_RENDER_SIZE :: false;
+        #if SHOW_RENDER_SIZE {
+        if BeginCombo("Render Size", temp_c_string(game_view_size_mode_label(game_view.mode))) {
+            selected_match := game_view.mode == .MATCH_WINDOW;
+            if Selectable("Match Window", selected_match) {
+                game_view.mode = .MATCH_WINDOW;
+            }
+
+            selected_1080p := game_view.mode == .FIXED_1080P;
+            if Selectable("1920 x 1080", selected_1080p) {
+                game_view.mode = .FIXED_1080P;
+            }
+            EndCombo();
+        }
+        }
+
+        avail := GetContentRegionAvail();
+        bounds := ImVec2.{max(avail.x, 1.0), max(avail.y, 1.0)};
+        ui_set_game_view_render_request(bounds);
+        ui_draw_game_view_image("##game_window_view", bounds, game_view.mode == .FIXED_1080P);
+    }
+
+    End();
+}
+
+ui_draw_game_window_overlay :: () {
+    using ImGui;
+
+    vp := GetMainViewport();
+    overlay_width := GAME_VIEW_OVERLAY_WIDTH_POINTS;
+    overlay_height := overlay_width * cast(float) GAME_VIEW_FALLBACK_RENDER_HEIGHT / cast(float) GAME_VIEW_FALLBACK_RENDER_WIDTH;
+    pos := ImVec2.{
+        vp.WorkPos.x + vp.WorkSize.x - overlay_width - GAME_VIEW_OVERLAY_MARGIN_POINTS,
+        vp.WorkPos.y + vp.WorkSize.y - overlay_height - GAME_VIEW_OVERLAY_MARGIN_POINTS,
+    };
+    SetNextWindowPos(pos, .Always);
+    SetNextWindowSize(ImVec2.{overlay_width, overlay_height}, .Always);
+    PushStyleVar(.WindowPadding, .{0, 0});
+    PushStyleVar(.WindowBorderSize, 0.0);
+    defer PopStyleVar(2);
+
+    flags: WindowFlags = .NoDecoration | .NoDocking | .NoMove | .NoSavedSettings | .NoFocusOnAppearing | .NoNav;
+    if Begin("Game Preview Overlay", flags = flags) {
+        ui_draw_game_view_image("##game_overlay_view", ImVec2.{overlay_width, overlay_height}, preserve_aspect=true);
+    }
+    End();
+}
+
+ui_draw_game_view_image :: (id: *u8, bounds: ImVec2, preserve_aspect: bool) {
+    using ImGui;
+
+    draw_bounds := bounds;
+    draw_bounds.x = max(draw_bounds.x, 1.0);
+    draw_bounds.y = max(draw_bounds.y, 1.0);
+
+    min := GetCursorScreenPos();
+    InvisibleButton(id, draw_bounds);
+    max_pos := ImVec2.{min.x + draw_bounds.x, min.y + draw_bounds.y};
+
+    draw_list := GetWindowDrawList();
+    ImDrawList.AddRectFilled(draw_list, min, max_pos, GetColorU32(ImVec4.{0.02, 0.02, 0.025, 1.0}), 0.0);
+
+    if game_view.view == 0 || game_view.width == 0 || game_view.height == 0 {
+        ImDrawList.AddText(draw_list, ImVec2.{min.x + 12.0, min.y + 12.0}, GetColorU32(.TextDisabled), "Game view not ready");
+        return;
+    }
+
+    native_texture := gpu_get_native_texture(game_view.view);
+    if native_texture == null {
+        ImDrawList.AddText(draw_list, ImVec2.{min.x + 12.0, min.y + 12.0}, GetColorU32(.TextDisabled), "Game view texture unavailable");
+        return;
+    }
+
+    tex_ref := ImTextureRef.{_TexID = cast(ImTextureID) native_texture};
+    image_min := min;
+    image_max := max_pos;
+    if preserve_aspect {
+        fit_min, fit_max := ui_fit_rect(min, draw_bounds, cast(float) game_view.width, cast(float) game_view.height);
+        image_min = fit_min;
+        image_max = fit_max;
+    }
+    ImDrawList.AddImage(draw_list, tex_ref, image_min, image_max);
+}
+
+ui_set_game_view_render_request :: (bounds: ImVec2) {
+    using ImGui;
+
+    io := GetIO();
+    scale_x := max(io.DisplayFramebufferScale.x, 1.0);
+    scale_y := max(io.DisplayFramebufferScale.y, 1.0);
+
+    if game_view.mode == .FIXED_1080P {
+        game_view.requested_width = 1920;
+        game_view.requested_height = 1080;
+        return;
+    }
+
+    game_view.requested_width = max(cast(u32) round(bounds.x * scale_x), 1);
+    game_view.requested_height = max(cast(u32) round(bounds.y * scale_y), 1);
+}
+
+game_view_size_mode_label :: (mode: Game_View_Size_Mode) -> string {
+    if mode == .FIXED_1080P return "1920 x 1080";
+    return "Match Window";
+}
+
+ui_fit_rect :: (origin: ImVec2, bounds: ImVec2, image_w: float, image_h: float) -> ImVec2, ImVec2 {
+    scale_x := bounds.x / image_w;
+    scale_y := bounds.y / image_h;
+    scale := min(scale_x, scale_y);
+    fit_w := image_w * scale;
+    fit_h := image_h * scale;
+    offset_x := (bounds.x - fit_w) * 0.5;
+    offset_y := (bounds.y - fit_h) * 0.5;
+    return ImVec2.{origin.x + offset_x, origin.y + offset_y}, ImVec2.{origin.x + offset_x + fit_w, origin.y + offset_y + fit_h};
 }
 
 load_ui_monospace_font :: (io: *ImGui.IO, font_size_px: float) -> *ImGui.ImFont {

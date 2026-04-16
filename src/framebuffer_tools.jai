@@ -143,9 +143,12 @@ fb_dump_swapchain_thumbnail_jpeg :: (
         log_error("fb_dump_swapchain_thumbnail_jpeg: invalid texture size <= 1 (% x %)", width, height);
         return false;
     }
+
+    is_thumbnail := true;
     if thumb_width == 0 || thumb_height == 0 {
-        log_error("fb_dump_swapchain_thumbnail_jpeg: invalid thumb size specified");
-        return false;
+        thumb_width = width;
+        thumb_height = height;
+        is_thumbnail = false;
     }
 
     bytes_per_row := cast(s64) width * 4;
@@ -201,7 +204,7 @@ fb_dump_swapchain_thumbnail_jpeg :: (
         log_error("fb_dump_swapchain_thumbnail_jpeg: failed to write JPEG file to '%'", output_path);
     } else {
         abs_path := File.get_absolute_path(output_path);
-        log("PEEL_SNAPSHOT wrote thumbnail (%x%) (frame=%) to %", thumb_width, thumb_height, frame_num, ifx abs_path else output_path);
+        log("PEEL_SNAPSHOT wrote % (%x%) (frame=%) to %", ifx is_thumbnail "thumbnail" else "image", thumb_width, thumb_height, frame_num, ifx abs_path else output_path);
     }
     return success;
 }

@@ -37,6 +37,7 @@ perf_capture_count: s64;
 perf_capture_gpu_count: s64;
 perf_capture_reported := false;
 app_ui_enabled := true;
+app_main_dock_enabled := true;
 app_browser_open := false;
 app_browser_requested_app: string;
 host_build_target: string;
@@ -44,6 +45,28 @@ host_build_error: string;
 host_build_state: App_Update_Ctx.Host_Build_State;
 startup_load_app_target: string;
 startup_load_app_frame: int;
+
+Game_View_Size_Mode :: enum {
+    MATCH_WINDOW;
+    FIXED_1080P;
+}
+
+game_view: struct {
+    mode: Game_View_Size_Mode = .MATCH_WINDOW;
+    target: Gpu_Texture;
+    view: Gpu_Texture_View;
+    width: u32;
+    height: u32;
+    requested_width: u32 = 1;
+    requested_height: u32 = 1;
+    visible_this_frame: bool;
+    hovered_this_frame: bool;
+    focused_this_frame: bool;
+};
+
+current_app_render_view: Gpu_Texture_View;
+current_app_render_width: u32;
+current_app_render_height: u32;
 
 snapshot: struct {
     enabled := false;
@@ -78,7 +101,8 @@ submit_and_present_with_ui :: (cmd_buff: Gpu_Command_Buffer, waits: [] Gpu_Timel
     }
 
     ui_frame_value := gpu_submission_frame_index() + 1;
-    gpu_end_render_pass_with_transition(cmd_buff, .COLOR_ATTACHMENT_WRITE, .COLOR_ATTACHMENT_WRITE);
+    pass_transition_after := ifx app_should_render_to_game_view() then Pass_Access.SHADER_READ else .COLOR_ATTACHMENT_WRITE;
+    gpu_end_render_pass_with_transition(cmd_buff, .COLOR_ATTACHMENT_WRITE, pass_transition_after);
 
     ui_render(cmd_buff, *current_ui_render_frame, ui_frame_value, skip_render=app_mini_mode_active);
     current_ui_render_frame = {};
@@ -90,14 +114,28 @@ submit_and_present_with_ui :: (cmd_buff: Gpu_Command_Buffer, waits: [] Gpu_Timel
 app_swapchain_acquire :: () -> Gpu_Result, Gpu_Texture_View {
     result, swapchain_image := gpu_swapchain_acquire();
     assert(result == .SUCCESS);
+    current_app_render_view = 0;
+    current_app_render_width = 0;
+    current_app_render_height = 0;
     if swapchain_image != 0 {
         if app_should_render_ui() {
             current_ui_render_frame = ui_render_pre();
         } else {
             current_ui_render_frame = {};
         }
+
+        if app_should_render_to_game_view() {
+            ensure_game_view_render_target(game_view.requested_width, game_view.requested_height);
+            current_app_render_view = game_view.view;
+            current_app_render_width = game_view.width;
+            current_app_render_height = game_view.height;
+            return result, game_view.view;
+        }
+
+        current_app_render_view = swapchain_image;
+        current_app_render_width, current_app_render_height = app_window_render_dimensions();
     }
-    return result, swapchain_image;
+    return result, current_app_render_view;
 }
 
 app_update :: (update_ctx: *App_Update_Ctx) {
@@ -182,6 +220,7 @@ app_update :: (update_ctx: *App_Update_Ctx) {
                     case .F2;
                         ui_opts.globals.show ^= true;
                         app_ui_enabled |= ui_opts.globals.show;
+                        app_main_dock_enabled |= ui_opts.globals.show;
                     case .F3;
                         ui_opts.show_imgui_demo ^= true;
                     case .F4;
@@ -190,6 +229,7 @@ app_update :: (update_ctx: *App_Update_Ctx) {
                         #if !SINGLE_BINARY {
                             app_browser_open = !app_browser_open;
                             app_ui_enabled |= app_browser_open;
+                            app_main_dock_enabled |= app_browser_open;
                         }
 
                     // Reload app dll
@@ -270,17 +310,17 @@ app_update :: (update_ctx: *App_Update_Ctx) {
         }
 
         #if READBACK_ENABLED {
-            swapchain_image := gpu_current_swapchain_view();
-            if swapchain_image == 0 {
-                log_error("Error: READBACK_ENABLED but no gpu_current_swapchain_view()");
+            render_view := app_current_readback_view();
+            if render_view == 0 {
+                log_error("Error: READBACK_ENABLED but no current render view.");
             } else {
-                per_frame_debug(*readback_stats, cast(s64)frame_count, swapchain_image);
+                per_frame_debug(*readback_stats, cast(s64)frame_count, render_view);
                 if snapshot.enabled && frame_count >= 2 {
                     if !snapshot.before_done {
-                        readback_stats_dump_snapshot(*readback_stats, swapchain_image, cast(s64) frame_count, tprint("%_shader_reload_before", APP_NAME), APP_NAME);
+                        readback_stats_dump_snapshot(*readback_stats, render_view, cast(s64) frame_count, tprint("%_shader_reload_before", APP_NAME), APP_NAME);
                         snapshot.before_done = true;
                     } else if snapshot.after_pending && !snapshot.after_done && cast(s64) frame_count >= snapshot.after_min_frame {
-                        readback_stats_dump_snapshot(*readback_stats, swapchain_image, cast(s64) frame_count, tprint("%_shader_reload_after", APP_NAME), APP_NAME);
+                        readback_stats_dump_snapshot(*readback_stats, render_view, cast(s64) frame_count, tprint("%_shader_reload_after", APP_NAME), APP_NAME);
                         snapshot.after_done = true;
                         app_quit_requested = true;
                     }
@@ -323,7 +363,7 @@ ui_wants_keyboard :: () -> bool {
 create_window_and_init_sgpu :: () {
     #if OS == .MACOS {
         #if SINGLE_BINARY {
-            window = create_metal_window(1920, 1080, "", window_delegate_hack_callback=single_binary_macos_window_delegate_init);
+            window = create_metal_window(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT, "", window_delegate_hack_callback=single_binary_macos_window_delegate_init);
             ensure_macos_window_frontmost(window);
         } else {
             assert(window != null, "host_init: expected host-owned macOS window.");
@@ -421,6 +461,7 @@ host_init :: (init_ctx: Init_Ctx) -> bool {
     env_disable_ui, did_parse_disable_ui := Env_Vars.try_parse_env_int("PEEL_DISABLE_UI");
     if did_parse_disable_ui {
         app_ui_enabled = env_disable_ui <= 0;
+        app_main_dock_enabled = app_ui_enabled;
     }
 
     #if !SINGLE_BINARY {
@@ -508,8 +549,41 @@ input_pressed :: inline (code: Input.Key_Code) -> bool {
 #scope_file
 
 app_should_render_ui :: () -> bool {
+    return true;
+}
+
+#scope_export
+
+app_should_render_to_game_view :: () -> bool {
+    return app_main_dock_enabled;
+}
+
+app_should_run_ui_panels :: () -> bool {
     return app_ui_enabled;
 }
+
+app_window_render_dimensions :: () -> u32, u32 {
+    width := last_window_size.x;
+    height := last_window_size.y;
+    if width == 0 width = DEFAULT_WINDOW_WIDTH;
+    if height == 0 height = DEFAULT_WINDOW_HEIGHT;
+    return width, height;
+}
+
+app_current_render_dimensions :: () -> u32, u32 {
+    if current_app_render_width == 0 || current_app_render_height == 0 {
+        width, height := app_window_render_dimensions();
+        return width, height;
+    }
+    return current_app_render_width, current_app_render_height;
+}
+
+app_current_readback_view :: () -> Gpu_Texture_View {
+    if current_app_render_view != 0 return current_app_render_view;
+    return gpu_current_swapchain_view();
+}
+
+#scope_file
 
 app_assign_host_build_status :: (state: App_Update_Ctx.Host_Build_State, target: string, error: string) {
     host_build_state = state;
@@ -687,9 +761,9 @@ Env_Vars :: #import "Env_Vars";
 
 toggle_all_ui :: () {
     app_ui_enabled = !app_ui_enabled;
+    app_main_dock_enabled = app_ui_enabled;
     if !app_ui_enabled {
         app_browser_open = false;
-        ui_cancel_pending_frame(*current_ui_render_frame);
     }
 }
 
@@ -702,3 +776,40 @@ modify_delta_time_multiplier :: (factor: float) {
 }
 
 String :: #import "String";
+
+#scope_export
+
+ensure_game_view_render_target :: (width: u32, height: u32) {
+    width = max(width, 1);
+    height = max(height, 1);
+
+    if game_view.view != 0 && game_view.width == width && game_view.height == height return;
+
+    gpu_delete(*game_view.view);
+    gpu_delete(*game_view.target);
+
+    result, texture := gpu_create_texture(.{
+        type = ._2D,
+        dimensions = .[width, height, 1],
+        format = .B8G8R8A8_UNORM,
+        usage = .COLOR_ATTACHMENT | .SAMPLED | .TRANSFER_SRC,
+    });
+    assert(result == .SUCCESS && texture != 0, "Failed to create game-view target: % (%x%).", result, width, height);
+
+    view := gpu_texture_view(texture);
+    assert(view != 0, "Failed to create game-view target view: %x%.", width, height);
+
+    game_view.target = texture;
+    game_view.view = view;
+    game_view.width = width;
+    game_view.height = height;
+}
+
+shutdown_game_view_render_target :: () {
+    gpu_delete(*game_view.view);
+    gpu_delete(*game_view.target);
+    game_view.width = 0;
+    game_view.height = 0;
+} @on_quit
+
+#scope_file

@@ -64,7 +64,7 @@ update_and_render_reports :: () {
         draw_list.AddText(draw_list, .{centered_x, y}, color, it.text);
         y += font_size;
     }
-} @on_ui
+} @on_overlay_ui
 
 operator == :: (a: Source_Code_Location, b: Source_Code_Location) -> bool {
     return a.fully_pathed_filename == b.fully_pathed_filename && a.line_number == b.line_number && a.character_number == b.character_number;

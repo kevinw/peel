@@ -66,9 +66,9 @@ readback_stats_init :: (state: *Readback_Stats, log_prefix: string, snapshot_def
     }
 
     snapshot_w, snapshot_w_set := try_parse_env_int("PEEL_SNAPSHOT_W");
-    if snapshot_w_set state.snapshot_width = max(1, snapshot_w);
+    if snapshot_w_set state.snapshot_width = max(0, snapshot_w);
     snapshot_h, snapshot_h_set := try_parse_env_int("PEEL_SNAPSHOT_H");
-    if snapshot_h_set state.snapshot_height = max(1, snapshot_h);
+    if snapshot_h_set state.snapshot_height = max(0, snapshot_h);
 
     state.snapshot_run_dir = snapshot_run_dir(APP_STEM);
 
