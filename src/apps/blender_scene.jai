@@ -1,5 +1,3 @@
- #load "../SGPU_App_Common.jai";
-
 BLENDER_SCENE_DEFAULT_BLEND_PATH :: "tools/blender_exporter/monkeys.blend";
 
 Meshlet_Grid_Instance :: struct {
@@ -203,7 +201,7 @@ tick :: () {
     }
     last_frustum_planes = draw.frustum_planes;
     draw.eye_position = camera.position;
-    draw.lod_projection_scale = cast(float) render_h / max(2.0 * max(tan(camera.fov_y * 0.5), 0.0001), 0.0001);
+    draw.lod_projection_scale = editor_camera_projection_lod_scale(*camera, cast(float) render_h);
     draw.lod_radius_threshold = lod_screen_radius;
     draw.lod_metric_power = lod_distance_power;
     draw.light_dir = normalize(Vector3.{-0.45, -1.0, -0.25});
@@ -373,6 +371,19 @@ show_ui :: () {
     inspect("Debug Mode", *debug_mode);
     SliderFloat("LOD Screen Radius", *lod_screen_radius, 8.0, 1024.0);
     SliderFloat("LOD Power", *lod_distance_power, 0.5, 2.0);
+
+    ortho_enabled := camera.target_projection_mode == .Orthographic;
+    if Checkbox("Orthographic", *ortho_enabled) {
+        if ortho_enabled {
+            anchor_point := Vector3.{0, 0, 0};
+            editor_camera_set_projection_mode(*camera, .Orthographic, anchor_point, true);
+        } else {
+            editor_camera_set_projection_mode(*camera, .Perspective);
+        }
+    }
+    SliderFloat("Ortho Half Height", *camera.ortho_half_height, 0.25, 24.0, "%.2f");
+    SliderFloat("Ortho Anchor Dist", *camera.transition_anchor_distance, 1.0, 40.0, "%.1f");
+
 } @on_ui
 
 #scope_file
@@ -1005,3 +1016,5 @@ Sort :: #import "Sort";
 using,only(getenv) POSIX_Getenv :: #import "POSIX";
 #load "shaders/hdri_background_shader.jai";
 #load "shaders/meshlet_shader.jai";
+
+#load "../SGPU_App_Common.jai";

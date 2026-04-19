@@ -89,6 +89,14 @@ terrain_mouse_world_ray :: (mouse_x: float, mouse_y: float, viewport: Vector2, c
     forward, right, cam_up: Vector3;
     editor_camera_basis(camera, *forward, *right, *cam_up);
 
+    if camera.projection_mode == .ORTHOGRAPHIC && camera.projection_blend >= 0.9999 {
+        aspect := viewport.x / viewport.y;
+        origin := camera.position +
+            right * (nx * aspect * camera.ortho_half_height) +
+            cam_up * (ny * camera.ortho_half_height);
+        return origin, forward, true;
+    }
+
     tan_half_fov := tan(camera.fov_y * 0.5);
     aspect := viewport.x / viewport.y;
 

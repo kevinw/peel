@@ -411,6 +411,12 @@ decal_painter_mouse_world_ray :: (mouse_x: float, mouse_y: float, viewport: Vect
     nx := ((mouse_x + 0.5) / viewport.x) * 2.0 - 1.0;
     ny := ((mouse_y + 0.5) / viewport.y) * 2.0 - 1.0;
     aspect := viewport.x / max(viewport.y, 1.0);
+    if camera.projection_mode == .ORTHOGRAPHIC && camera.projection_blend >= 0.9999 {
+        origin := camera.position +
+            right * (nx * aspect * camera.ortho_half_height) +
+            up * (ny * camera.ortho_half_height);
+        return origin, forward, true;
+    }
     tan_half_fov := tan(camera.fov_y * 0.5);
     dir := forward + right * (nx * aspect * tan_half_fov) + up * (ny * tan_half_fov);
     normalize(*dir, fallback = forward);

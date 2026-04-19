@@ -25,8 +25,8 @@ gizmos_test_ui :: () {
         Text("Space: 4=World 5=Local");
         Text("Camera: RMB look, WASDQE fly, Shift boost");
         Text("Selected object: %", manip_ctx.selected_index);
-        Text("Mode: %", manip_mode_name(manip_ctx.mode));
-        Text("Space: %", manip_space_name(manip_ctx.space));
+        Text("Mode: %", manip_ctx.mode);
+        Text("Space: %", manip_ctx.space);
 
         selected := cast(s64) manip_ctx.selected_index;
         if selected >= 0 && selected < gizmo_objects.count {
@@ -113,11 +113,12 @@ tick :: () {
     for Input.events_this_frame {
         using it;
         if type != .KEYBOARD || !key_pressed continue;
-        if key_code == #char "1" manip_ctx.mode = .TRANSLATE;
-        if key_code == #char "2" manip_ctx.mode = .ROTATE;
-        if key_code == #char "3" manip_ctx.mode = .SCALE;
-        if key_code == #char "4" manip_ctx.space = .WORLD;
-        if key_code == #char "5" manip_ctx.space = .LOCAL;
+        if key_code == #char "1" manip_ctx.mode = .Translate;
+        if key_code == #char "2" manip_ctx.mode = .Rotate;
+        if key_code == #char "3" manip_ctx.mode = .Scale;
+        if key_code == #char "4" manip_ctx.space = .World;
+        if key_code == #char "5" manip_ctx.space = .Local;
+        if key_code == #char "O" editor_camera_toggle_projection_mode(*gizmos_test_camera);
     }
 
     viewport := Vector2.{2000.0, 1500.0};
@@ -159,7 +160,10 @@ tick :: () {
         camera_forward = cam_forward,
         camera_right = cam_right,
         camera_up = cam_up,
+        projection_mode = gizmos_test_camera.projection_mode,
+        projection_blend = gizmos_test_camera.projection_blend,
         fov_y = gizmos_test_camera.fov_y,
+        ortho_half_height = gizmos_test_camera.ortho_half_height,
         mouse_pos = .{cast(float) app_mx, cast(float) app_my},
         mouse_valid = app_mouse_ok,
         mouse_down = left_down,
@@ -199,16 +203,3 @@ Gizmo_Render :: #import "Gizmo_Render";
 ImGui :: #import "ImGui";
 Input :: #import "Input";
 #import "Math";
-
-manip_mode_name :: (mode: Manip_Mode) -> string {
-    if mode == .TRANSLATE return "Translate";
-    if mode == .ROTATE return "Rotate";
-    if mode == .SCALE return "Scale";
-    return "Unknown";
-}
-
-manip_space_name :: (space: Manip_Space) -> string {
-    if space == .WORLD return "World";
-    if space == .LOCAL return "Local";
-    return "Unknown";
-}

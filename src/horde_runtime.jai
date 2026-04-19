@@ -184,6 +184,7 @@ Horde_Runtime :: struct {
     render_sun_strength: float;
     render_time_of_day: float;
     render_view_height: float = 1.0;
+    render_lod_projection_scale: float = 1.0;
     spawn_camera_pos: Vector3;
 }
 
@@ -438,13 +439,14 @@ update :: (runtime: *Horde_Runtime, dt: float) {
     update_projectiles_pre_physics(runtime, dt);
 }
 
-prepare_render :: (using runtime: *Horde_Runtime, view_proj: Matrix4, shadow_binding: Vector4, camera_pos: Vector3, sun_strength: float, time_of_day: float, view_height: float) {
+prepare_render :: (using runtime: *Horde_Runtime, view_proj: Matrix4, shadow_binding: Vector4, camera_pos: Vector3, sun_strength: float, time_of_day: float, view_height: float, lod_projection_scale: float = 1.0) {
     render_view_proj = view_proj;
     render_camera_pos = camera_pos;
     render_shadow_binding = shadow_binding;
     render_sun_strength = sun_strength;
     render_time_of_day = time_of_day;
     render_view_height = view_height;
+    render_lod_projection_scale = lod_projection_scale;
     visible_count_debug = 0;
     render_instance_count_debug = 0;
 
@@ -583,12 +585,11 @@ prepare_render :: (using runtime: *Horde_Runtime, view_proj: Matrix4, shadow_bin
 }
 
 draw_shadow :: (using runtime: *Horde_Runtime, cmd_buff: Gpu_Command_Buffer, pass_desc: Gpu_Render_Pass_Desc) {
-    lod_projection_scale := render_view_height / max(2.0 * max(tan(scene_camera.fov_y * 0.5), 0.0001), 0.0001);
     shadow_params := Mesh_Draw_Set_Params.{
         camera_vp = bindings.shadow_map.view_proj,
         frustum_planes = horde_extract_frustum_planes(bindings.shadow_map.view_proj),
         eye_position = render_camera_pos,
-        lod_projection_scale = lod_projection_scale,
+        lod_projection_scale = render_lod_projection_scale,
         lod_radius_threshold = lod_screen_radius,
         lod_metric_power = lod_distance_power,
         light_dir = bindings.shadow_map.light_dir,
@@ -602,12 +603,11 @@ draw_shadow :: (using runtime: *Horde_Runtime, cmd_buff: Gpu_Command_Buffer, pas
 }
 
 draw_main :: (using runtime: *Horde_Runtime, cmd_buff: Gpu_Command_Buffer, pass_desc: Gpu_Render_Pass_Desc) {
-    lod_projection_scale := render_view_height / max(2.0 * max(tan(scene_camera.fov_y * 0.5), 0.0001), 0.0001);
     main_params := Mesh_Draw_Set_Params.{
         camera_vp = render_view_proj,
         frustum_planes = horde_extract_frustum_planes(render_view_proj),
         eye_position = render_camera_pos,
-        lod_projection_scale = lod_projection_scale,
+        lod_projection_scale = render_lod_projection_scale,
         lod_radius_threshold = lod_screen_radius,
         lod_metric_power = lod_distance_power,
         light_dir = bindings.shadow_map.light_dir,

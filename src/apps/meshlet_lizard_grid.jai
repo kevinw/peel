@@ -120,7 +120,7 @@ tick :: () {
     draw.camera_vp = proj * view;
     draw.frustum_planes = extract_frustum_planes(draw.camera_vp);
     draw.eye_position = camera.position;
-    draw.lod_projection_scale = cast(float) render_h / max(2.0 * max(tan(camera.fov_y * 0.5), 0.0001), 0.0001);
+    draw.lod_projection_scale = editor_camera_projection_lod_scale(*camera, cast(float) render_h);
     draw.lod_radius_threshold = lod_screen_radius;
     draw.lod_metric_power = lod_distance_power;
     draw.light_dir = normalize(Vector3.{-0.45, -1.0, -0.25});

@@ -80,7 +80,7 @@ scene_pick_apply_object_id :: (object_id: u32) {
         scene_manip_objects_dirty = false;
     }
     scene_manip_ctx.active = false;
-    scene_manip_ctx.active_kind = .NONE;
+    scene_manip_ctx.active_kind = .None;
     scene_manip_ctx.active_axis = -1;
     scene_manip_ctx.active_plane = -1;
 

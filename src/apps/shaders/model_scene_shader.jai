@@ -106,6 +106,7 @@ Model_Scene_Sky_Params :: struct {
     camera_up_proj_y: Vector4;
     camera_forward_time_of_day: Vector4;
     light_dir_sun_strength: Vector4;
+    projection_mode_ortho_half_height: Vector4;
 }
 
 Model_Scene_Vertex_In :: struct {
@@ -827,11 +828,16 @@ model_scene_sky_fragment_main :: (using in: Model_Scene_Sky_Fragment_In, params:
     cam_forward := Vector3.{params.camera_forward_time_of_day.x, params.camera_forward_time_of_day.y, params.camera_forward_time_of_day.z};
     proj_x := params.camera_right_proj_x.w;
     proj_y := params.camera_up_proj_y.w;
+    projection_mode := cast(u32) params.projection_mode_ortho_half_height.x;
     sun_dir := normalize(Vector3.{-params.light_dir_sun_strength.x, -params.light_dir_sun_strength.y, -params.light_dir_sun_strength.z});
     sun_strength := max(params.light_dir_sun_strength.w, 0.0);
 
     ndc := uv * 2.0 - 1.0;
     view_dir := normalize(cam_forward + cam_right * (ndc.x / max(proj_x, 0.0001)) + cam_up * (ndc.y / max(proj_y, 0.0001)));
+    if projection_mode == 1 {
+        // Keep a directional sky gradient in ortho instead of collapsing to a flat fill.
+        view_dir = normalize(cam_forward + cam_right * (ndc.x * 0.85) + cam_up * (ndc.y * 0.85));
+    }
     color := model_scene_sky_color(view_dir, sun_dir, sun_strength);
     return .{out_color = .{color.x, color.y, color.z, 1.0}};
 } @fragment_shader
@@ -915,8 +921,8 @@ grass_blade_world_pos :: (vertex_id: u32, instance_id: u32, vt: float, params: *
     delta := Vector2.{x - player_pos.x, z - player_pos.z};
     forward_2d := Vector2.{sin(player_yaw), cos(player_yaw)};
     side_2d := Vector2.{forward_2d.y, -forward_2d.x};
-    ellipse_major := player_radius * 1.7;
-    ellipse_minor := player_radius * 0.48;
+    ellipse_major := player_radius * 1.0;
+    ellipse_minor := player_radius * 1.0;
     local_forward := dot(delta, forward_2d);
     local_side := dot(delta, side_2d);
     ellipse_dist2 := (local_forward * local_forward) / max(ellipse_major * ellipse_major, 0.0001) +

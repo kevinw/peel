@@ -8,10 +8,7 @@ Draw_Data :: struct {
 }
 
 using shaders: struct @init_group {
-    graphics: Shader(fluid_vertex_main, fluid_fragment_main, {
-        cull = .CW,
-        color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
-    });
+    graphics: Shader(fluid_vertex_main, fluid_fragment_main, { cull = .CW, });
     compute: Compute_Shader(fluid_step_compute);
 };
 gpu_arena: Gpu_Arena;
@@ -126,7 +123,7 @@ tick :: () {
     ab_buffer_advance(*fluid_state);
     draw_data.vertex_params_gpu = ab_buffer_src_gpu(*fluid_state);
 
-    gpu_begin_scoped_render_pass(cmd_buff, {
+    pass_desc := gpu_begin_scoped_render_pass(cmd_buff, {
         color_targets = .[
             {
                 view = swapchain_image,
@@ -138,7 +135,7 @@ tick :: () {
     });
 
     gpu_set_depth_stencil_state(cmd_buff, {depth_test = .ALWAYS, depth_mode = .NONE,});
-    gpu_set_pipeline(cmd_buff, graphics.pipeline);
+    gpu_set_pipeline(cmd_buff, pipeline(*graphics, pass_desc));
 
     using draw_data;
     gpu_draw_instanced_direct(cmd_buff, vertex_params_gpu, num_vertices, num_instances);

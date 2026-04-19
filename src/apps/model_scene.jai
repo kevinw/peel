@@ -3,15 +3,15 @@
 SCENE_ROOT_PATH :: "./scenes/model_scene.scene";
 
 render_toggle: enum_flags {
-    GRASS;
-    SHADOWS;
-    HORDE;
-    SKY;
-    GROUND;
-    PHYSICS_GIZMOS;
-    SHADOW_DEBUG;
-    PICK_DEBUG;
-} = .GRASS | .SHADOWS | .HORDE | .SKY | .GROUND;
+    Grass;
+    Shadows;
+    Horde;
+    Sky;
+    Ground;
+    Physics_Gizmos;
+    Shadow_Debug;
+    Pick_Debug;
+} = .Grass | .Shadows | .Horde | .Sky | .Ground;
 
 Draw_Batch :: struct {
     mesh_index: u32;
@@ -69,7 +69,7 @@ scene_geo: Scene_Geo;
 shadow_map: Shadow_Map;
 player_controller: Character_Controller;
 player_runtime: Animated_Model_Runtime;
-mediapipe_runtime: Mediapipe_Demo_Runtime;
+//mediapipe_runtime: Mediapipe_Demo_Runtime;
 horde_runtime: Horde_Runtime;
 horde_reset_pending: bool;
 scene_rebuild_pending: bool;
@@ -172,12 +172,14 @@ scene_camera: Editor_Camera = .{
     position = .{0.0, 7.0, 12.5},
     yaw = 0.0,
     pitch = -0.36,
+    ortho_half_height = 3.0,
     move_speed = 8.0,
     boost_multiplier = 2.0,
     mouse_sensitivity = 0.0058,
     move_planar = false,
     pitch_min = -1.45,
     pitch_max = 1.45,
+    transition_anchor_distance = 10.0,
 };
 
 on_dll_init :: () {
@@ -204,8 +206,8 @@ on_dll_init :: () {
     debug_pick_params = gpu_make_buffer_ring(Scene_Draw_Params_CPU, label = "model scene debug pick params");
     mesh_grid_limit = gpu_get_mesh_pipeline_max_total_threadgroups_per_grid(mesh_shader.pipeline);
     if mesh_grid_limit == 0 mesh_grid_limit = 1024;
-    mediapipe_runtime.body_casts_shadows = false;
-    mediapipe_runtime.face_casts_shadows = false;
+    //mediapipe_runtime.body_casts_shadows = false;
+    //mediapipe_runtime.face_casts_shadows = false;
 
     scene_palette_models = Scene_File.scan_scene_palette_models();
     append_unique_model_path(*scene_palette_models, tprint("%/tools/blender_exporter/rocks.blend", cache_workspace_root()));
@@ -247,7 +249,7 @@ on_quit :: () {
     linear_present_shutdown_shader();
     shadow_map_deinit(*shadow_map);
     animated_model_runtime_deinit(*player_runtime);
-    deinit(*mediapipe_runtime);
+    //deinit(*mediapipe_runtime);
     array_free(shadow_skip_batch);
     array_free(batch_pick_object_ids);
     array_free(batch_compiled_node_indices);
@@ -323,6 +325,11 @@ tick :: () {
     app_mouse_allowed := ifx app_should_render_to_game_view() then game_mouse_ok else !io.WantCaptureMouse;
     _, p_pressed := input_down("P");
     if p_pressed toggle_control_mode();
+    _, o_pressed := input_down("O");
+    if o_pressed {
+        anchor_point := model_scene_camera_anchor();
+        editor_camera_toggle_projection_mode(*scene_camera, anchor_point, true);
+    }
 
     grass_density_scale = clamp(grass_density_scale, 0.25, 9.0);
     grass_shadow_density_scale = clamp(grass_shadow_density_scale, 0.0, 2.0);
@@ -338,6 +345,17 @@ tick :: () {
         using ImGui;
         if Begin("Model Scene", flags = .AlwaysAutoResize) {
             Checkbox("Autopilot", *autopilot_enabled);
+            ortho_enabled := scene_camera.target_projection_mode == .Orthographic;
+            if Checkbox("Orthographic", *ortho_enabled) {
+                if ortho_enabled {
+                    anchor_point := model_scene_camera_anchor();
+                    editor_camera_set_projection_mode(*scene_camera, .Orthographic, anchor_point, true);
+                } else {
+                    editor_camera_set_projection_mode(*scene_camera, .Perspective);
+                }
+            }
+            SliderFloat("Ortho Half Height", *scene_camera.ortho_half_height, 0.25, 24.0, "%.2f");
+            SliderFloat("Ortho Anchor Dist", *scene_camera.transition_anchor_distance, 1.0, 40.0, "%.1f");
             SliderFloat("Mesh LOD Screen Radius", *lod_screen_radius, 8.0, 1024.0, "%.1f");
             SliderFloat("Mesh LOD Power", *lod_distance_power, 0.5, 2.0, "%.2f");
             inspect("Render Toggle", *render_toggle);
@@ -351,12 +369,12 @@ tick :: () {
                 SliderFloat("Grass Shadow Fade End", *grass_shadow_fade_end, 2.0, 96.0, "%.1f");
             }
             do_ui(*horde_runtime);
-            if Checkbox("Mediapipe Body Casts Shadows", *mediapipe_runtime.body_casts_shadows) {
-                scene_rebuild_pending = true;
-            }
-            if Checkbox("Mediapipe Face Casts Shadows", *mediapipe_runtime.face_casts_shadows) {
-                scene_rebuild_pending = true;
-            }
+            //if Checkbox("Mediapipe Body Casts Shadows", *mediapipe_runtime.body_casts_shadows) {
+                //scene_rebuild_pending = true;
+                //}
+            //if Checkbox("Mediapipe Face Casts Shadows", *mediapipe_runtime.face_casts_shadows) {
+                //scene_rebuild_pending = true;
+                //}
             inspect("Shader Debug", *graphics_shader_constants.debug_mode);
             do_ui(*outdoor_rig);
             if animated_batches.count > 0 {
@@ -441,6 +459,7 @@ tick :: () {
     controller_forward, controller_right, controller_up: Vector3;
     if #complete control_mode == {
     case .Player;
+        editor_camera_update_projection(*scene_camera, dt, app_mouse_ok, app_mouse_allowed);
         if right_down && app_mouse_ok && app_mouse_allowed {
             mouse := Vector2.{cast(float) app_mx, cast(float) app_my};
             if orbit_have_prev_mouse {
@@ -462,11 +481,27 @@ tick :: () {
         if control_mode == .Editor {
             camera_dt = editor_dt;
         }
-
-        _ = editor_camera_update(*scene_camera, camera_dt, app_mx, app_my, app_mouse_ok,
-            allow_move = !io.WantCaptureKeyboard,
-            allow_look = right_down && app_mouse_allowed,
-            allow_zoom = app_mouse_allowed);
+        editor_camera_update_projection(*scene_camera, camera_dt, app_mouse_ok, app_mouse_allowed);
+        moved := editor_camera_update_movement(*scene_camera, camera_dt, !io.WantCaptureKeyboard);
+        if moved {
+            orbit_have_prev_mouse = false;
+        }
+        if right_down && app_mouse_ok && app_mouse_allowed {
+            mouse := Vector2.{cast(float) app_mx, cast(float) app_my};
+            if orbit_have_prev_mouse {
+                delta := mouse - orbit_prev_mouse;
+                if scene_camera.projection_mode == .Orthographic && scene_camera.projection_blend >= 0.9999 {
+                    pivot := model_scene_camera_anchor();
+                    editor_camera_orbit_around(*scene_camera, pivot, delta.x, delta.y);
+                } else {
+                    editor_camera_apply_look_delta(*scene_camera, delta.x, delta.y);
+                }
+            }
+            orbit_prev_mouse = mouse;
+            orbit_have_prev_mouse = true;
+        } else {
+            orbit_have_prev_mouse = false;
+        }
         editor_camera_basis(scene_camera, *controller_forward, *controller_right, *controller_up);
     }
 
@@ -514,7 +549,7 @@ tick :: () {
     if horde_runtime.restart_requested {
         horde_reset_pending = true;
     }
-    if (render_toggle & .PHYSICS_GIZMOS != 0) {
+    if (render_toggle & .Physics_Gizmos != 0) {
         append_player_physics_gizmos();
         draw_physics_debug(*horde_runtime, *gizmo_ctx);
     }
@@ -533,7 +568,10 @@ tick :: () {
             camera_forward = cam_forward,
             camera_right = cam_right,
             camera_up = cam_up,
+            projection_mode = scene_camera.projection_mode,
+            projection_blend = scene_camera.projection_blend,
             fov_y = scene_camera.fov_y,
+            ortho_half_height = scene_camera.ortho_half_height,
             mouse_pos = .{cast(float) app_mx, cast(float) app_my},
             mouse_valid = app_mouse_ok,
             mouse_down = left_down,
@@ -570,25 +608,33 @@ tick :: () {
 
     cam_forward, cam_right, cam_up: Vector3;
     editor_camera_basis(scene_camera, *cam_forward, *cam_right, *cam_up);
+    anchor_point := model_scene_camera_anchor();
+    if scene_camera.target_projection_mode == .Orthographic || scene_camera.projection_blend > 0.0001 {
+        Gizmo.draw_sphere(*gizmo_ctx, anchor_point, max(0.08, scene_camera.ortho_half_height * 0.06), color = .{1.0, 0.38, 0.12, 0.98}, thickness = 3.0, segments = 24);
+        Gizmo.draw_line(*gizmo_ctx, scene_camera.position, anchor_point, color = .{1.0, 0.52, 0.16, 0.62}, thickness = 2.0);
+    }
     view := editor_camera_make_view(*scene_camera);
     aspect := ifx win_h > 0 then cast(float) win_w / cast(float) win_h else 1.0;
+    sky_proj := editor_camera_make_perspective_projection(*scene_camera, aspect, 0.05, 250.0);
     proj := editor_camera_make_projection(*scene_camera, aspect, 0.05, 250.0);
     view_proj := proj * view;
+    render_camera_pos := model_scene_render_camera_position(scene_camera, anchor_point, cam_forward);
     viewport := Vector2.{max(1.0, cast(float) win_w), max(1.0, cast(float) win_h)};
     ensure_scene_pick_target(cast(u32) max(1, win_w), cast(u32) max(1, win_h));
 
     update(*outdoor_rig, *shadow_map);
-    shadow_binding := ifx (render_toggle & .SHADOWS != 0) then shadow_map_binding(*shadow_map) else Vector4.{0.0, 0.0, 2.0, 0.0};
-    prepare_render(*horde_runtime, view_proj, shadow_binding, scene_camera.position, outdoor_rig.sun_strength, outdoor_rig.time_of_day, cast(float) win_h);
+    shadow_binding := ifx (render_toggle & .Shadows != 0) then shadow_map_binding(*shadow_map) else Vector4.{0.0, 0.0, 2.0, 0.0};
+    prepare_render(*horde_runtime, view_proj, shadow_binding, render_camera_pos, outdoor_rig.sun_strength, outdoor_rig.time_of_day, cast(float) win_h,
+        editor_camera_projection_lod_scale(*scene_camera, cast(float) win_h));
     maybe_log(*horde_runtime);
 
-    fill_sky_params(outdoor_rig, current_sky_draw_params.cpu, cam_forward, cam_right, cam_up, proj, shadow_map.light_dir);
+    fill_sky_params(outdoor_rig, current_sky_draw_params.cpu, cam_forward, cam_right, cam_up, sky_proj, shadow_map.light_dir, scene_camera.projection_mode, scene_camera.ortho_half_height);
 
     player_runtime.root = character_controller_root_matrix(*player_controller, player_runtime.scale);
     update_player_animation_state(dt);
     animated_model_runtime_advance(*player_runtime, dt);
     sample(*player_runtime, *scene_geo);
-    update_pose(*mediapipe_runtime, cast(float) time, current_dynamic_instances.cpu);
+    //update_pose(*mediapipe_runtime, cast(float) time, current_dynamic_instances.cpu);
     player_anim := output_state(*player_runtime);
     assert(player_anim != null, "Player animation blend tree output is missing.");
     player_model := scene_geo.models[player_anim.model_index];
@@ -621,7 +667,7 @@ tick :: () {
         case .PLAYER;
             written = scene_anim_write_skin_matrices(dst, *scene_geo, player_anim, mesh, it.node_index);
         case .MEDIAPIPE_DEMO;
-            written = scene_anim_write_skin_matrices(dst, *scene_geo, *mediapipe_runtime.body_anim, mesh, it.node_index);
+            //written = scene_anim_write_skin_matrices(dst, *scene_geo, *mediapipe_runtime.body_anim, mesh, it.node_index);
         }
         assert(written == it.skin_matrix_count);
     }
@@ -635,7 +681,7 @@ tick :: () {
             written := scene_anim_write_morph_weights(dst, *scene_geo, player_anim, mesh);
             assert(written == mesh.morph_target_count);
         }
-        write_morph_weights(*mediapipe_runtime, current_morph_weights.cpu, cast(float) time);
+        //write_morph_weights(*mediapipe_runtime, current_morph_weights.cpu, cast(float) time);
     }
 
     for * scene_static_instances.cpu {
@@ -674,14 +720,14 @@ tick :: () {
             current_scene_draw_params.cpu[anim_batch.batch_index].skin_matrix_count = anim_batch.skin_matrix_count;
         }
     }
-    apply_scene_lighting(outdoor_rig, current_scene_draw_params.cpu, view_proj, scene_camera.position, shadow_map.light_dir);
+    apply_scene_lighting(outdoor_rig, current_scene_draw_params.cpu, view_proj, render_camera_pos, shadow_map.light_dir);
     current_ground_shadow_params.cpu.* = ground_shadow_params.buffers[0].cpu.*;
     current_ground_draw_params.cpu.* = ground_draw_params.buffers[0].cpu.*;
-    apply_ground_lighting(outdoor_rig, current_ground_shadow_params.cpu, current_ground_draw_params.cpu, view_proj, scene_camera.position, shadow_map.light_dir);
+    apply_ground_lighting(outdoor_rig, current_ground_shadow_params.cpu, current_ground_draw_params.cpu, view_proj, render_camera_pos, shadow_map.light_dir);
     player_pos := character_controller_position(*player_controller);
     current_grass_shadow_params.cpu.* = grass_shadow_params.buffers[0].cpu.*;
     current_grass_draw_params.cpu.* = grass_draw_params.buffers[0].cpu.*;
-    apply_grass_lighting(outdoor_rig, current_grass_shadow_params.cpu, *current_grass_draw_params, active_ground, player_pos, player_controller.facing_yaw, cast(float) time, view_proj, scene_camera.position, shadow_map.light_dir, shadow_map.view_proj, shadow_binding);
+    apply_grass_lighting(outdoor_rig, current_grass_shadow_params.cpu, *current_grass_draw_params, active_ground, player_pos, player_controller.facing_yaw, cast(float) time, view_proj, render_camera_pos, shadow_map.light_dir, shadow_map.view_proj, shadow_binding);
     grass_grid_x := max(1, cast(s32) ceil(cast(float) active_ground.render_grid_x * grass_density_scale));
     grass_grid_z := max(1, cast(s32) ceil(cast(float) active_ground.render_grid_z * grass_density_scale));
     grass_shadow_grid_x := max(1, cast(s32) ceil(cast(float) active_ground.render_grid_x * grass_shadow_density_scale));
@@ -689,10 +735,10 @@ tick :: () {
     grass_instance_count = cast(u32) grass_grid_x * cast(u32) grass_grid_z;
     grass_shadow_instance_count = cast(u32) grass_shadow_grid_x * cast(u32) grass_shadow_grid_z;
     current_grass_shadow_params.cpu.grass_grid_height_width = .{cast(float) grass_shadow_grid_x, cast(float) grass_shadow_grid_z, grass_jitter, grass_blade_height};
-    current_grass_shadow_params.cpu.camera_pos_fade_start = .{scene_camera.position.x, scene_camera.position.y, scene_camera.position.z, grass_shadow_fade_start};
+    current_grass_shadow_params.cpu.camera_pos_fade_start = .{render_camera_pos.x, render_camera_pos.y, render_camera_pos.z, grass_shadow_fade_start};
     current_grass_shadow_params.cpu.fade_end_far_shade_shadow_end = .{grass_fade_end, grass_far_shade_start, grass_shadow_fade_end, 0.0};
     current_grass_draw_params.cpu.grass_grid_height_width = .{cast(float) grass_grid_x, cast(float) grass_grid_z, grass_jitter, grass_blade_height};
-    current_grass_draw_params.cpu.camera_pos_fade_start = .{scene_camera.position.x, scene_camera.position.y, scene_camera.position.z, grass_fade_start};
+    current_grass_draw_params.cpu.camera_pos_fade_start = .{render_camera_pos.x, render_camera_pos.y, render_camera_pos.z, grass_fade_start};
     current_grass_draw_params.cpu.fade_end_far_shade_shadow_end = .{grass_fade_end, grass_far_shade_start, grass_shadow_fade_end, 0.0};
 
     Gizmo_Render.gizmo_render_set_view_projection(*gizmo_render_ctx, view_proj);
@@ -700,7 +746,7 @@ tick :: () {
 
     main_queue := gpu_get_queue(.MAIN, 0);
     result=, cmd_buff := gpu_start_command_recording(main_queue);
-    if render_toggle & .SHADOWS != 0 {
+    if render_toggle & .Shadows != 0 {
         saved_shadow_skin_counts: [..]u32;
         defer array_free(saved_shadow_skin_counts);
         shadow_pass_desc: Gpu_Render_Pass_Desc = {
@@ -727,7 +773,7 @@ tick :: () {
         gpu_draw_instanced_direct(cmd_buff, current_ground_shadow_params.gpu, ground_index_count, 1);
 
         // grass shadow
-        if render_toggle & .GRASS != 0 && current_grass_shadow_params.cpu != null && grass_shadow_instance_count > 0 {
+        if render_toggle & .Grass != 0 && current_grass_shadow_params.cpu != null && grass_shadow_instance_count > 0 {
             gpu_set_pipeline(cmd_buff, pipeline(*grass_shadow_shader, shadow_pass_desc));
             gpu_draw_instanced_direct(cmd_buff, current_grass_shadow_params.gpu, 6, grass_shadow_instance_count);
         }
@@ -740,7 +786,7 @@ tick :: () {
             params_gpu := current_scene_draw_params.gpu + (it_index * size_of(Scene_Draw_Params_CPU)).(Gpu_Ptr);
             gpu_draw_instanced_direct(cmd_buff, params_gpu, mesh.index_count, batch.instance_count);
         }
-        if render_toggle & .HORDE != 0 {
+        if render_toggle & .Horde != 0 {
             draw_shadow(*horde_runtime, cmd_buff, shadow_pass_desc);
         }
     }
@@ -808,19 +854,19 @@ tick :: () {
         gpu_begin_scoped_render_pass(cmd_buff, main_pass_desc, .COLOR_ATTACHMENT_WRITE, .SHADER_READ);
 
         // sky
-        if render_toggle & .SKY != 0 && current_sky_draw_params.cpu != null {
+        if render_toggle & .Sky != 0 && current_sky_draw_params.cpu != null {
             gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
             gpu_set_pipeline(cmd_buff, pipeline(*sky_shader, main_pass_desc));
             gpu_draw_instanced_direct(cmd_buff, current_sky_draw_params.gpu, 6, 1);
         }
 
-        if render_toggle & .GROUND != 0 {
+        if render_toggle & .Ground != 0 {
             gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .LESS, depth_mode = .READ | .WRITE});
             gpu_set_pipeline(cmd_buff, pipeline(*ground_shader, main_pass_desc, graphics_shader_constants));
             gpu_draw_instanced_direct(cmd_buff, current_ground_draw_params.gpu, ground_index_count, 1);
         }
 
-        if render_toggle & .GRASS != 0 && current_grass_draw_params.cpu != null && grass_instance_count > 0 {
+        if render_toggle & .Grass != 0 && current_grass_draw_params.cpu != null && grass_instance_count > 0 {
             gpu_set_pipeline(cmd_buff, pipeline(*grass_shader, main_pass_desc));
             gpu_draw_instanced_direct(cmd_buff, current_grass_draw_params.gpu, 6, grass_instance_count);
         }
@@ -844,7 +890,7 @@ tick :: () {
             total_object_groups := draw_instance_total * meshlet_chunk_count;
 
             meshlet_flags := Model_Scene_Meshlet_Flags.HAS_LODS;
-            if render_toggle & .SHADOWS != 0 meshlet_flags |= .HAS_SHADOWS;
+            if render_toggle & .Shadows != 0 meshlet_flags |= .HAS_SHADOWS;
             if mesh.morph_target_count > 0 meshlet_flags |= .HAS_MORPHS;
             mesh_constants := Model_Scene_Meshlet_Constants.{
                 flags = meshlet_flags,
@@ -876,29 +922,22 @@ tick :: () {
                         batch_params.morph_weights,
                         batch_params.skin_matrices,
                         scene_geo.morph_vertex_deltas.gpu,
+                        scene_geo.materials.gpu,
                     ];
                     draw_params.cpu.* = .{
                         camera_vp = view_proj,
                         frustum_planes = extract_frustum_planes(view_proj),
-                        eye_position = scene_camera.position,
-                        lod_projection_scale = cast(float) win_h / max(2.0 * max(tan(scene_camera.fov_y * 0.5), 0.0001), 0.0001),
+                        eye_position = render_camera_pos,
+                        lod_projection_scale = editor_camera_projection_lod_scale(*scene_camera, cast(float) win_h),
                         lod_radius_threshold = lod_screen_radius,
                         lod_metric_power = lod_distance_power,
                         batch_mesh_index = batch.mesh_index,
                         light_dir = batch_params.light_dir,
                         sun_params = batch_params.sun_params,
                         camera_pos = batch_params.camera_pos,
+                        material_index = mesh.material_index,
                         shadow_view_proj = shadow_map.view_proj,
                         shadow_meta = shadow_binding,
-                        base_color_factor = material.base_color_factor,
-                        sampler_index = material.sampler_index,
-                        base_color_texture_index = material.base_color_texture_index,
-                        opacity_texture_index = material.opacity_texture_index,
-                        normal_texture_index = material.normal_texture_index,
-                        roughness_texture_index = material.roughness_texture_index,
-                        ao_texture_index = material.ao_texture_index,
-                        alpha_mode = material.alpha_mode,
-                        alpha_cutoff = material.alpha_cutoff,
                         batch_first_instance = draw_first_instance + draw_instance_start,
                         batch_instance_count = draw_instance_count,
                         batch_max_meshlet_count = batch.max_meshlet_count,
@@ -916,23 +955,23 @@ tick :: () {
             }
         }
 
-        if render_toggle & .HORDE {
+        if render_toggle & .Horde {
             draw_main(*horde_runtime, cmd_buff, main_pass_desc);
         }
 
-        should_draw_gizmos := (render_toggle & .PHYSICS_GIZMOS != 0) || control_mode == .Editor || horde_runtime.projectile_active_count > 0 || horde_runtime.spider_active_count > 0 || horde_runtime.powerup_active_count > 0 || horde_runtime.pillar_active_count > 0;
+        should_draw_gizmos := (render_toggle & .Physics_Gizmos != 0) || control_mode == .Editor || horde_runtime.projectile_active_count > 0 || horde_runtime.spider_active_count > 0 || horde_runtime.powerup_active_count > 0 || horde_runtime.pillar_active_count > 0;
         if should_draw_gizmos {
             Gizmo_Render.gizmo_render_draw(*gizmo_render_ctx, cmd_buff, *gizmo_ctx, viewport, depth_mode = .TEST);
             Gizmo_Render.gizmo_render_draw(*gizmo_overlay_render_ctx, cmd_buff, *gizmo_overlay_ctx, viewport, depth_mode = .NONE);
         }
 
-        if render_toggle & .SHADOW_DEBUG != 0 {
+        if render_toggle & .Shadow_Debug != 0 {
             gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
             gpu_set_pipeline(cmd_buff, pipeline(*debug_shadow_shader, main_pass_desc));
             gpu_draw_instanced_direct(cmd_buff, current_scene_draw_params.gpu, 6, 1);
         }
 
-        if render_toggle & .PICK_DEBUG != 0 && current_debug_pick_params.cpu != null {
+        if render_toggle & .Pick_Debug != 0 && current_debug_pick_params.cpu != null {
             gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
             gpu_set_pipeline(cmd_buff, pipeline(*debug_pick_shader, main_pass_desc));
             gpu_draw_instanced_direct(cmd_buff, current_debug_pick_params.gpu, 6, 1);
@@ -1065,7 +1104,7 @@ init_scene_geo_from_palette :: () {
     model_paths.allocator = temp;
     for scene_palette_models array_add(*model_paths, it);
     append_unique_model_path(*model_paths, "models/sample.glb");
-    append_unique_model_path(*model_paths, "models/mediapipe-canonical-face.glb");
+    //append_unique_model_path(*model_paths, "models/mediapipe-canonical-face.glb");
     append_unique_model_path(*model_paths, tprint("%/tools/blender_exporter/rocks.blend", cache_workspace_root()));
     scene_geo_init(*scene_geo, model_paths);
 }
@@ -1088,7 +1127,7 @@ rebuild_scene_runtime :: () {
     array_reset(*animated_batches);
     array_reset(*shadow_skip_batch);
     animated_model_runtime_reset(*player_runtime);
-    reset(*mediapipe_runtime);
+    //reset(*mediapipe_runtime);
     autopilot_enabled = false;
     active_ground = .{};
 
@@ -1157,15 +1196,15 @@ rebuild_scene_runtime :: () {
     while shadow_skip_batch.count < scene_batches.count array_add(*shadow_skip_batch, false);
     while batch_pick_object_ids.count < scene_batches.count array_add(*batch_pick_object_ids, 0);
     while batch_compiled_node_indices.count < scene_batches.count array_add(*batch_compiled_node_indices, -1);
-    append_instances(*mediapipe_runtime, *instances_cpu, *total_skin_matrix_count);
+    //append_instances(*mediapipe_runtime, *instances_cpu, *total_skin_matrix_count);
 
     instance_uses_dynamic_storage: [..]bool;
     instance_uses_dynamic_storage.allocator = temp;
     array_resize(*instance_uses_dynamic_storage, instances_cpu.count);
     for it: player_runtime.instances            instance_uses_dynamic_storage[it.instance_index] = true;
     for it: player_runtime.attachment_instances instance_uses_dynamic_storage[it.instance_index] = true;
-    for it: mediapipe_runtime.body_instances   instance_uses_dynamic_storage[it.instance_index] = true;
-    for it: mediapipe_runtime.face_instances   instance_uses_dynamic_storage[it.instance_index] = true;
+    //for it: mediapipe_runtime.body_instances   instance_uses_dynamic_storage[it.instance_index] = true;
+    //for it: mediapipe_runtime.face_instances   instance_uses_dynamic_storage[it.instance_index] = true;
 
     array_resize(*scene_batch_uses_dynamic_instances, scene_batches.count);
     static_instance_count: s64;
@@ -1222,8 +1261,8 @@ rebuild_scene_runtime :: () {
 
     for *player_runtime.instances            it.instance_index = remapped_instance_indices[it.instance_index];
     for *player_runtime.attachment_instances it.instance_index = remapped_instance_indices[it.instance_index];
-    for *mediapipe_runtime.body_instances    it.instance_index = remapped_instance_indices[it.instance_index];
-    for *mediapipe_runtime.face_instances    it.instance_index = remapped_instance_indices[it.instance_index];
+    //for *mediapipe_runtime.body_instances    it.instance_index = remapped_instance_indices[it.instance_index];
+    //for *mediapipe_runtime.face_instances    it.instance_index = remapped_instance_indices[it.instance_index];
 
     arena_bytes :=
         max(cast(s64) 1, static_instance_count) * size_of(Scene_Instance) +
@@ -1352,7 +1391,7 @@ clear_scene_runtime_resources :: () {
     assert(scene_runtime_mutation_allowed, "model_scene clear_scene_runtime_resources called while frame-local GPU resources are live.");
     controller_deinit(*player_controller);
     animated_model_runtime_deinit(*player_runtime);
-    deinit(*mediapipe_runtime);
+    //deinit(*mediapipe_runtime);
 
     for stone_physics_bodies Physics.destroy_body(it);
     array_reset(*stone_physics_bodies);
@@ -1421,8 +1460,8 @@ clear_scene_runtime_resources :: () {
     clear(*horde_runtime);
 
     array_reset(*player_runtime.instances);
-    array_reset(*mediapipe_runtime.body_instances);
-    array_reset(*mediapipe_runtime.face_instances);
+    //array_reset(*mediapipe_runtime.body_instances);
+    //array_reset(*mediapipe_runtime.face_instances);
     array_reset(*animated_batches);
     array_reset(*scene_batches);
     array_reset(*scene_batch_uses_dynamic_instances);
@@ -1773,8 +1812,7 @@ write_instance_meshlet_views :: (
 }
 
 scene_recompute_compiled_worlds :: () {
-    for node_index: 0..compiled_scene.nodes.count-1 {
-        node := *compiled_scene.nodes[node_index];
+    for * node: compiled_scene.nodes {
         local := make_trs_matrix(node.local_position, quat_from_euler_deg(node.local_rotation_deg), node.local_scale);
         node.world = local;
         if node.parent_index >= 0 node.world = compiled_scene.nodes[node.parent_index].world * local;
@@ -1897,6 +1935,12 @@ scene_mouse_world_ray :: (frame: Manip_Frame_Input) -> Vector3, Vector3, bool {
     nx := ((frame.mouse_pos.x + 0.5) / frame.viewport.x) * 2.0 - 1.0;
     ny := ((frame.mouse_pos.y + 0.5) / frame.viewport.y) * 2.0 - 1.0;
     aspect := frame.viewport.x / max(frame.viewport.y, 1.0);
+    if frame.projection_mode == .Orthographic && frame.projection_blend >= 0.9999 {
+        origin := frame.camera_pos +
+            frame.camera_right * (nx * aspect * frame.ortho_half_height) +
+            frame.camera_up * (ny * frame.ortho_half_height);
+        return origin, frame.camera_forward, true;
+    }
     tan_half_fov := tan(frame.fov_y * 0.5);
     dir := frame.camera_forward + frame.camera_right * (nx * aspect * tan_half_fov) + frame.camera_up * (ny * tan_half_fov);
     normalize(*dir, fallback = frame.camera_forward);
@@ -1932,6 +1976,20 @@ metal_stage_entry_name :: (metal: []u8, stage_keyword: string) -> string {
     while token_end < source.count && source[token_end] != #char "(" && source[token_end] != #char " " token_end += 1;
     assert(token_end > token_start, "Failed to parse Metal % entry point name.", stage_keyword);
     return string.{count = token_end - token_start, data = source.data + token_start};
+}
+
+model_scene_camera_anchor :: () -> Vector3 {
+    if control_mode == .Editor && scene_manip_ctx.selected_index >= 0 && cast(s64) scene_manip_ctx.selected_index < scene_manip_objects.count {
+        return scene_manip_objects[scene_manip_ctx.selected_index].position;
+    }
+    return character_controller_position(*player_controller) + .{0.0, 0.95, 0.0};
+}
+
+model_scene_render_camera_position :: (camera: Editor_Camera, anchor_point: Vector3, cam_forward: Vector3) -> Vector3 {
+    ortho_distance := max(camera.ortho_half_height / max(tan(camera.fov_y * 0.5), 0.0001), 0.01);
+    ortho_camera_pos := anchor_point - cam_forward * ortho_distance;
+    ortho_t := clamp(camera.projection_blend, 0.0, 1.0);
+    return lerp(camera.position, ortho_camera_pos, ortho_t);
 }
 
 
@@ -1975,9 +2033,9 @@ init_ground_plane :: (ground: Scene_File.Scene_Procedural_Ground_Desc) {
         .{cell_size_x, 1.0, cell_size_z});
     ground_physics_body_valid = true;
 
-    ground_vertices = gpu_alloc_view(Scene_Vertex, ground_vertices_cpu.count, label = "ground vertices");
-    ground_indices = gpu_alloc_view(u32, ground_indices_cpu.count, label = "ground indices");
-    ground_instance = gpu_make_buffer_ring(Scene_Instance, label = "ground instance");
+    ground_vertices      = gpu_alloc_view(Scene_Vertex, ground_vertices_cpu.count, label = "ground vertices");
+    ground_indices       = gpu_alloc_view(u32, ground_indices_cpu.count, label = "ground indices");
+    ground_instance      = gpu_make_buffer_ring(Scene_Instance, label = "ground instance");
     ground_shadow_params = gpu_make_buffer_ring(Ground_Draw_Params_CPU, label = "ground shadow params");
     ground_draw_params   = gpu_make_buffer_ring(Ground_Draw_Params_CPU, label = "ground params");
     grass_shadow_params  = gpu_make_buffer_ring(Grass_Shadow_Params_CPU, label = "grass shadow params");
@@ -2022,9 +2080,9 @@ init_ground_plane :: (ground: Scene_File.Scene_Procedural_Ground_Desc) {
             camera_pos = scene_camera.position,
             sampler_index = cast(u32) ground_sampler - 1,
             base_color_texture_index = gpu_texture_view_index(ground_texture_view),
-            normal_texture_index = gpu_texture_view_index(ground_normal_texture_view),
-            roughness_texture_index = gpu_texture_view_index(ground_roughness_texture_view),
-            ao_texture_index = gpu_texture_view_index(ground_ao_texture_view),
+            normal_texture_index     = gpu_texture_view_index(ground_normal_texture_view),
+            roughness_texture_index  = gpu_texture_view_index(ground_roughness_texture_view),
+            ao_texture_index         = gpu_texture_view_index(ground_ao_texture_view),
         };
     grass_grid_x := max(1, cast(s32) ceil(cast(float) ground.render_grid_x * grass_density_scale));
     grass_grid_z := max(1, cast(s32) ceil(cast(float) ground.render_grid_z * grass_density_scale));
@@ -2037,7 +2095,7 @@ init_ground_plane :: (ground: Scene_File.Scene_Procedural_Ground_Desc) {
             ground_size_center_z_time = .{ground.size_x, ground.size_z, ground.center_z, 0.0},
             ground_shape = .{ground.ridge, ground.swell, ground.warp, 0.0},
             grass_grid_height_width = .{cast(float) grass_shadow_grid_x, cast(float) grass_shadow_grid_z, grass_jitter, grass_blade_height},
-            player_pos_radius = .{0.0, 0.0, 0.0, 1.7},
+            player_pos_radius = .{0.0, 0.0, 0.0, 0.1},
             camera_pos_fade_start = .{0.0, 0.0, 0.0, grass_shadow_fade_start},
             fade_end_far_shade_shadow_end = .{grass_fade_end, grass_far_shade_start, grass_shadow_fade_end, 0.0},
         };
@@ -2157,26 +2215,6 @@ toggle_control_mode :: () {
     }
 }
 
-extract_frustum_planes :: (m: Matrix4) -> [6]Vector4 {
-    row0 := Vector4.{m._11, m._12, m._13, m._14};
-    row1 := Vector4.{m._21, m._22, m._23, m._24};
-    row2 := Vector4.{m._31, m._32, m._33, m._34};
-    row3 := Vector4.{m._41, m._42, m._43, m._44};
-
-    planes: [6]Vector4;
-    planes[0] = row3 + row0;
-    planes[1] = row3 - row0;
-    planes[2] = row3 + row1;
-    planes[3] = row3 - row1;
-    planes[4] = row3 + row2;
-    planes[5] = row3 - row2;
-    for *planes {
-        len := length(it.xyz);
-        if len > 1.0e-6 it.* /= len;
-    }
-    return planes;
-}
-
 mesh_max_meshlet_count :: (mesh_index: u32) -> u32 {
     result := scene_geo.meshlet_meshes.cpu[mesh_index].meshlet_count;
     mesh := scene_geo.meshes[mesh_index];
@@ -2198,7 +2236,7 @@ mesh_max_meshlet_count :: (mesh_index: u32) -> u32 {
 #load "../scene_geo.jai";
 #load "../scene_anim.jai";
 #load "./model_scene_animated_model_runtime.jai";
-#load "./model_scene_mediapipe_runtime.jai";
+//#load "./model_scene_mediapipe_runtime.jai";
 #load "./model_scene_mesh_draw_set.jai";
 #load "../horde_runtime.jai";
 #load "../scene_pick.jai";

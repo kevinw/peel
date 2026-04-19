@@ -59,23 +59,6 @@ scene "Model Scene" {
     scale 0.01 0.01 0.01
     instance_scene "prefabs/player.scene"
   }
-  node "Floating Teapots" {
-    position 0 0 0
-    rotation_deg 0 0 0
-    scale 1 1 1
-    scatter_render {
-      assets "teapot"
-      count 8
-      mode floating
-      x_range -40 40
-      z_range -50 20
-      y_range 10 16
-      scale_range 0.18 0.34
-      yaw_range_deg 0 360
-      ground_y_offset 0
-      seed 1954238209
-    }
-  }
   node "Stone Field A" {
     position 0 0 0
     rotation_deg 0 0 0
@@ -160,12 +143,6 @@ scene "Model Scene" {
       ground_y_offset 0.015
       seed 15
     }
-  }
-  node "mask" {
-    position -2.341213 2.097282 -5.371956
-    rotation_deg 0 0 0
-    scale 2 2 2
-    mesh_render "mask"
   }
   node "Tree" {
     position 2.058036 -0.621475 -18.253599

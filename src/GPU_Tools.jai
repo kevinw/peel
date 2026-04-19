@@ -171,12 +171,19 @@ sgpu_frame_ring_gpu_slot :: (ring_base_gpu: Gpu_Ptr, $T: Type, frame_number: s64
     return ring_base_gpu + (idx * size_of(T)).(Gpu_Ptr);
 }
 
-gpu_begin_scoped_render_pass :: (cmd_buf: Gpu_Command_Buffer, desc: Gpu_Render_Pass_Desc,
-    transition_before: Pass_Access = .NONE, transition_after: Pass_Access = .NONE) #expand {
+gpu_begin_scoped_render_pass :: (
+    cmd_buf: Gpu_Command_Buffer,
+    desc: Gpu_Render_Pass_Desc,
+    transition_before: Pass_Access = .NONE,
+    transition_after: Pass_Access = .NONE
+) -> Gpu_Render_Pass_Desc #expand {
     gpu_begin_render_pass(cmd_buf, desc);
+
     `defer ifx transition_before != .NONE || transition_after != .NONE
         then gpu_end_render_pass_with_transition(cmd_buf, transition_before, transition_after)
         else gpu_end_render_pass(cmd_buf);
+
+    return desc;
 }
 
 //
@@ -420,6 +427,27 @@ quat_from_euler_deg :: (deg: Vector3) -> Quaternion {
     q := qz * qy * qx;
     normalize_or_identity(*q);
     return q;
+}
+
+extract_frustum_planes :: (m: Matrix4) -> [6]Vector4 {
+    row0 := Vector4.{m._11, m._12, m._13, m._14};
+    row1 := Vector4.{m._21, m._22, m._23, m._24};
+    row2 := Vector4.{m._31, m._32, m._33, m._34};
+    row3 := Vector4.{m._41, m._42, m._43, m._44};
+
+    planes: [6]Vector4 = .[
+        row3 + row0,
+        row3 - row0,
+        row3 + row1,
+        row3 - row1,
+        row3 + row2,
+        row3 - row2,
+    ];
+    for *planes {
+        len := length(it.xyz);
+        if len > 1.0e-6 it.* /= len;
+    }
+    return planes;
 }
 
 

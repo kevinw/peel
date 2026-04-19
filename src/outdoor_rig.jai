@@ -31,13 +31,14 @@ sun_direction :: (rig: Outdoor_Rig) -> Vector3 {
     return normalize(Vector3.{cos(phase) * horizontal, elevation, sin(phase) * horizontal * 0.55});
 }
 
-fill_sky_params :: (rig: Outdoor_Rig, params: *Model_Scene_Sky_Params_CPU, cam_forward: Vector3, cam_right: Vector3, cam_up: Vector3, proj: Matrix4, light_dir: Vector3) {
+fill_sky_params :: (rig: Outdoor_Rig, params: *Model_Scene_Sky_Params_CPU, cam_forward: Vector3, cam_right: Vector3, cam_up: Vector3, sky_proj: Matrix4, light_dir: Vector3, projection_mode: Editor_Camera_Projection_Mode, ortho_half_height: float) {
     if params == null return;
     params.* = .{
-        camera_right_proj_x = .{cam_right.x, cam_right.y, cam_right.z, proj._11},
-        camera_up_proj_y = .{cam_up.x, cam_up.y, cam_up.z, proj._22},
+        camera_right_proj_x = .{cam_right.x, cam_right.y, cam_right.z, sky_proj._11},
+        camera_up_proj_y = .{cam_up.x, cam_up.y, cam_up.z, sky_proj._22},
         camera_forward_time_of_day = vec4(cam_forward, rig.time_of_day),
         light_dir_sun_strength = .{light_dir.x, light_dir.y, light_dir.z, rig.sun_strength},
+        projection_mode_ortho_half_height = .{cast(float) cast(u32) projection_mode, ortho_half_height, 0.0, 0.0},
     };
 }
 

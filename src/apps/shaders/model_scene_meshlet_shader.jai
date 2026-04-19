@@ -18,7 +18,7 @@ Model_Scene_Meshlet_Params :: struct {
     _pad0: float;
     sun_params: Vector4;
     camera_pos: Vector3;
-    _pad1: float;
+    material_index: u32;
     shadow_view_proj: Matrix4;
     shadow_meta: Vector4;
 
@@ -89,13 +89,13 @@ Model_Scene_Meshlet_Fragment_In :: struct {
     shadow_meta: Vector4; @TEXCOORD7
 }
 
-model_scene_meshlet_alpha :: (params: *Model_Scene_Meshlet_Params, uv: Vector2, tint_alpha: float) -> float {
-    alpha := params.base_color_factor.w * tint_alpha;
-    if params.base_color_texture_index != SCENE_INVALID_TEXTURE_INDEX {
-        alpha *= sample_2d(params.base_color_texture_index, params.sampler_index, uv).w;
+model_scene_meshlet_alpha :: (material: Scene_Material, uv: Vector2, tint_alpha: float) -> float {
+    alpha := material.base_color_factor.w * tint_alpha;
+    if material.base_color_texture_index != SCENE_INVALID_TEXTURE_INDEX {
+        alpha *= sample_2d(material.base_color_texture_index, material.sampler_index, uv).w;
     }
-    if params.opacity_texture_index != SCENE_INVALID_TEXTURE_INDEX {
-        alpha *= sample_2d(params.opacity_texture_index, params.sampler_index, uv).x;
+    if material.opacity_texture_index != SCENE_INVALID_TEXTURE_INDEX {
+        alpha *= sample_2d(material.opacity_texture_index, material.sampler_index, uv).x;
     }
     return alpha;
 }
@@ -155,6 +155,7 @@ model_scene_mesh_main :: (
     morph_weights: *float,
     skin_matrices: *Vector4,
     morph_vertex_deltas: *Scene_Morph_Vertex_Delta,
+    materials: *Scene_Material,
     using constants: Model_Scene_Meshlet_Constants,
 ) {
     mesh_set_max_output_counts(MESHLET_MAX_VERTICES, MESHLET_MAX_TRIANGLES);
@@ -385,39 +386,53 @@ model_scene_task_main :: (
 model_scene_meshlet_fragment_main :: (
     using input: Model_Scene_Meshlet_Fragment_In,
     params: *Model_Scene_Meshlet_Params,
+    meshes: *Scene_Mesh,
+    meshlet_meshes: *Scene_Meshlet_Mesh,
+    vertices: *Scene_Vertex,
+    meshlets: *Scene_Meshlet,
+    meshlet_vertices: *u32,
+    meshlet_triangles: *u32,
+    meshlet_bounds: *Vector4,
+    instances: *Model_Scene_Meshlet_Instance,
+    morph_weights: *float,
+    skin_matrices: *Vector4,
+    morph_vertex_deltas: *Scene_Morph_Vertex_Delta,
+    materials: *Scene_Material,
     using constants: Model_Scene_Meshlet_Constants,
 ) -> Vector4 @SV_Target0 {
-    alpha := model_scene_meshlet_alpha(params, uv, tint.w);
-    if params.alpha_mode == SCENE_ALPHA_MODE_MASK && alpha < params.alpha_cutoff discard();
+    material := materials[params.material_index];
+
+    alpha := model_scene_meshlet_alpha(material, uv, tint.w);
+    if material.alpha_mode == SCENE_ALPHA_MODE_MASK && alpha < material.alpha_cutoff discard();
     if debug_mode != .SHADED && debug_mode != .ALBEDO {
         return .{color.x, color.y, color.z, 1.0};
     }
 
-    tex := params.base_color_factor;
-    if params.base_color_texture_index != SCENE_INVALID_TEXTURE_INDEX {
-        tex = sample_2d(params.base_color_texture_index, params.sampler_index, uv);
+    tex := material.base_color_factor;
+    if material.base_color_texture_index != SCENE_INVALID_TEXTURE_INDEX {
+        tex = sample_2d(material.base_color_texture_index, material.sampler_index, uv);
     }
     base_rgb := Vector3.{
-        tex.x * params.base_color_factor.x * tint.x,
-        tex.y * params.base_color_factor.y * tint.y,
-        tex.z * params.base_color_factor.z * tint.z,
+        tex.x * material.base_color_factor.x * tint.x,
+        tex.y * material.base_color_factor.y * tint.y,
+        tex.z * material.base_color_factor.z * tint.z,
     };
     if debug_mode == .ALBEDO return .{base_rgb.x, base_rgb.y, base_rgb.z, alpha};
     N := normalize(normal);
     ao := 1.0;
     roughness := 0.82;
-    if params.normal_texture_index != SCENE_INVALID_TEXTURE_INDEX {
+    if material.normal_texture_index != SCENE_INVALID_TEXTURE_INDEX {
         T := normalize(tangent.xyz);
         B := normalize(cross(N, T)) * tangent.w;
-        n_sample := sample_2d(params.normal_texture_index, params.sampler_index, uv);
+        n_sample := sample_2d(material.normal_texture_index, material.sampler_index, uv);
         n_ts := decode_bc5_normal(n_sample);
         N = normalize(T * n_ts.x + B * n_ts.y + N * n_ts.z);
     }
-    if params.ao_texture_index != SCENE_INVALID_TEXTURE_INDEX {
-        ao = sample_2d(params.ao_texture_index, params.sampler_index, uv).x;
+    if material.ao_texture_index != SCENE_INVALID_TEXTURE_INDEX {
+        ao = sample_2d(material.ao_texture_index, material.sampler_index, uv).x;
     }
-    if params.roughness_texture_index != SCENE_INVALID_TEXTURE_INDEX {
-        roughness = sample_2d(params.roughness_texture_index, params.sampler_index, uv).y;
+    if material.roughness_texture_index != SCENE_INVALID_TEXTURE_INDEX {
+        roughness = sample_2d(material.roughness_texture_index, material.sampler_index, uv).y;
     }
 
     sun_dir := normalize(-params.light_dir);
@@ -446,11 +461,24 @@ model_scene_meshlet_fragment_main :: (
 model_scene_meshlet_shadow_fragment_main :: (
     using input: Model_Scene_Meshlet_Fragment_In,
     params: *Model_Scene_Meshlet_Params,
+    meshes: *Scene_Mesh,
+    meshlet_meshes: *Scene_Meshlet_Mesh,
+    vertices: *Scene_Vertex,
+    meshlets: *Scene_Meshlet,
+    meshlet_vertices: *u32,
+    meshlet_triangles: *u32,
+    meshlet_bounds: *Vector4,
+    instances: *Model_Scene_Meshlet_Instance,
+    morph_weights: *float,
+    skin_matrices: *Vector4,
+    morph_vertex_deltas: *Scene_Morph_Vertex_Delta,
+    materials: *Scene_Material,
     using constants: Model_Scene_Meshlet_Constants,
 ) -> struct { out_color: Vector4; } {
     _ = constants;
-    alpha := model_scene_meshlet_alpha(params, uv, tint.w);
-    if params.alpha_mode == SCENE_ALPHA_MODE_MASK && alpha < params.alpha_cutoff discard();
+    material := materials[params.material_index];
+    alpha := model_scene_meshlet_alpha(material, uv, tint.w);
+    if material.alpha_mode == SCENE_ALPHA_MODE_MASK && alpha < material.alpha_cutoff discard();
     d := clamp(position.z, 0.0, 1.0);
-    return .{out_color = .{d, d, d, 1.0}};
+    return { out_color = { d, d, d, 1.0 } };
 } @fragment_shader

@@ -1,24 +1,24 @@
 #scope_export
 
 Manip_Mode :: enum {
-    TRANSLATE;
-    ROTATE;
-    SCALE;
+    Translate;
+    Rotate;
+    Scale;
 }
 
 Manip_Space :: enum {
-    WORLD;
-    LOCAL;
+    World;
+    Local;
 }
 
 Manip_Object_Shape :: enum {
-    BOX;
-    SPHERE;
+    Box;
+    Sphere;
 }
 
 Manip_Object :: struct {
     name: string;
-    shape: Manip_Object_Shape = .BOX;
+    shape: Manip_Object_Shape = .Box;
     position: Vector3;
     rotation: Quaternion = .{w = 1.0};
     scale: Vector3 = .{1.0, 1.0, 1.0};
@@ -27,17 +27,17 @@ Manip_Object :: struct {
 }
 
 Manip_Drag_Kind :: enum {
-    NONE;
-    AXIS;
-    PLANE;
-    ORBIT;
+    None;
+    Axis;
+    Plane;
+    Orbit;
 }
 
 Manip_Context :: struct {
     selected_index: s32 = -1;
     hovered_index: s32 = -1;
-    mode: Manip_Mode = .TRANSLATE;
-    space: Manip_Space = .WORLD;
+    mode: Manip_Mode = .Translate;
+    space: Manip_Space = .World;
 
     hovered_axis: s32 = -1;
     hovered_plane: s32 = -1;
@@ -45,7 +45,7 @@ Manip_Context :: struct {
 
     active_axis: s32 = -1;
     active_plane: s32 = -1;
-    active_kind: Manip_Drag_Kind = .NONE;
+    active_kind: Manip_Drag_Kind = .None;
     active := false;
 
     drag_start_mouse: Vector2;
@@ -71,7 +71,10 @@ Manip_Frame_Input :: struct {
     camera_forward: Vector3;
     camera_right: Vector3;
     camera_up: Vector3;
+    projection_mode: Editor_Camera_Projection_Mode = .Perspective;
+    projection_blend: float;
     fov_y: float = PI / 3.0;
+    ortho_half_height: float = 1.0;
     mouse_pos: Vector2;
     mouse_valid: bool;
     mouse_down: bool;
@@ -130,7 +133,7 @@ manip_update :: (ctx: *Manip_Context, gizmo_ctx: *Gizmo.Gizmo_Context, objects: 
     if objects.count <= 0 {
         ctx.selected_index = -1;
         ctx.active = false;
-        ctx.active_kind = .NONE;
+        ctx.active_kind = .None;
         return result;
     }
 
@@ -153,7 +156,7 @@ manip_update :: (ctx: *Manip_Context, gizmo_ctx: *Gizmo.Gizmo_Context, objects: 
             if ctx.selected_index >= 0 {
                 selected := cast(s64) ctx.selected_index;
                 kind, axis, plane := pick_handle(ctx, objects[selected], frame);
-                if kind != .NONE {
+                if kind != .None {
                     begin_drag(ctx, objects[selected], kind, axis, plane, frame, ray_origin, ray_dir);
                     result.captured_mouse = true;
                 } else {
@@ -172,7 +175,7 @@ manip_update :: (ctx: *Manip_Context, gizmo_ctx: *Gizmo.Gizmo_Context, objects: 
 
         if frame.mouse_released {
             ctx.active = false;
-            ctx.active_kind = .NONE;
+            ctx.active_kind = .None;
             ctx.active_axis = -1;
             ctx.active_plane = -1;
         }
@@ -180,7 +183,7 @@ manip_update :: (ctx: *Manip_Context, gizmo_ctx: *Gizmo.Gizmo_Context, objects: 
         if ctx.selected_index >= 0 && !ctx.active {
             selected := cast(s64) ctx.selected_index;
             kind, _, _ := pick_handle(ctx, objects[selected], frame);
-            if kind != .NONE result.captured_mouse = true;
+            if kind != .None result.captured_mouse = true;
         }
     }
 
@@ -191,10 +194,10 @@ manip_update :: (ctx: *Manip_Context, gizmo_ctx: *Gizmo.Gizmo_Context, objects: 
 
 #scope_file
 
-reset_hover :: (ctx: *Manip_Context) {
-    ctx.hovered_axis = -1;
-    ctx.hovered_plane = -1;
-    ctx.hovered_orbit = false;
+reset_hover :: (using ctx: *Manip_Context) {
+    hovered_axis = -1;
+    hovered_plane = -1;
+    hovered_orbit = false;
 }
 
 draw_handles :: (ctx: *Manip_Context, gizmo_ctx: *Gizmo.Gizmo_Context, overlay_gizmo_ctx: *Gizmo.Gizmo_Context, objects: []Manip_Object, frame: Manip_Frame_Input) {
@@ -216,10 +219,10 @@ draw_handles :: (ctx: *Manip_Context, gizmo_ctx: *Gizmo.Gizmo_Context, overlay_g
         .{0.35, 0.58, 0.98, 1.0},
     ];
 
-    if ctx.mode == .ROTATE {
+    if ctx.mode == .Rotate {
         orbit_r := axis_len * 0.92;
         orbit_col := Vector4.{0.92, 0.92, 0.96, 0.92};
-        if ctx.hovered_orbit || (ctx.active && ctx.active_kind == .ORBIT) {
+        if ctx.hovered_orbit || (ctx.active && ctx.active_kind == .Orbit) {
             orbit_col = .{1.0, 0.95, 0.55, 1.0};
         }
         draw_axis_ring(overlay_gizmo_ctx, center, .{1.0, 0.0, 0.0}, orbit_r, orbit_col, 2.1, 44);
@@ -236,19 +239,19 @@ draw_handles :: (ctx: *Manip_Context, gizmo_ctx: *Gizmo.Gizmo_Context, overlay_g
         view_depth := clamp(dot(normalize_or_fallback(tip - frame.camera_pos, frame.camera_forward), frame.camera_forward), 0.0, 1.0);
         depth_fade := 0.35 + 0.65 * view_depth;
         color *= .{depth_fade, depth_fade, depth_fade, 1.0};
-        if ctx.hovered_axis == axis_i32 || (ctx.active && ctx.active_kind == .AXIS && ctx.active_axis == axis_i32) {
+        if ctx.hovered_axis == axis_i32 || (ctx.active && ctx.active_kind == .Axis && ctx.active_axis == axis_i32) {
             color = color * .{1.25, 1.25, 1.25, 1.0};
         }
 
         Gizmo.draw_arrow(overlay_gizmo_ctx, center, tip, color, 2.8, axis_len * 0.16);
-        if ctx.mode == .SCALE {
+        if ctx.mode == .Scale {
             draw_obb(overlay_gizmo_ctx, tip, .{axis_len * 0.08, axis_len * 0.08, axis_len * 0.08}, .{w = 1.0}, color, 2.0);
         } else {
             Gizmo.draw_handle(overlay_gizmo_ctx, tip, axis_len * 0.09, color, 2.0);
         }
     }
 
-    if ctx.mode == .TRANSLATE {
+    if ctx.mode == .Translate {
         for plane_i: 0..2 {
             plane_i32 := cast(s32) plane_i;
             u_axis, v_axis, _ := plane_axes(plane_i32);
@@ -263,7 +266,7 @@ draw_handles :: (ctx: *Manip_Context, gizmo_ctx: *Gizmo.Gizmo_Context, overlay_g
             depth_fade := 0.30 + 0.70 * view_depth;
             col *= .{depth_fade, depth_fade, depth_fade, 1.0};
             col.w = 0.22 + 0.40 * depth_fade;
-            if ctx.hovered_plane == plane_i32 || (ctx.active && ctx.active_kind == .PLANE && ctx.active_plane == plane_i32) {
+            if ctx.hovered_plane == plane_i32 || (ctx.active && ctx.active_kind == .Plane && ctx.active_plane == plane_i32) {
                 col = .{1.0, 0.95, 0.55, 0.9};
             }
             draw_plane_quad(overlay_gizmo_ctx, plane_center, u, v, plane_size, col, 2.2, fill = true);
@@ -275,11 +278,11 @@ pick_handle :: (ctx: *Manip_Context, obj: Manip_Object, frame: Manip_Frame_Input
     reset_hover(ctx);
 
     center_screen, center_ok := world_to_screen(obj.position, frame);
-    if !center_ok return .NONE, -1, -1;
+    if !center_ok return .None, -1, -1;
 
     axis_len := manip_axis_length(obj.position, frame.camera_pos);
 
-    if ctx.mode == .ROTATE {
+    if ctx.mode == .Rotate {
         orbit_world := obj.position + frame.camera_right * (axis_len * 0.92);
         orbit_screen, orbit_ok := world_to_screen(orbit_world, frame);
         if orbit_ok {
@@ -287,14 +290,14 @@ pick_handle :: (ctx: *Manip_Context, obj: Manip_Object, frame: Manip_Frame_Input
             d := length(frame.mouse_pos - center_screen);
             if d <= radius_px + 14.0 {
                 ctx.hovered_orbit = true;
-                return .ORBIT, -1, -1;
+                return .Orbit, -1, -1;
             }
         }
-        return .NONE, -1, -1;
+        return .None, -1, -1;
     }
 
     // Plane picking first (Unity-like).
-    if ctx.mode == .TRANSLATE {
+    if ctx.mode == .Translate {
         for plane_i: 0..2 {
             plane_i32 := cast(s32) plane_i;
             u_axis, v_axis, _ := plane_axes(plane_i32);
@@ -305,7 +308,7 @@ pick_handle :: (ctx: *Manip_Context, obj: Manip_Object, frame: Manip_Frame_Input
             plane_center := obj.position + (u + v) * plane_offset;
             if mouse_in_plane_quad(frame.mouse_pos, frame, plane_center, u, v, plane_size) {
                 ctx.hovered_plane = plane_i32;
-                return .PLANE, -1, plane_i32;
+                return .Plane, -1, plane_i32;
             }
         }
     }
@@ -328,10 +331,10 @@ pick_handle :: (ctx: *Manip_Context, obj: Manip_Object, frame: Manip_Frame_Input
 
     if best_axis >= 0 {
         ctx.hovered_axis = best_axis;
-        return .AXIS, best_axis, -1;
+        return .Axis, best_axis, -1;
     }
 
-    return .NONE, -1, -1;
+    return .None, -1, -1;
 }
 
 begin_drag :: (
@@ -353,7 +356,10 @@ begin_drag :: (
     ctx.drag_start_rotation = obj.rotation;
     ctx.drag_start_scale = obj.scale;
 
-    if kind == .AXIS {
+    if #complete kind == {
+    case .None;
+
+    case .Axis;
         ctx.drag_axis_world = object_axis_dir(ctx, obj, axis);
         axis_len := manip_axis_length(obj.position, frame.camera_pos);
         center_screen, center_ok := world_to_screen(obj.position, frame);
@@ -366,10 +372,8 @@ begin_drag :: (
         } else {
             ctx.drag_axis_screen = .{1.0, 0.0};
         }
-        return;
-    }
 
-    if kind == .PLANE {
+    case .Plane;
         _, _, n_axis := plane_axes(plane);
         n := object_axis_dir(ctx, obj, n_axis);
         normalize(*n, fallback = axis_dir(n_axis));
@@ -379,10 +383,8 @@ begin_drag :: (
         hit, p := ray_intersect_plane(ray_origin, ray_dir, ctx.drag_plane_origin, ctx.drag_plane_normal);
         if hit ctx.drag_plane_start_hit = p;
         else ctx.drag_plane_start_hit = ctx.drag_plane_origin;
-        return;
-    }
 
-    if kind == .ORBIT {
+    case .Orbit;
         axis_len := manip_axis_length(obj.position, frame.camera_pos);
         orbit_world := obj.position + frame.camera_right * (axis_len * 0.92);
         orbit_screen, orbit_ok := world_to_screen(orbit_world, frame);
@@ -392,7 +394,7 @@ begin_drag :: (
         ctx.drag_orbit_center_screen = ifx center_ok then center_screen else frame.mouse_pos;
         ctx.drag_orbit_radius_px = max(20.0, radius_px);
         ctx.drag_orbit_prev_vec = trackball_vec(frame.mouse_pos, ctx.drag_orbit_center_screen, ctx.drag_orbit_radius_px);
-        return;
+
     }
 }
 
@@ -404,19 +406,24 @@ apply_drag :: (
     ray_dir: Vector3,
     result: *Manip_Result,
 ) {
-    if ctx.active_kind == .AXIS {
+    if ctx.active_kind == .Axis {
         mouse_delta := frame.mouse_pos - ctx.drag_start_mouse;
         pixel_delta := dot(mouse_delta, ctx.drag_axis_screen);
-        world_per_pixel := max(0.0001, distance(frame.camera_pos, ctx.drag_start_position)) * tan(frame.fov_y * 0.5) * 2.0 / max(frame.viewport.y, 1.0);
+        world_per_pixel: float;
+        if frame.projection_mode == .Orthographic && frame.projection_blend >= 0.9999 {
+            world_per_pixel = max(0.0001, frame.ortho_half_height) * 2.0 / max(frame.viewport.y, 1.0);
+        } else {
+            world_per_pixel = max(0.0001, distance(frame.camera_pos, ctx.drag_start_position)) * tan(frame.fov_y * 0.5) * 2.0 / max(frame.viewport.y, 1.0);
+        }
         world_delta := pixel_delta * world_per_pixel;
 
         axis := ctx.active_axis;
         if axis < 0 || axis > 2 return;
 
-        if ctx.mode == .TRANSLATE {
+        if ctx.mode == .Translate {
             obj.position = ctx.drag_start_position + ctx.drag_axis_world * world_delta;
             result.changed = true;
-        } else if ctx.mode == .SCALE {
+        } else if ctx.mode == .Scale {
             s := ctx.drag_start_scale;
             next := max(0.05, get_axis_component(s, axis) + world_delta);
             set_axis_component(*s, axis, next);
@@ -426,7 +433,7 @@ apply_drag :: (
         return;
     }
 
-    if ctx.active_kind == .PLANE {
+    if ctx.active_kind == .Plane {
         hit, p := ray_intersect_plane(ray_origin, ray_dir, ctx.drag_plane_origin, ctx.drag_plane_normal);
         if hit {
             delta := p - ctx.drag_plane_start_hit;
@@ -436,7 +443,7 @@ apply_drag :: (
         return;
     }
 
-    if ctx.active_kind == .ORBIT {
+    if ctx.active_kind == .Orbit {
         v0 := ctx.drag_orbit_prev_vec;
         v1 := trackball_vec(frame.mouse_pos, ctx.drag_orbit_center_screen, ctx.drag_orbit_radius_px);
 
@@ -454,7 +461,7 @@ apply_drag :: (
         normalize(*axis_world, fallback = frame.camera_up);
 
         dq := quat_from_axis_angle(axis_world, angle * 1.45);
-        if ctx.space == .LOCAL {
+        if ctx.space == .Local {
             obj.rotation = obj.rotation * dq;
         } else {
             obj.rotation = dq * obj.rotation;
@@ -487,6 +494,12 @@ mouse_world_ray :: (frame: Manip_Frame_Input) -> (origin: Vector3, dir: Vector3,
     nx := ((frame.mouse_pos.x + 0.5) / frame.viewport.x) * 2.0 - 1.0;
     ny := ((frame.mouse_pos.y + 0.5) / frame.viewport.y) * 2.0 - 1.0;
     aspect := frame.viewport.x / max(frame.viewport.y, 1.0);
+    if frame.projection_mode == .Orthographic && frame.projection_blend >= 0.9999 {
+        origin := frame.camera_pos +
+            frame.camera_right * (nx * aspect * frame.ortho_half_height) +
+            frame.camera_up * (ny * frame.ortho_half_height);
+        return origin, frame.camera_forward, true;
+    }
     tan_half_fov := tan(frame.fov_y * 0.5);
     dir := frame.camera_forward + frame.camera_right * (nx * aspect * tan_half_fov) + frame.camera_up * (ny * tan_half_fov);
     normalize(*dir, fallback = frame.camera_forward);
@@ -520,6 +533,16 @@ world_to_screen :: (world: Vector3, frame: Manip_Frame_Input) -> (p: Vector2, ok
     x := dot(rel, frame.camera_right);
     y := dot(rel, frame.camera_up);
     z := dot(rel, frame.camera_forward);
+    if frame.projection_mode == .Orthographic && frame.projection_blend >= 0.9999 {
+        aspect := frame.viewport.x / max(frame.viewport.y, 1.0);
+        half_width := max(frame.ortho_half_height * aspect, 0.0001);
+        half_height := max(frame.ortho_half_height, 0.0001);
+        ndc_x := x / half_width;
+        ndc_y := y / half_height;
+        sx := (ndc_x * 0.5 + 0.5) * frame.viewport.x;
+        sy := (ndc_y * 0.5 + 0.5) * frame.viewport.y;
+        return .{sx, sy}, true;
+    }
     if z <= 0.01 return .{}, false;
 
     tan_half_fov := tan(frame.fov_y * 0.5);
@@ -538,7 +561,7 @@ manip_axis_length :: (object_pos: Vector3, camera_pos: Vector3) -> float {
 
 object_axis_dir :: (ctx: *Manip_Context, obj: Manip_Object, axis: s32) -> Vector3 {
     base := axis_dir(axis);
-    if ctx.space == .WORLD return base;
+    if ctx.space == .World return base;
     result := rotate(base, obj.rotation);
     normalize(*result, fallback = base);
     return result;
@@ -681,11 +704,11 @@ draw_obb :: (ctx: *Gizmo.Gizmo_Context, center: Vector3, half_extents: Vector3, 
 
 draw_object_wire :: (ctx: *Gizmo.Gizmo_Context, obj: Manip_Object, scale_factor: float, color: Vector4, thickness: float) {
     if #complete obj.shape == {
-    case .SPHERE;
+    case .Sphere;
         effective_half := hadamard(obj.half_extents, obj.scale);
         radius := max(max(effective_half.x, effective_half.y), effective_half.z) * scale_factor;
         Gizmo.draw_sphere(ctx, obj.position, radius, color, thickness, segments = 24, rotation = obj.rotation);
-    case .BOX;
+    case .Box;
         half := hadamard(obj.half_extents, obj.scale) * scale_factor;
         draw_obb(ctx, obj.position, half, obj.rotation, color, thickness);
     }
