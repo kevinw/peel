@@ -1,7 +1,13 @@
 # TODO
+- check out LLM or MCP interface for tracy
+- move more of Jai-Shader-Transpiler into release DLL
+- further iterate on a "Engine.dll" and a "Game.dll"
+- find a way to wrap up our blender fork and exporter into a local tools build (probably need to sync binaries and python scripts)
+- NEEDED FOR MACBOOK: collect list of external tools like 'ktx' and 'cmgen' and vendor them in tools/mac_arm64/
 - pbr.jai needs a depth texture ring (how to detect this at runtime?)
+- godot shader previewer https://github.com/cashew-olddew/godot-shader-previewer
+- smooth out mouse look
 - blender_exporter: skip export for invisbile objects
-- collect list of external tools like 'ktx' and 'cmgen' and vendor them in tools/mac_arm64/
 - memory leak in model_scene?
 - figure out why MTL_HUD_ENABLED=1 crashes (by binary search? with empty window?)
 - make a shader live reload test mode on by default which reloads shaders at startup by touching files, or by simulating their being updated
@@ -94,3 +100,4 @@ Sebastian Aaltonen
 - https://github.com/RandyGaul/nudge/blob/main/src/split_store.h
 - lightweight 3d physics https://github.com/RandyGaul/nudge
 - sparse virtual shadowmaps https://ktstephano.github.io/rendering/stratusgfx/svsm
+- https://krupitskas.github.io/posts/modern_culling_techniques/

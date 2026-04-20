@@ -6,37 +6,7 @@ Model_Scene_Meshlet_Instance :: struct {
 }
 
 Model_Scene_Meshlet_Params :: struct {
-    camera_vp: Matrix4;
-    frustum_planes: [6]Vector4;
-    eye_position: Vector3;
-    lod_projection_scale: float;
-    lod_radius_threshold: float;
-    lod_metric_power: float;
-    batch_mesh_index: u32;
-
-    light_dir: Vector3;
-    _pad0: float;
-    sun_params: Vector4;
-    camera_pos: Vector3;
-    material_index: u32;
-    shadow_view_proj: Matrix4;
-    shadow_meta: Vector4;
-
-    base_color_factor: Vector4;
-    sampler_index: u32;
-    base_color_texture_index: u32;
-    opacity_texture_index: u32;
-    normal_texture_index: u32;
-    roughness_texture_index: u32;
-    ao_texture_index: u32;
-    alpha_mode: u32;
-    alpha_cutoff: float;
-
-    batch_first_instance: u32;
-    batch_instance_count: u32;
-    batch_max_meshlet_count: u32;
-    batch_meshlet_chunk_count: u32;
-    batch_object_group_start: u32;
+    using task_params: Model_Scene_Task_Params;
 
     mesh_base_vertex: u32;
     skin_matrix_count: u32;
@@ -57,24 +27,16 @@ Model_Scene_Task_Params :: struct {
     _pad0: float;
     sun_params: Vector4;
     camera_pos: Vector3;
-    _pad1: float;
+    material_index: u32;
     shadow_view_proj: Matrix4;
     shadow_meta: Vector4;
 
-    base_color_factor: Vector4;
-    sampler_index: u32;
-    base_color_texture_index: u32;
-    opacity_texture_index: u32;
-    normal_texture_index: u32;
-    roughness_texture_index: u32;
-    ao_texture_index: u32;
-    alpha_mode: u32;
-    alpha_cutoff: float;
     batch_first_instance: u32;
     batch_instance_count: u32;
     batch_max_meshlet_count: u32;
     batch_meshlet_chunk_count: u32;
     batch_object_group_start: u32;
+
 }
 
 Model_Scene_Meshlet_Fragment_In :: struct {
