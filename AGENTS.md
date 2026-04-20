@@ -8,6 +8,7 @@ Major components we are iterating on as we develop it:
 - src/ui.jai uses modules/ImGui for UI rendering.
 
 On Mac, our main dev platform right now, sgpu uses Metal4 bindings in modules/sgpu/modules/Metal. Metal4 is vulkan-esque in that barriers and fences are used for explicit synchronization.
+Metal4's differences are essential to peel/sgpu's design goals: prefer minimal-overhead, manually synchronized, explicit API reasoning, and do not assume legacy Metal inheritance or compatibility conveniences apply to MTL4 types unless you've verified them in the Metal4 docs or the bindings in this repo.
 
 Peel entry points are "apps" defined in `src/apps`.
 They are built with our `build.jai` metaprogram.
