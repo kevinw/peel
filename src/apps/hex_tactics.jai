@@ -37,29 +37,11 @@ Hex_Tactics_Sky_Params_CPU :: struct {
     light_dir_sun_strength: Vector4;
 }
 
-terrain_shader: Shader(hex_tactics_mesh_vertex_main, hex_tactics_mesh_fragment_main, {
-    cull = .CCW,
-    depth_format = .D32_SFLOAT,
-    color_targets = .[
-        .{format = .B8G8R8A8_UNORM},
-    ],
-});
-
-grass_shader: Shader(hex_tactics_grass_vertex_main, hex_tactics_grass_fragment_main, {
-    cull = .NONE,
-    depth_format = .D32_SFLOAT,
-    color_targets = .[
-        .{format = .B8G8R8A8_UNORM},
-    ],
-});
-
-sky_shader: Shader(hex_tactics_sky_vertex_main, hex_tactics_sky_fragment_main, {
-    cull = .NONE,
-    depth_format = .D32_SFLOAT,
-    color_targets = .[
-        .{format = .B8G8R8A8_UNORM},
-    ],
-});
+using shaders: struct {
+    terrain_shader: Shader(hex_tactics_mesh_vertex_main, hex_tactics_mesh_fragment_main, { cull = .CCW });
+    grass_shader:   Shader(hex_tactics_grass_vertex_main, hex_tactics_grass_fragment_main, { cull = .NONE });
+    sky_shader:     Shader(hex_tactics_sky_vertex_main, hex_tactics_sky_fragment_main, { cull = .NONE  });
+} @init_group;
 
 gpu_arena: Gpu_Arena;
 hex_tactics_depth_texture: Gpu_Texture;
@@ -108,10 +90,6 @@ hex_tactics_ui :: () {
 }
 
 on_dll_init :: () {
-    SHR.init(*terrain_shader);
-    SHR.init(*grass_shader);
-    SHR.init(*sky_shader);
-
     hex_tactics_model_init(*hex_tactics_model);
     hex_tactics_rebuild_render(*hex_tactics_model, *hex_tactics_render);
 
@@ -129,9 +107,6 @@ on_unload :: () {
     hex_tactics_render_deinit(*hex_tactics_render);
     if hex_tactics_depth_view != 0 gpu_free_texture_view(hex_tactics_depth_view);
     if hex_tactics_depth_texture != 0 gpu_free(hex_tactics_depth_texture);
-    gpu_delete(*sky_shader.pipeline);
-    gpu_delete(*grass_shader.pipeline);
-    gpu_delete(*terrain_shader.pipeline);
 } @on_unload
 
 tick :: () {
@@ -219,7 +194,7 @@ tick :: () {
     result=, cmd_buff := gpu_start_command_recording(main_queue);
     assert(result == .SUCCESS);
 
-    gpu_begin_scoped_render_pass(cmd_buff, .{
+    pass_desc := gpu_begin_scoped_render_pass(cmd_buff, .{
         depth_target = .{
             view = hex_tactics_depth_view,
             load_op = .CLEAR,
@@ -237,15 +212,15 @@ tick :: () {
     });
 
     gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
-    gpu_set_pipeline(cmd_buff, sky_shader.pipeline);
+    gpu_set_pipeline(cmd_buff, pipeline(*sky_shader, pass_desc));
     gpu_draw_instanced_direct(cmd_buff, hex_tactics_render.sky_params.gpu, 6, 1);
 
     gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .LESS, depth_mode = .READ | .WRITE});
-    gpu_set_pipeline(cmd_buff, terrain_shader.pipeline);
+    gpu_set_pipeline(cmd_buff, pipeline(*terrain_shader, pass_desc));
     gpu_draw_instanced_direct(cmd_buff, hex_tactics_render.mesh_params.gpu, hex_tactics_render.index_count, 1);
 
     if hex_tactics_render.grass_count > 0 {
-        gpu_set_pipeline(cmd_buff, grass_shader.pipeline);
+        gpu_set_pipeline(cmd_buff, pipeline(*grass_shader, pass_desc));
         gpu_draw_instanced_direct(cmd_buff, hex_tactics_render.grass_params.gpu, 6, hex_tactics_render.grass_count);
     }
 
