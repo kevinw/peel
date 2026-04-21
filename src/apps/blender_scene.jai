@@ -260,20 +260,11 @@ tick :: () {
             draw_instance_end := min(draw_instance_total, (draw_group_end + meshlet_chunk_count - 1) / meshlet_chunk_count);
             draw_instance_count := draw_instance_end - draw_instance_start;
             if draw_instance_count > 0 {
-                batch_material := materials.cpu[meshes.cpu[it.mesh_index].material_index];
+                material_index := meshes.cpu[it.mesh_index].material_index;
+                batch_material := materials.cpu[material_index];
                 primary_params := sgpu_frame_param_alloc(*params, base_params);
-                primary_params.cpu.base_color_factor = batch_material.base_color_factor;
-                primary_params.cpu.metallic_factor = batch_material.metallic_factor;
-                primary_params.cpu.roughness_factor = batch_material.roughness_factor;
+                primary_params.cpu.material_index = material_index;
                 primary_params.cpu.batch_mesh_index = it.mesh_index;
-                primary_params.cpu.base_color_texture_index = batch_material.base_color_texture_index;
-                primary_params.cpu.opacity_texture_index = batch_material.opacity_texture_index;
-                primary_params.cpu.normal_texture_index = batch_material.normal_texture_index;
-                primary_params.cpu.roughness_texture_index = batch_material.roughness_texture_index;
-                primary_params.cpu.ao_texture_index = batch_material.ao_texture_index;
-                primary_params.cpu.alpha_mode = batch_material.alpha_mode;
-                primary_params.cpu.alpha_cutoff = batch_material.alpha_cutoff;
-                primary_params.cpu.sampler_index = batch_material.sampler_index;
                 primary_params.cpu.ibl_texture_index = ifx hdri_enabled && hdri_ibl.view != 0 then gpu_texture_view_index(hdri_ibl.view) else SCENE_INVALID_TEXTURE_INDEX;
                 primary_params.cpu.dfg_texture_index = ifx hdri_enabled && hdri_dfg.view != 0 then gpu_texture_view_index(hdri_dfg.view) else SCENE_INVALID_TEXTURE_INDEX;
                 primary_params.cpu.ibl_max_lod = hdri_ibl_mip_count;

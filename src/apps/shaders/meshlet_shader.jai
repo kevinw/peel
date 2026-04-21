@@ -22,20 +22,9 @@ Meshlet_Grid_Params :: struct {
     lod_projection_scale: float;
     lod_radius_threshold: float;
     lod_metric_power: float;
-    pad2: u32;
+    material_index: u32;
     light_dir: Vector3;
-    base_color_factor: Vector4;
-    metallic_factor: float;
-    roughness_factor: float;
     batch_mesh_index: u32;
-    base_color_texture_index: u32;
-    opacity_texture_index: u32;
-    normal_texture_index: u32;
-    roughness_texture_index: u32;
-    ao_texture_index: u32;
-    alpha_mode: u32;
-    alpha_cutoff: float;
-    sampler_index: u32;
     ibl_texture_index: u32;
     dfg_texture_index: u32;
     ibl_max_lod: float;
@@ -72,13 +61,13 @@ Meshlet_Shader_Constants :: struct {
     debug_mode: Meshlet_Grid_Debug_Mode = .SHADED;
 } @function_constants
 
-scene_material_alpha :: (params: *Meshlet_Grid_Params, uv: Vector2) -> float {
-    alpha := params.base_color_factor.w;
-    if params.base_color_texture_index != SCENE_INVALID_TEXTURE_INDEX {
-        alpha *= sample_2d(params.base_color_texture_index, params.sampler_index, uv).w;
+scene_material_alpha :: (material: Scene_Material, uv: Vector2) -> float {
+    alpha := material.base_color_factor.w;
+    if material.base_color_texture_index != SCENE_INVALID_TEXTURE_INDEX {
+        alpha *= sample_2d(material.base_color_texture_index, material.sampler_index, uv).w;
     }
-    if params.opacity_texture_index != SCENE_INVALID_TEXTURE_INDEX {
-        alpha *= sample_2d(params.opacity_texture_index, params.sampler_index, uv).x;
+    if material.opacity_texture_index != SCENE_INVALID_TEXTURE_INDEX {
+        alpha *= sample_2d(material.opacity_texture_index, material.sampler_index, uv).x;
     }
     return alpha;
 }
@@ -268,7 +257,7 @@ task_main :: (
     instances: *Meshlet_Grid_Instance,
     using constants: Meshlet_Shader_Constants
 ) {
-    _ = vertices; _ = materials; _ = meshlets; _ = meshlet_vertices; _ = meshlet_triangles; _ = meshlet_bounds;
+    _ = vertices; _ = meshlets; _ = meshlet_vertices; _ = meshlet_triangles; _ = meshlet_bounds;
     task_id := task_group_id_x();
     meshlet_chunk_count := params.batch_meshlet_chunk_count;
 
@@ -391,44 +380,49 @@ task_main :: (
 fragment_main :: (
     using input: Fragment_In,
     params: *Meshlet_Grid_Params,
+    meshes: *Scene_Mesh,
+    meshlet_meshes: *Scene_Meshlet_Mesh,
+    vertices: *Scene_Vertex,
+    materials: *Scene_Material,
     using constants: Meshlet_Shader_Constants,
 ) -> Vector4 @SV_Target0 {
-    alpha := scene_material_alpha(params, uv);
-    if params.alpha_mode == SCENE_ALPHA_MODE_MASK && alpha < params.alpha_cutoff discard();
+    material := materials[params.material_index]; // TODO: we want triangles to be able to have different materials inside one batch. i think material index should be in Fragment_In.
+    alpha := scene_material_alpha(material, uv);
+    if material.alpha_mode == SCENE_ALPHA_MODE_MASK && alpha < material.alpha_cutoff discard();
     if debug_mode != .SHADED {
         return .{color.x, color.y, color.z, 1.0};
     }
 
-    albedo := params.base_color_factor;
-    if params.base_color_texture_index != SCENE_INVALID_TEXTURE_INDEX {
-        tex := sample_2d(params.base_color_texture_index, params.sampler_index, uv);
+    albedo := material.base_color_factor;
+    if material.base_color_texture_index != SCENE_INVALID_TEXTURE_INDEX {
+        tex := sample_2d(material.base_color_texture_index, material.sampler_index, uv);
         albedo = .{
-            tex.x * params.base_color_factor.x,
-            tex.y * params.base_color_factor.y,
-            tex.z * params.base_color_factor.z,
-            tex.w * params.base_color_factor.w,
+            tex.x * material.base_color_factor.x,
+            tex.y * material.base_color_factor.y,
+            tex.z * material.base_color_factor.z,
+            tex.w * material.base_color_factor.w,
         };
     }
 
     base_rgb := albedo.xyz;
     N := normalize(normal);
-    if params.normal_texture_index != SCENE_INVALID_TEXTURE_INDEX {
+    if material.normal_texture_index != SCENE_INVALID_TEXTURE_INDEX {
         T := normalize(tangent.xyz);
         B := normalize(cross(N, T)) * tangent.w;
-        n_sample := sample_2d(params.normal_texture_index, params.sampler_index, uv);
+        n_sample := sample_2d(material.normal_texture_index, material.sampler_index, uv);
         n_ts := decode_bc5_normal(n_sample);
         N = normalize(T * n_ts.x + B * n_ts.y + N * n_ts.z);
     }
 
     ao := 1.0;
-    if params.ao_texture_index != SCENE_INVALID_TEXTURE_INDEX {
-        ao = sample_2d(params.ao_texture_index, params.sampler_index, uv).x;
+    if material.ao_texture_index != SCENE_INVALID_TEXTURE_INDEX {
+        ao = sample_2d(material.ao_texture_index, material.sampler_index, uv).x;
     }
-    roughness := clamp(params.roughness_factor, 0.05, 1.0);
-    if params.roughness_texture_index != SCENE_INVALID_TEXTURE_INDEX {
-        roughness = clamp(sample_2d(params.roughness_texture_index, params.sampler_index, uv).y, 0.05, 1.0);
+    roughness := clamp(material.roughness_factor, 0.05, 1.0);
+    if material.roughness_texture_index != SCENE_INVALID_TEXTURE_INDEX {
+        roughness = clamp(sample_2d(material.roughness_texture_index, material.sampler_index, uv).y, 0.05, 1.0);
     }
-    metallic := clamp(params.metallic_factor, 0.0, 1.0);
+    metallic := clamp(material.metallic_factor, 0.0, 1.0);
 
     sun_dir := normalize(-params.light_dir);
     L := sun_dir;
@@ -449,13 +443,17 @@ fragment_main :: (
     ndv := clamp(dot(N, V), 0.0, 1.0);
     env_diffuse := Vector3.{0.0, 0.0, 0.0};
     env_specular := Vector3.{0.0, 0.0, 0.0};
+
+    env_sampler := material.sampler_index; // TODO: it doesn't make sense to reuse the material sampler here. params should provide a separate
+    // environment sampler index.
+
     if params.ibl_texture_index != SCENE_INVALID_TEXTURE_INDEX && params.dfg_texture_index != SCENE_INVALID_TEXTURE_INDEX {
         irradiance := sample_env_sh(params, N);
         env_diffuse = irradiance * base_rgb * (1.0 - metallic);
 
         R := reflect(-V, N);
-        prefiltered := sample_cube_lod(params.ibl_texture_index, params.sampler_index, R, roughness * params.ibl_max_lod).xyz;
-        brdf := sample_2d(params.dfg_texture_index, params.sampler_index, Vector2.{ndv, roughness}).xy;
+        prefiltered := sample_cube_lod(params.ibl_texture_index, env_sampler, R, roughness * params.ibl_max_lod).xyz;
+        brdf := sample_2d(params.dfg_texture_index, env_sampler, Vector2.{ndv, roughness}).xy;
         env_specular = prefiltered * (F0 * brdf.x + Vector3.{brdf.y, brdf.y, brdf.y});
     }
 
