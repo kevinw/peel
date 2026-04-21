@@ -31,7 +31,7 @@ Scene_Instance :: struct {
 using app: struct {
     background_shader: Shader(fullscreen_tri_vert, hdri_background_fragment_main, { cull = .NONE });
     mesh_shader: Mesh_Shader(mesh_main, fragment_main, .{
-        raster_desc = .{ cull = .NONE, },
+        raster_desc = .{ cull = .CW, },
         task_threads = .[1, 1, 1],
         mesh_threads = .[1, 1, 1],
         max_total_threadgroups_per_mesh_grid = BLENDER_SCENE_MAX_MESH_GROUPS_PER_DRAW,
