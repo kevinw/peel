@@ -154,8 +154,8 @@ outdoor_rig: Outdoor_Rig = .{};
 graphics_shader_constants: Model_Scene_Meshlet_Constants;
 mesh_shader_constants: Model_Scene_Meshlet_Constants;
 mesh_grid_limit: u32;
-lod_screen_radius: float = 420.0;
-lod_distance_power: float = 1.18;
+lod_screen_radius: float = 140.7;
+lod_distance_power: float = 1.22;
 orbit_yaw: float = 0.0;
 orbit_pitch: float = -0.32;
 orbit_distance: float = 8.5;
@@ -356,8 +356,8 @@ tick :: () {
             }
             SliderFloat("Ortho Half Height", *scene_camera.ortho_half_height, 0.25, 24.0, "%.2f");
             SliderFloat("Ortho Anchor Dist", *scene_camera.transition_anchor_distance, 1.0, 40.0, "%.1f");
-            SliderFloat("Mesh LOD Screen Radius", *lod_screen_radius, 8.0, 1024.0, "%.1f");
-            SliderFloat("Mesh LOD Power", *lod_distance_power, 0.5, 2.0, "%.2f");
+            Persist.SliderFloat("Mesh LOD Screen Radius", *lod_screen_radius, 8.0, 1024.0, "%.1f");
+            Persist.SliderFloat("Mesh LOD Power", *lod_distance_power, 0.5, 2.0, "%.2f");
             inspect("Render Toggle", *render_toggle);
             if CollapsingHeader("Grass") {
                 SliderFloat("Grass Density", *grass_density_scale, 0.25, 9.0, "%.2f");
