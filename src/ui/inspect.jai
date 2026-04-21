@@ -421,6 +421,7 @@ inspect :: (name: *u8, data: *void, info: *Type_Info, options: Inspect_Opts = .{
             change |= inspect(label, any.value_pointer, any.type, opts);
         case .ENUM;
             info_enum := cast(*Type_Info_Enum) info;
+            PushPopID(info_enum);
             if info_enum.enum_type_flags & .FLAGS {
                 TextUnformatted(name_str);
                 PushPopIndent(GetFrameHeight() * 0.5);
