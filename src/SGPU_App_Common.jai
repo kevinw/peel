@@ -558,7 +558,7 @@ app_should_render_ui :: () -> bool {
 #scope_export
 
 app_should_render_to_game_view :: () -> bool {
-    return app_main_dock_enabled;
+    return app_main_dock_enabled && !app_mini_mode_active;
 }
 
 app_should_run_ui_panels :: () -> bool {
