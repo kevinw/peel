@@ -103,6 +103,24 @@ handle_host_message :: (message: Host_Message) -> App_Return_Message {
     #load "Program_Parameters_Common.jai";
 }
 
+find_workspace_root :: () -> string {
+    cwd := get_working_directory();
+    probe := cwd;
+
+    while probe.count != 0 {
+        if file_exists(tprint("%/build.jai", probe)) return probe;
+        parent := String.path_strip_filename(probe);
+        if parent.count != 0 && parent[parent.count-1] == "/" {
+            parent.count -= 1;
+        }
+        if parent == probe break;
+        probe = parent;
+    }
+
+    return cwd;
+}
+
+
 #scope_file
 
 check_context :: (ctx: *void, ti: *Type_Info_Struct, message: string = "") {

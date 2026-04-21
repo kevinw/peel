@@ -1,4 +1,8 @@
 BLENDER_SCENE_DEFAULT_BLEND_PATH :: "tools/blender_exporter/monkeys.blend";
+BLENDER_SCENE_POLL_SECONDS :: 0.20;
+MESHLET_TASK_EMIT_MESHLET_COUNT : u32 : 64;
+BLENDER_SCENE_MAX_MESH_GROUPS_PER_DRAW : u32 : 1024;
+
 
 Meshlet_Grid_Instance :: struct {
     world: Matrix4;
@@ -24,27 +28,10 @@ Scene_Instance :: struct {
     tint: Vector4;
 }
 
-last_frustum_planes: [6]Vector4;
-
-BLENDER_SCENE_POLL_SECONDS :: 0.20;
-MESHLET_TASK_EMIT_MESHLET_COUNT : u32 : 64;
-BLENDER_SCENE_MAX_MESH_GROUPS_PER_DRAW : u32 : 1024;
-
 using app: struct {
-    background_shader: Shader(fullscreen_tri_vert, hdri_background_fragment_main, {
-        cull = .NONE,
-        color_targets = .[
-            .{format = .B8G8R8A8_UNORM},
-        ],
-    });
+    background_shader: Shader(fullscreen_tri_vert, hdri_background_fragment_main, { cull = .NONE });
     mesh_shader: Mesh_Shader(mesh_main, fragment_main, .{
-        raster_desc = .{
-            cull = .NONE,
-            depth_format = .D32_SFLOAT,
-            color_targets = .[
-                .{format = .B8G8R8A8_UNORM},
-            ],
-        },
+        raster_desc = .{ cull = .NONE, },
         task_threads = .[1, 1, 1],
         mesh_threads = .[1, 1, 1],
         max_total_threadgroups_per_mesh_grid = BLENDER_SCENE_MAX_MESH_GROUPS_PER_DRAW,
@@ -112,8 +99,12 @@ using app: struct {
     freeze_culling_set := false;
     frozen_culling_cam_matrix: Matrix4;
 
+    constants: Meshlet_Shader_Constants;
+
     using draw: Meshlet_Grid_Params;
 }
+
+
 
 on_dll_init :: () {
     assert(OS == .MACOS, "blender_scene is currently Metal mesh-shader only.");
@@ -141,8 +132,6 @@ on_quit :: () {
     gpu_delete(*hdri_dfg);
     gpu_delete(*hdri_ibl);
     gpu_delete(*hdri_skybox);
-    if background_shader.pipeline != 0 gpu_delete(*background_shader.pipeline);
-    if mesh_shader.pipeline != 0 gpu_delete(*mesh_shader.pipeline);
     if arena.cpu != null gpu_free_arena(arena);
     array_free(batches);
     scene_geo_deinit(*geo);
@@ -151,9 +140,7 @@ on_quit :: () {
 tick :: () {
     poll_for_blender_scene_changes();
 
-
-    result, swapchain_image := app_swapchain_acquire();
-    assert(result == .SUCCESS);
+    _, swapchain_image := app_swapchain_acquire();
     if !swapchain_image return;
 
     mx, my, mouse_ok := get_mouse_pointer_position(true);
@@ -199,7 +186,6 @@ tick :: () {
     } else {
         draw.frustum_planes = extract_frustum_planes(draw.camera_vp);
     }
-    last_frustum_planes = draw.frustum_planes;
     draw.eye_position = camera.position;
     draw.lod_projection_scale = editor_camera_projection_lod_scale(*camera, cast(float) render_h);
     draw.lod_radius_threshold = lod_screen_radius;
@@ -208,8 +194,7 @@ tick :: () {
     base_params := draw;
 
     main_queue := gpu_get_queue(.MAIN, 0);
-    result=, cmd_buff := gpu_start_command_recording(main_queue);
-    assert(result == .SUCCESS);
+    _, cmd_buff := gpu_start_command_recording(main_queue);
 
     meshlet_draw_bindings := Gpu_Ptr.[
         meshes.gpu,
@@ -223,7 +208,7 @@ tick :: () {
         instances.gpu,
     ];
 
-    gpu_begin_scoped_render_pass(cmd_buff, .{
+    render_pass_desc := gpu_begin_scoped_render_pass(cmd_buff, .{
         depth_target = .{
             view = depth_view,
             load_op = .CLEAR,
@@ -253,11 +238,11 @@ tick :: () {
         hdri_params_slot.cpu.sampler_index = cast(u32) hdri_sampler - 1;
 
         gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .ALWAYS, depth_mode = .NONE});
-        gpu_set_pipeline(cmd_buff, background_shader.pipeline);
+        gpu_set_pipeline(cmd_buff, pipeline(*background_shader, render_pass_desc));
         gpu_draw_instanced_direct(cmd_buff, hdri_params_slot.gpu, 3, 1);
     }
     gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .LESS, depth_mode = .READ | .WRITE});
-    gpu_set_pipeline(cmd_buff, SHR.pipeline(*mesh_shader, constants));
+    gpu_set_pipeline(cmd_buff, SHR.pipeline(*mesh_shader, render_pass_desc, constants));
 
     for batches {
         if debug_batch_filter >= 0 && cast(s32) it_index != debug_batch_filter continue;
@@ -367,7 +352,6 @@ show_ui :: () {
         if freeze_culling freeze_culling_set = true;
     }
 
-    //inspect("last_frustum_planes", *last_frustum_planes);
     inspect("Debug Mode", *debug_mode);
     SliderFloat("LOD Screen Radius", *lod_screen_radius, 8.0, 1024.0);
     SliderFloat("LOD Power", *lod_distance_power, 0.5, 2.0);
@@ -404,9 +388,8 @@ getenv_string :: (name: string) -> string {
     return to_string(value_c, c_style_strlen(value_c));
 }
 
-constants: Meshlet_Shader_Constants;
-
 apply_debug_env_overrides :: () {
+    // TODO: add enum and integer variants of getenv
     debug_flags_text := getenv_string("PEEL_MESHLET_DEBUG_FLAGS");
     if debug_flags_text.count != 0 {
         debug_flags_value, ok := string_to_int(debug_flags_text);
@@ -427,23 +410,6 @@ apply_debug_env_overrides :: () {
         assert(ok, "PEEL_MESHLET_BATCH must be an integer, got '%'.", debug_batch_text);
         debug_batch_filter = cast(s32) debug_batch_value;
     }
-}
-
-find_workspace_root :: () -> string {
-    cwd := get_working_directory();
-    probe := cwd;
-
-    while probe.count != 0 {
-        if file_exists(tprint("%/build.jai", probe)) return probe;
-        parent := String.path_strip_filename(probe);
-        if parent.count != 0 && parent[parent.count-1] == "/" {
-            parent.count -= 1;
-        }
-        if parent == probe break;
-        probe = parent;
-    }
-
-    return cwd;
 }
 
 spawn_live_blender :: () {
@@ -954,22 +920,6 @@ normalize_plane4 :: (p: Vector4) -> Vector4 {
     n := Vector3.{p.x, p.y, p.z};
     len := max(length(n), 0.000001);
     return p / len;
-}
-
-extract_frustum_planes :: (m: Matrix4) -> [6]Vector4 {
-    // TODO: use m.v[3] etc
-    row0 := Vector4.{m._11, m._12, m._13, m._14};
-    row1 := Vector4.{m._21, m._22, m._23, m._24};
-    row2 := Vector4.{m._31, m._32, m._33, m._34};
-    row3 := Vector4.{m._41, m._42, m._43, m._44};
-    return .[
-        normalize_plane4(row3 + row0),
-        normalize_plane4(row3 - row0),
-        normalize_plane4(row3 + row1),
-        normalize_plane4(row3 - row1),
-        normalize_plane4(row3 + row2),
-        normalize_plane4(row3 - row2),
-    ];
 }
 
 hdri_path_compare :: (a: string, b: string) -> int {
