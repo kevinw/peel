@@ -108,7 +108,13 @@ on_dll_init :: () {
     assert(OS == .MACOS, "blender_scene is currently Metal mesh-shader only.");
     source_path = resolve_blend_source_path();
     export_path = sprint("%.peelscene", source_path);
-    apply_debug_env_overrides();
+
+    {
+        // debug env overrides
+        getenv_int(*constants.debug_flags, "PEEL_MESHLET_DEBUG_FLAGS");
+        getenv_int(*constants.debug_mode,  "PEEL_MESHLET_DEBUG_MODE");
+        getenv_int(*debug_batch_filter, "PEEL_MESHLET_BATCH");
+    }
 
     init_blender_scene_pipeline();
     init_hdri_background();
@@ -362,43 +368,12 @@ show_ui :: () {
 #scope_file
 
 resolve_blend_source_path :: () -> string {
-    blend_path := getenv_string("PEEL_BLEND_PATH");
-    if blend_path.count == 0 blend_path = BLENDER_SCENE_DEFAULT_BLEND_PATH;
+    blend_path := getenv_string("PEEL_BLEND_PATH", default=BLENDER_SCENE_DEFAULT_BLEND_PATH);
     if !String.is_absolute_path(blend_path) {
         blend_path = tprint("%/%", find_workspace_root(), blend_path);
     }
     assert(file_exists(blend_path), "Set PEEL_BLEND_PATH to a .blend file. Missing path: %", blend_path);
     return copy_string(blend_path);
-}
-
-getenv_string :: (name: string) -> string {
-    value_c := POSIX_Getenv.getenv(temp_c_string(name));
-    if !value_c return "";
-    return to_string(value_c, c_style_strlen(value_c));
-}
-
-apply_debug_env_overrides :: () {
-    // TODO: add enum and integer variants of getenv
-    debug_flags_text := getenv_string("PEEL_MESHLET_DEBUG_FLAGS");
-    if debug_flags_text.count != 0 {
-        debug_flags_value, ok := string_to_int(debug_flags_text);
-        assert(ok, "PEEL_MESHLET_DEBUG_FLAGS must be an integer, got '%'.", debug_flags_text);
-        constants.debug_flags = cast(Meshlet_Debug_Flags) debug_flags_value;
-    }
-
-    debug_mode_text := getenv_string("PEEL_MESHLET_DEBUG_MODE");
-    if debug_mode_text.count != 0 {
-        debug_mode_value, ok := string_to_int(debug_mode_text);
-        assert(ok, "PEEL_MESHLET_DEBUG_MODE must be an integer, got '%'.", debug_mode_text);
-        constants.debug_mode = cast(Meshlet_Grid_Debug_Mode) debug_mode_value;
-    }
-
-    debug_batch_text := getenv_string("PEEL_MESHLET_BATCH");
-    if debug_batch_text.count != 0 {
-        debug_batch_value, ok := string_to_int(debug_batch_text);
-        assert(ok, "PEEL_MESHLET_BATCH must be an integer, got '%'.", debug_batch_text);
-        debug_batch_filter = cast(s32) debug_batch_value;
-    }
 }
 
 spawn_live_blender :: () {
