@@ -44,7 +44,7 @@
       <PathRunnable
          runnableDebuggingMode = "0"
          Location = "workspace"
-         FilePath = "../dist/model_scene">
+         FilePath = "../dist/blender_scene">
       </PathRunnable>
    </LaunchAction>
    <ProfileAction

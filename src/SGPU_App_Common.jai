@@ -55,6 +55,7 @@ game_view: struct {
     mode: Game_View_Size_Mode = .MATCH_WINDOW;
     target: Gpu_Texture;
     view: Gpu_Texture_View;
+    usage: Usage_Flags;
     width: u32;
     height: u32;
     requested_width: u32 = 1;
@@ -775,7 +776,52 @@ using,except(Viewport) _ :: #import "sgpu"()(SLANG_COMPILER=false);
 SHR :: #import,file "./shader_hot_reload.jai";
 using,only(Shader, Compute_Shader, Mesh_Shader, init, pipeline) _ :: SHR;
 
+ensure_game_view_render_target :: (width: u32, height: u32) {
+    width = max(width, 1);
+    height = max(height, 1);
+
+    usage: Usage_Flags = .COLOR_ATTACHMENT | .SAMPLED;
+    if game_view_target_needs_transfer_src() usage |= .TRANSFER_SRC;
+
+    if game_view.view != 0 &&
+       game_view.width == width &&
+       game_view.height == height &&
+       game_view.usage == usage {
+        return;
+    }
+
+    gpu_delete(*game_view.view);
+    gpu_delete(*game_view.target);
+
+    result, texture := gpu_create_texture(.{
+        type = ._2D,
+        dimensions = .[width, height, 1],
+        format = .B8G8R8A8_UNORM,
+        usage = usage,
+    });
+    assert(result == .SUCCESS && texture != 0, "Failed to create game-view target: % (%x%).", result, width, height);
+
+    view := gpu_texture_view(texture);
+    assert(view != 0, "Failed to create game-view target view: %x%.", width, height);
+
+    game_view.target = texture;
+    game_view.view = view;
+    game_view.usage = usage;
+    game_view.width = width;
+    game_view.height = height;
+    gpu_commit_residency();
+}
+
+shutdown_game_view_render_target :: () {
+    gpu_delete(*game_view.view);
+    gpu_delete(*game_view.target);
+    game_view.usage = .NONE;
+    game_view.width = 0;
+    game_view.height = 0;
+} @on_quit
+
 #scope_file
+
 #load "measure_fps.jai";
 #load "readback_stats.jai";
 #load "mini_mode.jai";
@@ -818,41 +864,13 @@ modify_delta_time_multiplier :: (factor: float) {
     report_replace("time_scale = %", delta_time_multiplier);
 }
 
-String :: #import "String";
 
-#scope_export
-
-ensure_game_view_render_target :: (width: u32, height: u32) {
-    width = max(width, 1);
-    height = max(height, 1);
-
-    if game_view.view != 0 && game_view.width == width && game_view.height == height return;
-
-    gpu_delete(*game_view.view);
-    gpu_delete(*game_view.target);
-
-    result, texture := gpu_create_texture(.{
-        type = ._2D,
-        dimensions = .[width, height, 1],
-        format = .B8G8R8A8_UNORM,
-        usage = .COLOR_ATTACHMENT | .SAMPLED | .TRANSFER_SRC,
-    });
-    assert(result == .SUCCESS && texture != 0, "Failed to create game-view target: % (%x%).", result, width, height);
-
-    view := gpu_texture_view(texture);
-    assert(view != 0, "Failed to create game-view target view: %x%.", width, height);
-
-    game_view.target = texture;
-    game_view.view = view;
-    game_view.width = width;
-    game_view.height = height;
+game_view_target_needs_transfer_src :: () -> bool {
+    #if READBACK_ENABLED {
+        if snapshot.enabled return true;
+        return readback_stats_needs_swapchain_readback(*readback_stats);
+    }
+    return false;
 }
 
-shutdown_game_view_render_target :: () {
-    gpu_delete(*game_view.view);
-    gpu_delete(*game_view.target);
-    game_view.width = 0;
-    game_view.height = 0;
-} @on_quit
-
-#scope_file
+String :: #import "String";

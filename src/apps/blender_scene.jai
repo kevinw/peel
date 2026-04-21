@@ -104,8 +104,6 @@ using app: struct {
     using draw: Meshlet_Grid_Params;
 }
 
-
-
 on_dll_init :: () {
     assert(OS == .MACOS, "blender_scene is currently Metal mesh-shader only.");
     source_path = resolve_blend_source_path();
