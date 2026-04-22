@@ -869,13 +869,9 @@ grass_tip_dir :: (instance_id: u32, blade_t: float, params: *$T) -> Vector3 {
     return normalize(base_dir + wind_dir * wind * blade_t * blade_t);
 }
 
-grass_blade_vt :: (vertex_id: u32) -> float {
-    if vertex_id == 0 return 0.0;
-    if vertex_id == 1 return 0.0;
-    if vertex_id == 2 return 1.0;
-    if vertex_id == 3 return 0.0;
-    if vertex_id == 4 return 1.0;
-    return 1.0;
+grass_blade_vt :: (vertex_id: u32) -> float #expand {
+    GRASS_VERTS :: float.[0, 0, 1, 0, 1, 1];
+    return GRASS_VERTS[vertex_id];
 }
 
 grass_blade_vx :: (vertex_id: u32) -> float {

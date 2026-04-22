@@ -16,6 +16,11 @@ add_force :: (thing: $T, force: Vector3) {
     BodyInterface_AddForce(physics.body_interface, thing.body_id, *force_jph);
 }
 
+add_impulse :: (thing: $T, impulse: Vector3) {
+    impulse_jph := cast,force(Vec3)impulse;
+    BodyInterface_AddImpulse(physics.body_interface, thing.body_id, *impulse_jph);
+}
+
 set_rotation :: (thing: $T, rot: Quaternion) {
     rot_jph := cast,force(Quat)rot;
     BodyInterface_SetRotation(physics.body_interface, thing.body_id, *rot_jph, .Activate);

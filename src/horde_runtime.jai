@@ -18,7 +18,7 @@ Enemy_Spawn_Params :: struct {
     spawn_radius_min: float = 13.0;
     spawn_radius_max: float = 28.0;
     despawn_radius: float = 88.0;
-    move_speed: float = 2.2;
+    move_speed: float = 80.2;
     min_head_size: float = 0.78;
     max_head_size: float = 1.28;
     touch_damage_per_second: float = 11.0;
@@ -397,13 +397,13 @@ do_ui :: (using runtime: *Horde_Runtime) {
     ImGui.Checkbox("Pillars", *pillar_params.enabled);
     {
         using spawn_params;
-        ImGui.Checkbox("Enemy Horde", *spawn_params.enabled);
-        Persist.SliderInt("Enemy Target",       *spawn_params.target_alive, 0, max_count, "%d");
-        Persist.SliderFloat("Enemy Spawn Rate", *spawn_params.spawn_rate, 0.0, 600.0, "%.0f/s");
-        Persist.SliderFloat("Enemy Speed",      *spawn_params.move_speed, 0.5, 6.0, "%.2f");
-        Persist.SliderFloat("Min Head Size",    *spawn_params.min_head_size, 0.4, 1.5, "%.2f");
-        Persist.SliderFloat("Max Head Size",    *spawn_params.max_head_size, 0.5, 2.0, "%.2f");
-        Persist.SliderFloat("Enemy Touch DPS",  *spawn_params.touch_damage_per_second, 0.0, 40.0, "%.1f");
+        ImGui.Checkbox("Enemy Horde", *enabled);
+        Persist.SliderInt("Enemy Target",       *target_alive, 0, max_count, "%d");
+        Persist.SliderFloat("Enemy Spawn Rate", *spawn_rate, 0.0, 600.0, "%.0f/s");
+        Persist.SliderFloat("Enemy Speed",      *move_speed, 10.5, 100.0, "%.2f");
+        Persist.SliderFloat("Min Head Size",    *min_head_size, 0.4, 1.5, "%.2f");
+        Persist.SliderFloat("Max Head Size",    *max_head_size, 0.5, 2.0, "%.2f");
+        Persist.SliderFloat("Enemy Touch DPS",  *touch_damage_per_second, 0.0, 40.0, "%.1f");
     }
     Persist.SliderFloat("Shots / Sec", *auto_fire_params.shots_per_second, 0.0, 10.0, "%.1f");
     Persist.SliderFloat("Burst Spacing", *auto_fire_params.burst_spacing, 0.02, 0.4, "%.2f");
@@ -423,16 +423,16 @@ do_ui :: (using runtime: *Horde_Runtime) {
     ImGui.Text("Survival Time: %.1fs", game_time);
 }
 
-update :: (runtime: *Horde_Runtime, dt: float) {
-    runtime.restart_requested = false;
-    if runtime.player_health <= 0.0 {
-        runtime.death_reset_t -= dt;
-        if runtime.death_reset_t <= 0.0 {
-            runtime.restart_requested = true;
+update :: (using runtime: *Horde_Runtime, dt: float) {
+    restart_requested = false;
+    if player_health <= 0.0 {
+        death_reset_t -= dt;
+        if death_reset_t <= 0.0 {
+            restart_requested = true;
         }
         return;
     }
-    runtime.game_time += dt;
+    game_time += dt;
     update_enemies(runtime, dt);
     update_powerups(runtime, dt);
     update_pillars(runtime, dt);
@@ -960,11 +960,11 @@ update_enemies :: (using runtime: *Horde_Runtime, dt: float) {
             target_vel.y = vertical_correction;
             speed_factor: float;
             if #complete it.kind == {
-            case .SPIDER; speed_factor = 3500.0;
-            case .MASK; speed_factor = 9000.0;
+            case .SPIDER; speed_factor = 4500.0;
+            case .MASK;   speed_factor = 10000.0;
             }
 
-            add_force(it, target_vel * speed_factor);
+            add_force(it, target_vel * speed_factor * dt);
 
             desired_yaw := it.yaw;
 
@@ -1214,6 +1214,7 @@ update_projectiles_pre_physics :: (using runtime: *Horde_Runtime, dt: float) {
             if enemy.hp <= 0.0 {
                 kill_enemy(runtime, hit_enemy_index);
             }
+            add_impulse(enemy, it.velocity * 100);
             deactivate_projectile(runtime, cast(s32) it_index);
             continue;
         }
