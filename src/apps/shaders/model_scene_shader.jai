@@ -864,8 +864,8 @@ grass_tip_dir :: (instance_id: u32, blade_t: float, params: *$T) -> Vector3 {
     yaw := grass_hash01_2(cast(float) instance_id, cast(float) 1.7, cast(float) 0.23) * cast(float) 6.28318530718;
     bend_phase := grass_hash01_2(cast(float) instance_id, cast(float) 9.1, cast(float) 0.61) * cast(float) 6.28318530718;
     wind := sin(t * cast(float) 1.4 + bend_phase) * cast(float) 0.16 + cos(t * cast(float) 0.73 + bend_phase * cast(float) 1.7) * cast(float) 0.09;
-    base_dir := normalize(Vector3.{sin(yaw) * cast(float) 0.2, 1.0, cos(yaw) * cast(float) 0.2});
-    wind_dir := normalize(Vector3.{0.7, 0.0, 0.3});
+    base_dir := normalize({sin(yaw) * cast(float) 0.2, 1.0, cos(yaw) * cast(float) 0.2});
+    wind_dir := normalize({0.7, 0.0, 0.3});
     return normalize(base_dir + wind_dir * wind * blade_t * blade_t);
 }
 
@@ -887,18 +887,18 @@ grass_blade_vx :: (vertex_id: u32) -> float {
     return -0.28;
 }
 
-grass_blade_world_pos :: (vertex_id: u32, instance_id: u32, vt: float, params: *$T) -> Vector3 {
-    grid_x := max(cast(u32) params.grass_grid_height_width.x, 1);
-    grid_z := max(cast(u32) params.grass_grid_height_width.y, 1);
+grass_blade_world_pos :: (vertex_id: u32, instance_id: u32, vt: float, using params: *$T) -> Vector3 {
+    grid_x := max(cast(u32) grass_grid_height_width.x, 1);
+    grid_z := max(cast(u32) grass_grid_height_width.y, 1);
     gx := instance_id % grid_x;
     gz := instance_id / grid_x;
     fx := ifx grid_x > 1 then cast(float) gx / cast(float) (grid_x - 1) else 0.5;
     fz := ifx grid_z > 1 then cast(float) gz / cast(float) (grid_z - 1) else 0.5;
 
-    size_x := params.ground_size_center_z_time.x;
-    size_z := params.ground_size_center_z_time.y;
-    center_z := params.ground_size_center_z_time.z;
-    jitter := params.grass_grid_height_width.z;
+    size_x := ground_size_center_z_time.x;
+    size_z := ground_size_center_z_time.y;
+    center_z := ground_size_center_z_time.z;
+    jitter := grass_grid_height_width.z;
     x := lerp(-size_x * 0.5, size_x * 0.5, fx);
     z := lerp(-size_z * 0.5, size_z * 0.5, fz) + center_z;
     cell_x := size_x / max(cast(float) grid_x, 1.0);
@@ -907,7 +907,7 @@ grass_blade_world_pos :: (vertex_id: u32, instance_id: u32, vt: float, params: *
     z += (grass_hash01_2(cast(float) gx, cast(float) gz, cast(float) 0.67) * 2.0 - 1.0) * cell_z * jitter;
 
     base_y := grass_ground_height(params, x, z);
-    blade_height := mix(params.grass_grid_height_width.w * cast(float) 0.7, params.grass_grid_height_width.w * cast(float) 1.3, grass_hash01_2(cast(float) gx, cast(float) gz, cast(float) 0.31));
+    blade_height := mix(grass_grid_height_width.w * cast(float) 0.7, grass_grid_height_width.w * cast(float) 1.3, grass_hash01_2(cast(float) gx, cast(float) gz, cast(float) 0.31));
     blade_width := max(blade_height * 0.11, 0.012);
     yaw := grass_hash01_2(cast(float) gx, cast(float) gz, cast(float) 0.83) * cast(float) 6.28318530718;
     right := Vector3.{cos(yaw), 0.0, sin(yaw)};
@@ -915,9 +915,9 @@ grass_blade_world_pos :: (vertex_id: u32, instance_id: u32, vt: float, params: *
 
     pos := Vector3.{x, base_y, z} + right * (vx * blade_width) + .{0.0, vt * blade_height, 0.0};
 
-    player_pos := params.player_pos_radius.xyz;
-    player_yaw := params.player_pos_radius.y;
-    player_radius := max(params.player_pos_radius.w, 0.001);
+    player_pos := player_pos_radius.xyz;
+    player_yaw := player_pos_radius.y;
+    player_radius := max(player_pos_radius.w, 0.001);
     delta := Vector2.{x - player_pos.x, z - player_pos.z};
     forward_2d := Vector2.{sin(player_yaw), cos(player_yaw)};
     side_2d := Vector2.{forward_2d.y, -forward_2d.x};
@@ -938,9 +938,7 @@ grass_blade_world_pos :: (vertex_id: u32, instance_id: u32, vt: float, params: *
         pos.y -= affect * affect * vt * blade_height * 0.85;
     }
 
-    tip_dir := grass_tip_dir(instance_id, vt, params);
-    pos += tip_dir * (vt * vt * 0.06);
-    return pos;
+    return pos + grass_tip_dir(instance_id, vt, params) * (vt * vt * 0.06);
 }
 
 grass_blade_normal :: (instance_id: u32, world_pos: Vector3, blade_t: float, params: *Grass_Draw_Params) -> Vector3 {
