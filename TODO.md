@@ -1,4 +1,5 @@
 # TODO
+- fix compile-time-tracy
 - check out LLM or MCP interface for tracy
 - move more of Jai-Shader-Transpiler into release DLL
 - further iterate on a "Engine.dll" and a "Game.dll"
@@ -101,3 +102,4 @@ Sebastian Aaltonen
 - lightweight 3d physics https://github.com/RandyGaul/nudge
 - sparse virtual shadowmaps https://ktstephano.github.io/rendering/stratusgfx/svsm
 - https://krupitskas.github.io/posts/modern_culling_techniques/
+- blender geo nodes from code https://github.com/BradyAJohnston/nodebpy

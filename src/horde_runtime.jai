@@ -227,14 +227,14 @@ clear :: (using runtime: *Horde_Runtime) {
     for * enemies {
         using it;
         if !active continue;
-        Physics.destroy_body(body_id);
+        destroy_body(body_id);
         if shape != null && shape != mask_shape && shape != spider_shape {
-            Physics.destroy(*shape);
+            destroy(*shape);
         }
     }
 
-    Physics.destroy(*mask_shape);
-    Physics.destroy(*spider_shape);
+    destroy(*mask_shape);
+    destroy(*spider_shape);
 
     if runtime.gpu_arena.cpu != null gpu_free_arena(runtime.gpu_arena);
     clear(*mask_draw_set);
@@ -379,7 +379,7 @@ reset :: (using runtime: *Horde_Runtime, horde_bindings: Horde_Bindings, camera_
     meshlet_params = sgpu_make_frame_param_allocator(*gpu_arena, Model_Scene_Meshlet_Params_CPU, max(cast(s64) 1, max_meshlet_param_count));
     gpu_commit_residency();
 
-    PhysicsSystem_OptimizeBroadPhase(Physics.physics.system);
+    PhysicsSystem_OptimizeBroadPhase(physics.system);
 
     init_pillars(runtime);
 }
@@ -476,8 +476,8 @@ prepare_render :: (using runtime: *Horde_Runtime, view_proj: Matrix4, shadow_bin
         positions.allocator = temp;
         array_resize(*positions, enemies.count);
         for * enemies body_ids[it_index] = it.body_id;
-        lock_interface := PhysicsSystem_GetBodyLockInterface(Physics.physics.system);
-        body_interface_no_lock := PhysicsSystem_GetBodyInterfaceNoLock(Physics.physics.system);
+        lock_interface := PhysicsSystem_GetBodyLockInterface(physics.system);
+        body_interface_no_lock := PhysicsSystem_GetBodyInterfaceNoLock(physics.system);
         {
             body_lock_multi_read := BodyLockInterface_LockMultiRead(lock_interface, body_ids.data, cast(u32)body_ids.count);
             defer BodyLockMultiRead_Destroy(body_lock_multi_read);
@@ -497,7 +497,7 @@ prepare_render :: (using runtime: *Horde_Runtime, view_proj: Matrix4, shadow_bin
         #if USE_BATCH_PHYSICS_READ {
             body_pos := positions[it_index];
         } else {
-            body_pos := cast,force(Vector3) BodyInterface_GetPosition(Physics.physics.body_interface, it.body_id);
+            body_pos := cast,force(Vector3) BodyInterface_GetPosition(physics.body_interface, it.body_id);
         }
         distance_to_camera := length(camera_pos - body_pos);
         if distance_to_camera > spawn_params.despawn_radius continue;
@@ -533,7 +533,7 @@ prepare_render :: (using runtime: *Horde_Runtime, view_proj: Matrix4, shadow_bin
 
     for *enemies {
         if !it.active continue;
-        body_pos := cast,force(Vector3) BodyInterface_GetPosition(Physics.physics.body_interface, it.body_id);
+        body_pos := cast,force(Vector3) BodyInterface_GetPosition(physics.body_interface, it.body_id);
         distance_to_camera := length(camera_pos - body_pos);
         if distance_to_camera > spawn_params.despawn_radius continue;
         if it.kind != .MASK continue;
@@ -635,7 +635,7 @@ draw_debug :: (using runtime: *Horde_Runtime, gizmo_ctx: *Gizmo.Gizmo_Context) {
     drawn: s32;
     for enemies {
         if !it.active continue;
-        pos := cast,force(Vector3) BodyInterface_GetPosition(Physics.physics.body_interface, it.body_id);
+        pos := cast,force(Vector3) BodyInterface_GetPosition(physics.body_interface, it.body_id);
         if it.kind != .SPIDER continue;
         body_radius := it.collider_radius;
         body_center := pos;
@@ -667,7 +667,7 @@ draw_physics_debug :: (using runtime: *Horde_Runtime, gizmo_ctx: *Gizmo.Gizmo_Co
     drawn: s32;
     for enemies {
         if !it.active continue;
-        pos := cast,force(Vector3) BodyInterface_GetPosition(Physics.physics.body_interface, it.body_id);
+        pos := cast,force(Vector3) BodyInterface_GetPosition(physics.body_interface, it.body_id);
         scaled_collider_radius := it.collider_radius;
         scaled_collider_half_height := it.collider_half_height;
         Gizmo.draw_sphere(gizmo_ctx, pos, scaled_collider_radius, color = .{1.0, 0.18, 0.18, 0.55}, thickness = 1.25);
@@ -727,7 +727,7 @@ kill_enemy :: (using runtime: *Horde_Runtime, enemy_index: s32) {
     if enemy_index < 0 || enemy_index >= enemies.count return;
     enemy := *enemies[enemy_index];
     if !enemy.active return;
-    Physics.destroy_body(enemy.body_id);
+    destroy_body(enemy.body_id);
     if enemy.shape != null && enemy.shape != runtime.mask_shape && enemy.shape != runtime.spider_shape Shape_Destroy(enemy.shape);
     if enemy.kind == .SPIDER {
         spider_active_count = max(cast(s32) 0, spider_active_count - 1);
@@ -741,7 +741,7 @@ find_closest_enemy_to_player :: (runtime: *Horde_Runtime, player_pos: Vector3) -
     best_dist_sq := 1.0e30;
     for runtime.enemies {
         if !it.active continue;
-        enemy_pos := cast,force(Vector3) BodyInterface_GetPosition(Physics.physics.body_interface, it.body_id);
+        enemy_pos := cast,force(Vector3) BodyInterface_GetPosition(physics.body_interface, it.body_id);
         to_enemy := enemy_pos - player_pos;
         dist_sq := dot(to_enemy, to_enemy);
         if dist_sq < best_dist_sq {
@@ -793,7 +793,7 @@ projectile_hits_enemy :: (runtime: *Horde_Runtime, projectile_pos: Vector3, proj
     enemy := runtime.enemies[enemy_index];
     if !enemy.active return false;
 
-    enemy_pos := cast,force(Vector3) BodyInterface_GetPosition(Physics.physics.body_interface, enemy.body_id);
+    enemy_pos := cast,force(Vector3) BodyInterface_GetPosition(physics.body_interface, enemy.body_id);
     scaled_collider_radius := enemy.collider_radius;
     scaled_collider_half_height := enemy.collider_half_height;
     combined_radius := projectile_radius + scaled_collider_radius;
@@ -813,7 +813,7 @@ projectile_hits_enemy :: (runtime: *Horde_Runtime, projectile_pos: Vector3, proj
 }
 
 projectile_query_enemy_hit :: (runtime: *Horde_Runtime, projectile_pos: Vector3) -> s32 {
-    query := PhysicsSystem_GetBroadPhaseQuery(Physics.physics.system);
+    query := PhysicsSystem_GetBroadPhaseQuery(physics.system);
     if query == null return -1;
 
     horde_projectile_collide_result = .{};
@@ -831,7 +831,7 @@ projectile_query_enemy_hit :: (runtime: *Horde_Runtime, projectile_pos: Vector3)
     if horde_projectile_collide_result.count == 0 return -1;
     for body_i: 0..horde_projectile_collide_result.count-1 {
         body_id := horde_projectile_collide_result.body_ids[body_i];
-        enemy_index, ok := enemy_body_user_data_index(BodyInterface_GetUserData(Physics.physics.body_interface, body_id));
+        enemy_index, ok := enemy_body_user_data_index(BodyInterface_GetUserData(physics.body_interface, body_id));
         if !ok continue;
         if projectile_hits_enemy(runtime, projectile_pos, runtime.auto_fire_params.projectile_radius, enemy_index) {
             return enemy_index;
@@ -883,7 +883,7 @@ spawn_enemy :: (using runtime: *Horde_Runtime, spawn_index: s32) -> bool {
         assert(enemy_body_shape != null, "Enemy scaled shape creation failed.");
     }
 
-    body_settings := BodyCreationSettings_Create3(enemy_body_shape, *spawn_pos_jph, null, .Dynamic, Physics.Layers.MOVING);
+    body_settings := BodyCreationSettings_Create3(enemy_body_shape, *spawn_pos_jph, null, .Dynamic, Layers.MOVING);
     assert(body_settings != null, "Enemy body settings creation failed.");
     defer BodyCreationSettings_Destroy(body_settings);
     BodyCreationSettings_SetGravityFactor(body_settings, 0.0);
@@ -894,8 +894,8 @@ spawn_enemy :: (using runtime: *Horde_Runtime, spawn_index: s32) -> bool {
         cast(AllowedDOFs) (AllowedDOFs.TranslationX | AllowedDOFs.TranslationY | AllowedDOFs.TranslationZ | AllowedDOFs.RotationY));
     BodyCreationSettings_SetMotionQuality(body_settings, .LinearCast);
 
-    body_id := BodyInterface_CreateAndAddBody(Physics.physics.body_interface, body_settings, .Activate);
-    BodyInterface_SetUserData(Physics.physics.body_interface, body_id, enemy_body_user_data_make(spawn_index));
+    body_id := BodyInterface_CreateAndAddBody(physics.body_interface, body_settings, .Activate);
+    BodyInterface_SetUserData(physics.body_interface, body_id, enemy_body_user_data_make(spawn_index));
 
     hp_scale := 1.0 + floor(game_time / 24.0);
     enemies[spawn_index] = .{
@@ -924,10 +924,11 @@ spawn_enemy :: (using runtime: *Horde_Runtime, spawn_index: s32) -> bool {
 
 update_enemies :: (using runtime: *Horde_Runtime, dt: float) {
     if enemies.count == 0 return;
-    spawn_params.target_alive = clamp(runtime.spawn_params.target_alive, 0, runtime.max_count);
-    if spawn_params.min_head_size > runtime.spawn_params.max_head_size {
+
+    spawn_params.target_alive = clamp(spawn_params.target_alive, 0, max_count);
+    if spawn_params.min_head_size > spawn_params.max_head_size {
         temp := spawn_params.min_head_size;
-        spawn_params.min_head_size = runtime.spawn_params.max_head_size;
+        spawn_params.min_head_size = spawn_params.max_head_size;
         spawn_params.max_head_size = temp;
     }
 
@@ -938,7 +939,7 @@ update_enemies :: (using runtime: *Horde_Runtime, dt: float) {
         if !it.active continue;
         it.hit_flash_t = max(0.0, it.hit_flash_t - dt);
 
-        body_pos := cast,force(Vector3) BodyInterface_GetPosition(Physics.physics.body_interface, it.body_id);
+        body_pos := cast,force(Vector3) BodyInterface_GetPosition(physics.body_interface, it.body_id);
         scaled_collider_radius := it.collider_radius;
         scaled_collider_half_height := it.collider_half_height;
         to_player := player_pos - body_pos;
@@ -954,31 +955,33 @@ update_enemies :: (using runtime: *Horde_Runtime, dt: float) {
             hover_height := ifx it.kind == .SPIDER then spider_move_height * it.collider_scale else 0.0;
             desired_ground_y := horde_ground_height_at(bindings.ground.*, body_pos.x, body_pos.z) + scaled_collider_radius + scaled_collider_half_height + hover_height + 0.04;
             target_vel := move_dir * spawn_params.move_speed;
-            actual_velocity: Vec3;
-            BodyInterface_GetLinearVelocity(Physics.physics.body_interface, it.body_id, *actual_velocity);
-            planar_velocity := Vector3.{actual_velocity.x, 0.0, actual_velocity.z};
-            planar_speed := length(planar_velocity);
+            actual_velocity := linear_velocity(it);
             vertical_correction := (desired_ground_y - body_pos.y) * 10.0;
-            is_blocked := planar_speed < spawn_params.move_speed * 0.55 && planar_dist > scaled_collider_radius * 1.5;
             target_vel.y = vertical_correction;
-            target_vel_jph := cast,force(Vec3) target_vel;
-            BodyInterface_SetLinearVelocity(Physics.physics.body_interface, it.body_id, *target_vel_jph);
+            speed_factor: float;
+            if #complete it.kind == {
+            case .SPIDER; speed_factor = 3500.0;
+            case .MASK; speed_factor = 9000.0;
+            }
+
+            add_force(it, target_vel * speed_factor);
 
             desired_yaw := it.yaw;
+
+            planar_velocity := Vector3.{actual_velocity.x, 0.0, actual_velocity.z};
+            planar_speed := length(planar_velocity);
             if planar_speed > 0.05 {
                 facing_dir := planar_velocity / planar_speed;
                 desired_yaw = atan2(facing_dir.x, facing_dir.z);
             } else {
                 desired_yaw = atan2(move_dir.x, move_dir.z);
             }
-            it.yaw = horde_smooth_yaw_towards(it.yaw, desired_yaw, dt, turn_speed = 12.0);
+
+            it.yaw = horde_smooth_yaw_towards(it.yaw, desired_yaw, dt, turn_speed = 10.0);
             rot := horde_quat_from_euler_deg(.{0.0, it.yaw * 180.0 / PI, 0.0});
-            rot_jph := cast,force(Quat) rot;
-            body_pos_jph := cast,force(RVec3) body_pos;
-            BodyInterface_SetPositionAndRotationWhenChanged(Physics.physics.body_interface, it.body_id, *body_pos_jph, *rot_jph, .Activate);
+            set_rotation(it, rot);
         } else {
-            zero_vel := Vec3.{0.0, 0.0, 0.0};
-            BodyInterface_SetLinearVelocity(Physics.physics.body_interface, it.body_id, *zero_vel);
+            set_linear_velocity(it, {0, 0, 0});
         }
 
         if it.kind == .SPIDER {
@@ -1039,7 +1042,6 @@ update_pillars :: (using runtime: *Horde_Runtime, dt: float) {
     }
 }
 
-#scope_file
 update_powerups :: (using runtime: *Horde_Runtime, dt: float) {
     powerup_active_count = 0;
     player_pos := character_controller_position(bindings.player_controller);
@@ -1084,7 +1086,6 @@ update_powerups :: (using runtime: *Horde_Runtime, dt: float) {
     }
 }
 
-#scope_file
 init_pillars :: (runtime: *Horde_Runtime) {
     if runtime.pillars.count == 0 return;
     for *runtime.pillars it.* = .{};
@@ -1161,7 +1162,6 @@ init_pillars :: (runtime: *Horde_Runtime) {
     runtime.pillar_active_count = placed_count;
 }
 
-#scope_file
 draw_pillar_debug :: (runtime: *Horde_Runtime, gizmo_ctx: *Gizmo.Gizmo_Context) {
     if runtime.pillar_active_count <= 0 return;
     ring_segments :: 14;
@@ -1195,7 +1195,6 @@ draw_pillar_debug :: (runtime: *Horde_Runtime, gizmo_ctx: *Gizmo.Gizmo_Context) 
     }
 }
 
-#scope_file
 update_projectiles_pre_physics :: (using runtime: *Horde_Runtime, dt: float) {
     projectile_active_count = 0;
     for * projectiles {
@@ -1231,7 +1230,7 @@ update_projectiles_pre_physics :: (using runtime: *Horde_Runtime, dt: float) {
             origin := player_pos + .{0.0, 0.95, 0.0};
             target_enemy_index := find_closest_enemy_to_player(runtime, player_pos);
             if target_enemy_index >= 0 {
-                target_pos := cast,force(Vector3) BodyInterface_GetPosition(Physics.physics.body_interface, enemies[target_enemy_index].body_id);
+                target_pos := cast,force(Vector3) BodyInterface_GetPosition(physics.body_interface, enemies[target_enemy_index].body_id);
                 target_pos.y += enemies[target_enemy_index].collider_half_height + enemies[target_enemy_index].collider_radius * 0.35;
                 _ = spawn_projectile(runtime, origin, target_pos - origin);
             }
@@ -1257,7 +1256,7 @@ update_projectiles_pre_physics :: (using runtime: *Horde_Runtime, dt: float) {
 }
 
 init_spider_legs :: (runtime: *Horde_Runtime, enemy: *Enemy_Runtime) {
-    body_pos := cast,force(Vector3) BodyInterface_GetPosition(Physics.physics.body_interface, enemy.body_id);
+    body_pos := cast,force(Vector3) BodyInterface_GetPosition(physics.body_interface, enemy.body_id);
     body_center := body_pos;
     for leg_index: 0..SPIDER_LEG_COUNT-1 {
         desired_anchor := spider_desired_foot_anchor(runtime, enemy.*, cast(s32) leg_index, body_center);
@@ -1277,7 +1276,7 @@ init_spider_legs :: (runtime: *Horde_Runtime, enemy: *Enemy_Runtime) {
 }
 
 update_spider_legs :: (runtime: *Horde_Runtime, enemy: *Enemy_Runtime, dt: float) {
-    body_pos := cast,force(Vector3) BodyInterface_GetPosition(Physics.physics.body_interface, enemy.body_id);
+    body_pos := cast,force(Vector3) BodyInterface_GetPosition(physics.body_interface, enemy.body_id);
     body_center := body_pos;
     desired_plants: [SPIDER_LEG_COUNT]Vector3;
     needs_steps: [SPIDER_LEG_COUNT]bool;
@@ -1346,7 +1345,7 @@ update_spider_legs :: (runtime: *Horde_Runtime, enemy: *Enemy_Runtime, dt: float
 }
 
 spider_raycast_foot :: (runtime: *Horde_Runtime, origin: Vector3, enemy: *Enemy_Runtime) -> (bool, Vector3) {
-    query := PhysicsSystem_GetNarrowPhaseQuery(Physics.physics.system);
+    query := PhysicsSystem_GetNarrowPhaseQuery(physics.system);
     if query == null return false, .{};
 
     origin_jph := cast,force(RVec3) origin;
@@ -1449,9 +1448,8 @@ horde_quat_from_euler_deg :: (deg: Vector3) -> Quaternion {
     return q;
 }
 
-#scope_file
 Scene_File :: #import,file "scene_file.jai";
 Gizmo :: #import "Gizmo";
-Physics :: #import "Physics";
+#import "Physics";
 using JPH :: #import "JoltC";
 LOG_HORDE_STATS :: false;

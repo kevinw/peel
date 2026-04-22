@@ -1,5 +1,26 @@
 debug_draw_enabled := false;
 
+linear_velocity :: (thing: $T) -> Vector3 {
+    vel: Vec3;
+    BodyInterface_GetLinearVelocity(physics.body_interface, thing.body_id, *vel);
+    return cast,force(Vector3) vel;
+}
+
+set_linear_velocity :: (thing: $T, vel: Vector3) {
+    vel_jph := cast,force(Vec3)vel;
+    BodyInterface_SetLinearVelocity(physics.body_interface, thing.body_id, *vel_jph);
+}
+
+add_force :: (thing: $T, force: Vector3) {
+    force_jph := cast,force(Vec3)force;
+    BodyInterface_AddForce(physics.body_interface, thing.body_id, *force_jph);
+}
+
+set_rotation :: (thing: $T, rot: Quaternion) {
+    rot_jph := cast,force(Quat)rot;
+    BodyInterface_SetRotation(physics.body_interface, thing.body_id, *rot_jph, .Activate);
+}
+
 Layers :: struct {
     NON_MOVING :: 0;
     MOVING     :: 1;

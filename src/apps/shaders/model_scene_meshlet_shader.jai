@@ -290,7 +290,6 @@ model_scene_task_main :: (
     morph_vertex_deltas: *Scene_Morph_Vertex_Delta,
     using constants: Model_Scene_Meshlet_Constants
 ) {
-    _ = vertices; _ = meshlets; _ = meshlet_vertices; _ = meshlet_triangles; _ = meshlet_bounds; _ = morph_weights; _ = skin_matrices; _ = morph_vertex_deltas;
     task_id := task_group_id_x();
     meshlet_chunk_count := params.batch_meshlet_chunk_count;
     emit_meshlet_count: u32;
@@ -416,7 +415,7 @@ model_scene_meshlet_fragment_main :: (
     sun_col := mix(Vector3.{1.0, 0.96, 0.9}, Vector3.{1.16, 0.62, 0.32}, 1.0 - clamp(abs(sun_dir.y) * 2.2, 0.0, 1.0));
     specular := pow(ndh, spec_power) * spec_strength * shadow * sun_strength;
     lit_color := base_rgb * indirect + base_rgb * diffuse + sun_col * specular;
-    lit_color = model_scene_apply_atmosphere(lit_color, world_pos, params.camera_pos, sun_dir);
+    lit_color = apply_atmosphere(lit_color, world_pos, params.camera_pos, sun_dir);
     return .{lit_color.x, lit_color.y, lit_color.z, alpha};
 } @fragment_shader
 

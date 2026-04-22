@@ -515,16 +515,6 @@ model_scene_sky_color :: (view_dir: Vector3, sun_dir: Vector3, sun_strength: flo
     return base + warm * (sun_glow + sun_core * 1.25) * glow_scale;
 }
 
-model_scene_apply_atmosphere :: (color: Vector3, world_pos: Vector3, camera_pos: Vector3, sun_dir: Vector3) -> Vector3 {
-    view_vec := world_pos - camera_pos;
-    dist := sqrt(max(dot(view_vec, view_vec), 0.0));
-    fog := 1.0 - exp(-dist * 0.012);
-    fog = clamp(fog, 0.0, 0.7);
-    view_dir := normalize(view_vec);
-    sky_col := model_scene_sky_base_color(view_dir, sun_dir);
-    return mix(color, sky_col, fog);
-}
-
 model_scene_indirect_light :: (N: Vector3, sun_dir: Vector3, sun_strength: float, shadow: float) -> Vector3 {
     upness := clamp(N.y * 0.5 + 0.5, 0.0, 1.0);
     horizonness := 1.0 - abs(N.y);
@@ -612,7 +602,7 @@ model_scene_fragment_main :: (using in: Model_Scene_Fragment_In, params: *Scene_
     sun_col := mix(Vector3.{1.0, 0.96, 0.9}, Vector3.{1.16, 0.62, 0.32}, 1.0 - clamp(abs(sun_dir.y) * 2.2, 0.0, 1.0));
     specular := pow(ndh, spec_power) * spec_strength * shadow * sun_strength;
     color := base_rgb * indirect + base_rgb * diffuse + sun_col * specular;
-    color = model_scene_apply_atmosphere(color, world_pos, params.camera_pos, sun_dir);
+    color = apply_atmosphere(color, world_pos, params.camera_pos, sun_dir);
     return .{color.x, color.y, color.z, alpha};
 } @fragment_shader
 
@@ -680,7 +670,7 @@ ground_fragment_main :: (using in: Ground_Fragment_In, params: *Ground_Draw_Para
     sun_col := mix(Vector3.{1.0, 0.96, 0.9}, Vector3.{1.16, 0.62, 0.32}, 1.0 - clamp(abs(sun_dir.y) * 2.2, 0.0, 1.0));
     specular := pow(ndh, spec_power) * spec_strength * shadow * sun_strength;
     color := base_rgb * indirect + base_rgb * diffuse + sun_col * specular;
-    color = model_scene_apply_atmosphere(color, world_pos, params.camera_pos, sun_dir);
+    color = apply_atmosphere(color, world_pos, params.camera_pos, sun_dir);
     return .{color.x, color.y, color.z, tex.w};
 } @fragment_shader
 
@@ -806,7 +796,7 @@ model_scene_grass_fragment_main :: (using in: Grass_Fragment_In, params: *Grass_
     rim := ifx use_far_shading then 0.0 else pow(1.0 - max(dot(N, V), 0.0), 2.3) * 0.08;
     sun_col := mix(Vector3.{1.0, 0.96, 0.9}, Vector3.{1.16, 0.62, 0.32}, 1.0 - clamp(abs(sun_dir.y) * 2.2, 0.0, 1.0));
     color := base * indirect + base * diffuse + sun_col * specular + base * rim;
-    color = model_scene_apply_atmosphere(color, world_pos, params.camera_pos, sun_dir);
+    color = apply_atmosphere(color, world_pos, params.camera_pos, sun_dir);
     return .{color.x, color.y, color.z, 1.0};
 } @fragment_shader
 
@@ -841,6 +831,16 @@ model_scene_sky_fragment_main :: (using in: Model_Scene_Sky_Fragment_In, params:
     color := model_scene_sky_color(view_dir, sun_dir, sun_strength);
     return .{out_color = .{color.x, color.y, color.z, 1.0}};
 } @fragment_shader
+
+apply_atmosphere :: (color: Vector3, world_pos: Vector3, camera_pos: Vector3, sun_dir: Vector3) -> Vector3 {
+    view_vec := world_pos - camera_pos;
+    dist := sqrt(max(dot(view_vec, view_vec), 0.0));
+    fog := 1.0 - exp(-dist * 0.012);
+    fog = clamp(fog, 0.0, 0.7);
+    view_dir := normalize(view_vec);
+    sky_col := model_scene_sky_base_color(view_dir, sun_dir);
+    return mix(color, sky_col, fog);
+}
 
 #scope_file
 
