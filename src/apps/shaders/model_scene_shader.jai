@@ -812,21 +812,21 @@ model_scene_sky_vertex_main :: (using in: Model_Scene_Vertex_In, params: *Model_
     return out;
 } @vertex_shader
 
-model_scene_sky_fragment_main :: (using in: Model_Scene_Sky_Fragment_In, params: *Model_Scene_Sky_Params) -> struct { out_color: Vector4; } {
-    cam_right := Vector3.{params.camera_right_proj_x.x, params.camera_right_proj_x.y, params.camera_right_proj_x.z};
-    cam_up := Vector3.{params.camera_up_proj_y.x, params.camera_up_proj_y.y, params.camera_up_proj_y.z};
-    cam_forward := Vector3.{params.camera_forward_time_of_day.x, params.camera_forward_time_of_day.y, params.camera_forward_time_of_day.z};
-    proj_x := params.camera_right_proj_x.w;
-    proj_y := params.camera_up_proj_y.w;
-    projection_mode := cast(u32) params.projection_mode_ortho_half_height.x;
-    sun_dir := normalize(Vector3.{-params.light_dir_sun_strength.x, -params.light_dir_sun_strength.y, -params.light_dir_sun_strength.z});
-    sun_strength := max(params.light_dir_sun_strength.w, 0.0);
+model_scene_sky_fragment_main :: (using in: Model_Scene_Sky_Fragment_In, using params: *Model_Scene_Sky_Params) -> struct { out_color: Vector4; } {
+    cam_up      := Vector3.{camera_up_proj_y.x, camera_up_proj_y.y, camera_up_proj_y.z};
+    proj_x := camera_right_proj_x.w;
+    proj_y := camera_up_proj_y.w;
+    projection_mode := cast(u32) projection_mode_ortho_half_height.x;
+    sun_dir := normalize(Vector3.{-light_dir_sun_strength.x, -light_dir_sun_strength.y, -light_dir_sun_strength.z});
+    sun_strength := max(light_dir_sun_strength.w, 0.0);
 
     ndc := uv * 2.0 - 1.0;
-    view_dir := normalize(cam_forward + cam_right * (ndc.x / max(proj_x, 0.0001)) + cam_up * (ndc.y / max(proj_y, 0.0001)));
+    view_dir: Vector3;
     if projection_mode == 1 {
         // Keep a directional sky gradient in ortho instead of collapsing to a flat fill.
-        view_dir = normalize(cam_forward + cam_right * (ndc.x * 0.85) + cam_up * (ndc.y * 0.85));
+        view_dir = normalize(camera_forward_time_of_day.xyz + camera_right_proj_x.xyz * (ndc.x * 0.85) + cam_up * (ndc.y * 0.85));
+    } else {
+        view_dir = normalize(camera_forward_time_of_day.xyz + camera_right_proj_x.xyz * (ndc.x / max(proj_x, 0.0001)) + cam_up * (ndc.y / max(proj_y, 0.0001)));
     }
     color := model_scene_sky_color(view_dir, sun_dir, sun_strength);
     return .{out_color = .{color.x, color.y, color.z, 1.0}};
