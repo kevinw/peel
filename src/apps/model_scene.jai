@@ -1156,7 +1156,7 @@ rebuild_scene_runtime :: () {
             model_index := scene_model_index_for_compiled_asset(it.asset_index);
             if model_index < 0 continue;
             array_reset(*root_transforms);
-            array_add(*root_transforms, it.world * compiled_asset_import_matrix(compiled_scene.assets[it.asset_index]));
+            array_add(*root_transforms, it.world * compiled_asset_import_matrix(it.asset_index));
             start_batch_count := scene_batches.count;
             scene_geo_append_model_instances(*scene_batches, *instances_cpu, *scene_geo, model_index, root_transforms);
             append_pick_ids_for_new_batches(start_batch_count, compiled_node_pick_object_id(cast(s32) it_index));
@@ -1173,7 +1173,7 @@ rebuild_scene_runtime :: () {
             model_index := scene_model_index_for_compiled_asset(it.asset_index);
             if model_index < 0 continue;
             array_reset(*root_transforms);
-            array_add(*root_transforms, it.world * compiled_asset_import_matrix(compiled_scene.assets[it.asset_index]));
+            array_add(*root_transforms, it.world * compiled_asset_import_matrix(it.asset_index));
             start_batch_count := scene_batches.count;
             scene_geo_append_model_instances(*scene_batches, *instances_cpu, *scene_geo, model_index, root_transforms);
             append_pick_ids_for_new_batches(start_batch_count, compiled_node_pick_object_id(cast(s32) it_index));
@@ -1378,10 +1378,13 @@ rebuild_scene_runtime :: () {
         player_controller = *player_controller,
         ground = *active_ground,
         mask_import_basis = ifx compiled_scene_find_asset_index_by_name_for_runtime("mask") >= 0
-            then compiled_asset_import_matrix(compiled_scene.assets[compiled_scene_find_asset_index_by_name_for_runtime("mask")])
+            then compiled_asset_import_matrix(compiled_scene_find_asset_index_by_name_for_runtime("mask"))
+            else Matrix4_Identity,
+        jewel_import_basis = ifx compiled_scene_find_asset_index_by_name_for_runtime("jewel") >= 0
+            then compiled_asset_import_matrix(compiled_scene_find_asset_index_by_name_for_runtime("jewel"))
             else Matrix4_Identity,
         pillar_import_basis = ifx compiled_scene_find_asset_index_by_name_for_runtime("ancient_egyptian_column") >= 0
-            then compiled_asset_import_matrix(compiled_scene.assets[compiled_scene_find_asset_index_by_name_for_runtime("ancient_egyptian_column")])
+            then compiled_asset_import_matrix(compiled_scene_find_asset_index_by_name_for_runtime("ancient_egyptian_column"))
             else Matrix4_Identity,
     }, scene_camera.position, outdoor_rig.sun_strength, outdoor_rig.time_of_day);
     gpu_commit_residency();
@@ -1495,7 +1498,7 @@ append_compiled_scatter_instances :: (instances_cpu: *[..]Scene_Instance, root_t
 
         scatter_world := node.world
             * make_trs_matrix({x, y, z}, q, model_scale)
-            * compiled_asset_import_matrix(asset);
+            * asset_import_matrix(asset, model_index);
 
         array_reset(root_transforms);
         array_add(root_transforms, scatter_world);
@@ -1544,7 +1547,7 @@ init_player_from_compiled_node :: (instances_cpu: *[..]Scene_Instance, total_ski
 
     animated_model_runtime_init_locomotion_graph(*player_runtime, *scene_geo, model_index, player_runtime.idle_clip_index, player_runtime.walk_clip_index, player_runtime.jump_clip_index);
 
-    start_pos, start_rot_deg, start_scale := decompose_matrix_trs(node.world * compiled_asset_import_matrix(compiled_scene.assets[node.asset_index]));
+    start_pos, start_rot_deg, start_scale := decompose_matrix_trs(node.world * compiled_asset_import_matrix(node.asset_index));
     player_runtime.scale = max(max(start_scale.x, start_scale.y), start_scale.z);
     player_bounds := scene_geo_model_bounds(*scene_geo, model_index);
     player_runtime.ground_y = -player_bounds.min.y * player_runtime.scale - 0.2;
@@ -1613,7 +1616,7 @@ init_player_from_compiled_node :: (instances_cpu: *[..]Scene_Instance, total_ski
                 }
                 attachment_offset :=
                     make_trs_matrix(attachment_node.local_position, quat_from_euler_deg(attachment_node.local_rotation_deg), attachment_node.local_scale)
-                    * compiled_asset_import_matrix(compiled_scene.assets[attachment_node.asset_index]);
+                    * compiled_asset_import_matrix(attachment_node.asset_index);
                 attachment_model := scene_geo.models[attachment_model_index];
                 for geo_node_index: attachment_model.node_start .. attachment_model.node_start + attachment_model.node_count - 1 {
                     geo_node := scene_geo.nodes[geo_node_index];
@@ -1664,7 +1667,10 @@ reset_player_and_horde_game :: () {
         player_controller = *player_controller,
         ground = *active_ground,
         mask_import_basis = ifx compiled_scene_find_asset_index_by_name_for_runtime("mask") >= 0
-            then compiled_asset_import_matrix(compiled_scene.assets[compiled_scene_find_asset_index_by_name_for_runtime("mask")])
+            then compiled_asset_import_matrix(compiled_scene_find_asset_index_by_name_for_runtime("mask"))
+            else Matrix4_Identity,
+        jewel_import_basis = ifx compiled_scene_find_asset_index_by_name_for_runtime("jewel") >= 0
+            then compiled_asset_import_matrix(compiled_scene_find_asset_index_by_name_for_runtime("jewel"))
             else Matrix4_Identity,
     }, scene_camera.position, outdoor_rig.sun_strength, outdoor_rig.time_of_day);
 }
@@ -1680,9 +1686,28 @@ scene_model_index_for_compiled_asset :: (asset_index: s32) -> s32 {
     return scene_geo_model_index_by_name(*scene_geo, model_name);
 }
 
-compiled_asset_import_matrix :: (asset: Scene_File.Scene_Asset_Desc) -> Matrix4 {
-    return rotation_matrix(Matrix4, quat_from_euler_deg(asset.import_settings.rotation_deg))
+asset_import_pivot_offset :: (asset: Scene_File.Scene_Asset_Desc, model_index: s32) -> Vector3 {
+    if asset.pivot_mode == .GEOMETRY_CENTER && model_index >= 0 {
+        bounds := scene_geo_model_bounds(*scene_geo, model_index);
+        return (bounds.min + bounds.max) * 0.5;
+    }
+    return .{0.0, 0.0, 0.0};
+}
+
+asset_import_matrix :: (asset: Scene_File.Scene_Asset_Desc, model_index: s32) -> Matrix4 {
+    result := rotation_matrix(Matrix4, quat_from_euler_deg(asset.import_settings.rotation_deg))
         * make_scale_matrix4(asset.import_settings.scale);
+    pivot_offset := asset_import_pivot_offset(asset, model_index);
+    if pivot_offset.x != 0.0 || pivot_offset.y != 0.0 || pivot_offset.z != 0.0 {
+        result = result * make_translation_matrix4(-pivot_offset);
+    }
+    return result;
+}
+
+compiled_asset_import_matrix :: (asset_index: s32) -> Matrix4 {
+    if asset_index < 0 || asset_index >= compiled_scene.assets.count return Matrix4_Identity;
+    asset := compiled_scene.assets[asset_index];
+    return asset_import_matrix(asset, scene_model_index_for_compiled_asset(asset_index));
 }
 
 compiled_scene_find_asset_index_by_name_for_runtime :: (asset_name: string) -> s32 {
@@ -1768,7 +1793,7 @@ scene_refresh_runtime_instance_worlds_from_compiled :: () {
         compiled_node := compiled_scene.nodes[compiled_index];
         instance_world := compiled_node.world;
         if compiled_node.asset_index >= 0 {
-            instance_world = instance_world * compiled_asset_import_matrix(compiled_scene.assets[compiled_node.asset_index]);
+            instance_world = instance_world * compiled_asset_import_matrix(compiled_node.asset_index);
         }
         for instance_i: 0..batch.instance_count-1 {
             scene_static_instances.cpu[batch.first_instance + instance_i].world = instance_world;

@@ -110,7 +110,15 @@ Horde_Bindings :: struct {
     player_controller: *Character_Controller;
     ground: *Scene_File.Scene_Procedural_Ground_Desc;
     mask_import_basis: Matrix4 = Matrix4_Identity;
+    jewel_import_basis: Matrix4 = Matrix4_Identity;
     pillar_import_basis: Matrix4 = Matrix4_Identity;
+}
+
+Horde_Draw_Slice :: struct {
+    first_render_mesh: s32;
+    render_mesh_count: s32;
+    model_index: s32 = -1;
+    import_basis: Matrix4 = Matrix4_Identity;
 }
 
 Horde_Runtime :: struct {
@@ -119,10 +127,13 @@ Horde_Runtime :: struct {
 
     gpu_arena: Gpu_Arena;
     meshlet_params: Gpu_Frame_Param_Allocator(Model_Scene_Meshlet_Params_CPU);
-    mask_draw_set: Mesh_Draw_Set;
+    actor_draw_set: Mesh_Draw_Set;
     pillar_draw_set: Mesh_Draw_Set;
+    mask_draw_slice: Horde_Draw_Slice;
+    jewel_draw_slice: Horde_Draw_Slice;
 
     mask_model_index: s32 = -1;
+    jewel_model_index: s32 = -1;
     pillar_model_index: s32 = -1;
 
     spawn_params: Enemy_Spawn_Params = .{};
@@ -146,6 +157,7 @@ Horde_Runtime :: struct {
     collider_kind: Enemy_Collider_Kind = .SPHERE;
     model_scale: float = 1.0;
     model_root_offset_y: float;
+    jewel_model_scale: float = 1.0;
     pillar_model_height: float = 1.0;
     pillar_model_root_offset_y: float;
     mask_shape: *Shape;
@@ -196,7 +208,7 @@ maybe_log :: (using horde_runtime: *Horde_Runtime) {
         alive_count,
         visible_count_debug,
         render_instance_count_debug,
-        mask_draw_set.groups.count + pillar_draw_set.groups.count,
+        actor_draw_set.groups.count + pillar_draw_set.groups.count,
         player_health,
         spawn_params.target_alive,
         spawn_params.enabled);
@@ -237,7 +249,7 @@ clear :: (using runtime: *Horde_Runtime) {
     destroy(*spider_shape);
 
     if runtime.gpu_arena.cpu != null gpu_free_arena(runtime.gpu_arena);
-    clear(*mask_draw_set);
+    clear(*actor_draw_set);
     clear(*pillar_draw_set);
     array_reset(*enemies);
     array_reset(*projectiles);
@@ -247,13 +259,26 @@ clear :: (using runtime: *Horde_Runtime) {
 }
 
 deinit :: (using runtime: *Horde_Runtime) {
+    for * enemies {
+        using it;
+        if !active continue;
+        destroy_body(body_id);
+        if shape != null && shape != mask_shape && shape != spider_shape {
+            destroy(*shape);
+        }
+    }
+
+    destroy(*mask_shape);
+    destroy(*spider_shape);
+
+    if runtime.gpu_arena.cpu != null gpu_free_arena(runtime.gpu_arena);
+    deinit(*actor_draw_set);
+    deinit(*pillar_draw_set);
     array_free(enemies);
     array_free(projectiles);
     array_free(powerups);
     array_free(pillars);
-    deinit(*mask_draw_set);
-    deinit(*pillar_draw_set);
-    clear(runtime);
+    runtime.* = {};
 }
 
 reset :: (using runtime: *Horde_Runtime, horde_bindings: Horde_Bindings, camera_pos: Vector3, sun_strength: float, time_of_day: float) {
@@ -334,7 +359,15 @@ reset :: (using runtime: *Horde_Runtime, horde_bindings: Horde_Bindings, camera_
     array_resize(*pillars, max(cast(s64) 0, pillar_params.count));
     for *pillars it.* = .{};
 
-    append_model_meshes(*mask_draw_set, scene_geo, mask_model_index);
+    mask_draw_slice = horde_append_draw_slice(*actor_draw_set, scene_geo, mask_model_index, bindings.mask_import_basis);
+
+    jewel_model_index = scene_geo_model_index_by_name(scene_geo, "jewel");
+    if jewel_model_index < 0 {
+        log_error("no model named 'jewel' found in scene geo");
+    } else {
+        jewel_draw_slice = horde_append_draw_slice(*actor_draw_set, scene_geo, jewel_model_index, bindings.jewel_import_basis);
+        jewel_model_scale = scale_model_to_target_extent(scene_geo, jewel_model_index, auto_fire_params.projectile_radius * 2.0);
+    }
 
     pillar_model_index = scene_geo_model_index_by_name(scene_geo, "ancient_egyptian_column");
     if pillar_model_index < 0 {
@@ -347,34 +380,40 @@ reset :: (using runtime: *Horde_Runtime, horde_bindings: Horde_Bindings, camera_
         append_model_meshes(*pillar_draw_set, scene_geo, pillar_model_index);
     }
 
-    if mask_draw_set.render_meshes.count == 0 return;
+    if actor_draw_set.render_meshes.count == 0 return;
 
     #if LOG_HORDE_STATS {
         log("ENEMY_HORDE init model=% render_meshes=% collider=% radius=% half_height=% scale=%",
-            scene_geo.models[mask_model_index].name, mask_draw_set.render_meshes.count, collider_kind, collider_radius, collider_half_height, model_scale);
+            scene_geo.models[mask_model_index].name, actor_draw_set.render_meshes.count, collider_kind, collider_radius, collider_half_height, model_scale);
     }
 
-    init_groups(*mask_draw_set);
+    init_groups(*actor_draw_set);
     init_groups(*pillar_draw_set);
-    max_instance_count := cast(s64) max_count * mask_draw_set.render_meshes.count;
+    max_actor_instance_count :=
+        cast(s64) max_count * max(cast(s64) 1, mask_draw_slice.render_mesh_count) +
+        cast(s64) projectile_max_count * max(cast(s64) 1, jewel_draw_slice.render_mesh_count);
     max_pillar_instance_count := cast(s64) pillars.count * pillar_draw_set.render_meshes.count;
     max_meshlet_param_count: s64 = 1;
-    for mask_draw_set.render_meshes {
+    for actor_draw_set.render_meshes {
         meshlet_chunk_count := max(cast(s64) 1, (cast(s64) horde_mesh_max_meshlet_count(scene_geo, it.base_mesh_index) + TASK_EMIT_MESHLET_COUNT - 1) / TASK_EMIT_MESHLET_COUNT);
-        max_meshlet_param_count += cast(s64) max_count * meshlet_chunk_count;
+        if horde_slice_contains_render_mesh(mask_draw_slice, cast(s32) it_index) {
+            max_meshlet_param_count += cast(s64) max_count * meshlet_chunk_count;
+        } else if horde_slice_contains_render_mesh(jewel_draw_slice, cast(s32) it_index) {
+            max_meshlet_param_count += cast(s64) projectile_max_count * meshlet_chunk_count;
+        }
     }
     for pillar_draw_set.render_meshes {
         meshlet_chunk_count := max(cast(s64) 1, (cast(s64) horde_mesh_max_meshlet_count(scene_geo, it.base_mesh_index) + TASK_EMIT_MESHLET_COUNT - 1) / TASK_EMIT_MESHLET_COUNT);
         max_meshlet_param_count += cast(s64) pillars.count * meshlet_chunk_count;
     }
     arena_bytes :=
-        max(cast(s64) 1, max_instance_count) * size_of(Model_Scene_Meshlet_Instance) * SGPU_FRAMES_IN_FLIGHT +
+        max(cast(s64) 1, max_actor_instance_count) * size_of(Model_Scene_Meshlet_Instance) * SGPU_FRAMES_IN_FLIGHT +
         max(cast(s64) 1, max_pillar_instance_count) * size_of(Model_Scene_Meshlet_Instance) * SGPU_FRAMES_IN_FLIGHT +
         max(cast(s64) 1, max_meshlet_param_count) * size_of(Model_Scene_Meshlet_Params_CPU) * SGPU_FRAMES_IN_FLIGHT +
         1024;
     gpu_arena = gpu_make_arena(arena_bytes, label = "horde runtime arena");
     assert(gpu_arena.cpu != null, "Failed to create horde runtime arena.");
-    allocate_dynamic_instances(*mask_draw_set, *gpu_arena, max_instance_count);
+    allocate_dynamic_instances(*actor_draw_set, *gpu_arena, max_actor_instance_count);
     allocate_dynamic_instances(*pillar_draw_set, *gpu_arena, max_pillar_instance_count);
     meshlet_params = sgpu_make_frame_param_allocator(*gpu_arena, Model_Scene_Meshlet_Params_CPU, max(cast(s64) 1, max_meshlet_param_count));
     gpu_commit_residency();
@@ -450,16 +489,16 @@ prepare_render :: (using runtime: *Horde_Runtime, view_proj: Matrix4, shadow_bin
     visible_count_debug = 0;
     render_instance_count_debug = 0;
 
-    begin_frame(*mask_draw_set);
+    begin_frame(*actor_draw_set);
     begin_frame(*pillar_draw_set);
-    current_mask_instances := current_instances(*mask_draw_set);
+    current_actor_instances := current_instances(*actor_draw_set);
     current_pillar_instances := current_instances(*pillar_draw_set);
-    if current_mask_instances.cpu.data == null return;
+    if current_actor_instances.cpu.data == null return;
 
-    mask_group_instance_counts: [..]u32;
-    mask_group_instance_counts.allocator = temp;
-    array_resize(*mask_group_instance_counts, mask_draw_set.groups.count);
-    for *mask_group_instance_counts it.* = 0;
+    actor_group_instance_counts: [..]u32;
+    actor_group_instance_counts.allocator = temp;
+    array_resize(*actor_group_instance_counts, actor_draw_set.groups.count);
+    for *actor_group_instance_counts it.* = 0;
 
     pillar_group_instance_counts: [..]u32;
     pillar_group_instance_counts.allocator = temp;
@@ -503,11 +542,11 @@ prepare_render :: (using runtime: *Horde_Runtime, view_proj: Matrix4, shadow_bin
         if distance_to_camera > spawn_params.despawn_radius continue;
         visible_enemy_count += 1;
         if it.kind != .MASK continue;
-        for _, render_mesh_index: mask_draw_set.render_meshes {
-            group_idx := group_index(*mask_draw_set, render_mesh_index);
-            assert(group_idx >= 0, "Missing horde mask group for render mesh %.", render_mesh_index);
-            mask_group_instance_counts[group_idx] += 1;
-        }
+        horde_accumulate_slice_counts(actor_draw_set, mask_draw_slice, actor_group_instance_counts);
+    }
+    for projectiles {
+        if !it.active continue;
+        horde_accumulate_slice_counts(actor_draw_set, jewel_draw_slice, actor_group_instance_counts);
     }
     for pillars {
         if !it.active continue;
@@ -518,13 +557,13 @@ prepare_render :: (using runtime: *Horde_Runtime, view_proj: Matrix4, shadow_bin
         }
     }
 
-    assign_counts(*mask_draw_set, mask_group_instance_counts);
+    assign_counts(*actor_draw_set, actor_group_instance_counts);
     assign_counts(*pillar_draw_set, pillar_group_instance_counts);
 
-    mask_group_write_offsets: [..]u32;
-    mask_group_write_offsets.allocator = temp;
-    array_resize(*mask_group_write_offsets, mask_draw_set.groups.count);
-    for *mask_group_write_offsets it.* = mask_draw_set.groups[it_index].first_instance;
+    actor_group_write_offsets: [..]u32;
+    actor_group_write_offsets.allocator = temp;
+    array_resize(*actor_group_write_offsets, actor_draw_set.groups.count);
+    for *actor_group_write_offsets it.* = actor_draw_set.groups[it_index].first_instance;
 
     pillar_group_write_offsets: [..]u32;
     pillar_group_write_offsets.allocator = temp;
@@ -540,25 +579,18 @@ prepare_render :: (using runtime: *Horde_Runtime, view_proj: Matrix4, shadow_bin
 
         visual_root_pos := body_pos + .{0.0, model_root_offset_y * (it.visual_scale / max(model_scale, 0.001)), 0.0};
         visual_scale: Vector3 = .{it.visual_scale, it.visual_scale, it.visual_scale};
-        world_root := make_trs_matrix(visual_root_pos, horde_quat_from_euler_deg(.{0.0, it.yaw * 180.0 / PI, 0.0}), visual_scale) * bindings.mask_import_basis;
-        for render_mesh, render_mesh_index: mask_draw_set.render_meshes {
-            group_idx := group_index(*mask_draw_set, render_mesh_index);
-            assert(group_idx >= 0, "Missing horde mask group for render mesh %.", render_mesh_index);
-            write_index := mask_group_write_offsets[group_idx];
-            mask_group_write_offsets[group_idx] += 1;
-            node_local_index := render_mesh.node_index - cast(s32) mask_model.node_start;
-            world := world_root;
-            if node_local_index >= 0 {
-                world = world_root * scene_geo.nodes[render_mesh.node_index].world;
-            }
-            flash_mix := clamp(it.hit_flash_t * 9.0, 0.0, 1.0);
-            tint := lerp(it.tint, Vector4.{3.2, 3.2, 3.2, 1.0}, flash_mix);
-            current_mask_instances.cpu[write_index] = .{
-                world = world,
-                tint = tint,
-            };
-            render_instance_count_debug += 1;
-        }
+        world_root := make_trs_matrix(visual_root_pos, horde_quat_from_euler_deg(.{0.0, it.yaw * 180.0 / PI, 0.0}), visual_scale);
+        flash_mix := clamp(it.hit_flash_t * 9.0, 0.0, 1.0);
+        tint := lerp(it.tint, Vector4.{3.2, 3.2, 3.2, 1.0}, flash_mix);
+        horde_write_slice_instances(runtime, actor_draw_set, mask_draw_slice, current_actor_instances, actor_group_write_offsets, world_root, tint);
+    }
+    for projectiles {
+        if !it.active continue;
+        yaw_deg := atan2(-it.velocity.z, it.velocity.x) * 180.0 / PI;
+        spin_deg := game_time * 720.0 + cast(float) it_index * 37.0;
+        world_root := make_trs_matrix(it.position, horde_quat_from_euler_deg(.{spin_deg, yaw_deg, 0.0}), jewel_model_scale);
+        projectile_tint := Vector4.{1.35, 1.18, 0.42, 1.0};
+        horde_write_slice_instances(runtime, actor_draw_set, jewel_draw_slice, current_actor_instances, actor_group_write_offsets, world_root, projectile_tint);
     }
     for pillars {
         if !it.active continue;
@@ -598,7 +630,7 @@ draw_shadow :: (using runtime: *Horde_Runtime, cmd_buff: Gpu_Command_Buffer, pas
         shadow_view_proj = bindings.shadow_map.view_proj,
         shadow_meta = .{},
     };
-    draw_meshlets(*mask_draw_set, cmd_buff, pass_desc, bindings.scene_geo, shadow_params, shadow_pass = true);
+    draw_meshlets(*actor_draw_set, cmd_buff, pass_desc, bindings.scene_geo, shadow_params, shadow_pass = true);
     draw_meshlets(*pillar_draw_set, cmd_buff, pass_desc, bindings.scene_geo, shadow_params, shadow_pass = true);
 }
 
@@ -616,7 +648,7 @@ draw_main :: (using runtime: *Horde_Runtime, cmd_buff: Gpu_Command_Buffer, pass_
         shadow_view_proj = bindings.shadow_map.view_proj,
         shadow_meta = render_shadow_binding,
     };
-    draw_meshlets(*mask_draw_set, cmd_buff, pass_desc, bindings.scene_geo, main_params);
+    draw_meshlets(*actor_draw_set, cmd_buff, pass_desc, bindings.scene_geo, main_params);
     draw_meshlets(*pillar_draw_set, cmd_buff, pass_desc, bindings.scene_geo, main_params);
 }
 
@@ -652,15 +684,6 @@ draw_debug :: (using runtime: *Horde_Runtime, gizmo_ctx: *Gizmo.Gizmo_Context) {
         if drawn >= 96 break;
     }
 
-    for projectiles {
-        if !it.active continue;
-        Gizmo.draw_sphere(gizmo_ctx, it.position, auto_fire_params.projectile_radius, color = .{0.98, 0.92, 0.38, 0.92}, thickness = 2.0);
-        vel_len := length(it.velocity);
-        if vel_len > 0.001 {
-            tail := it.position - it.velocity / vel_len * 0.3;
-            Gizmo.draw_line(gizmo_ctx, tail, it.position, color = .{1.0, 0.78, 0.22, 0.72}, thickness = 2.0);
-        }
-    }
 }
 
 draw_physics_debug :: (using runtime: *Horde_Runtime, gizmo_ctx: *Gizmo.Gizmo_Context) {
@@ -689,6 +712,57 @@ scale_model_to_target_extent :: (scene_geo: *Scene_Geo, model_index: s32, target
     size := bounds.max - bounds.min;
     max_extent := max(max(size.x, size.y), size.z);
     return ifx max_extent > 0.0 then target_extent / max_extent else 1.0;
+}
+
+horde_append_draw_slice :: (set: *Mesh_Draw_Set, scene_geo: *Scene_Geo, model_index: s32, import_basis: Matrix4) -> Horde_Draw_Slice {
+    slice: Horde_Draw_Slice;
+    if model_index < 0 return slice;
+    slice.first_render_mesh = cast(s32) set.render_meshes.count;
+    slice.model_index = model_index;
+    slice.import_basis = import_basis;
+    append_model_meshes(set, scene_geo, model_index);
+    slice.render_mesh_count = cast(s32) set.render_meshes.count - slice.first_render_mesh;
+    return slice;
+}
+
+horde_slice_contains_render_mesh :: (slice: Horde_Draw_Slice, render_mesh_index: s32) -> bool {
+    if slice.render_mesh_count <= 0 return false;
+    return render_mesh_index >= slice.first_render_mesh && render_mesh_index < slice.first_render_mesh + slice.render_mesh_count;
+}
+
+horde_accumulate_slice_counts :: (set: Mesh_Draw_Set, slice: Horde_Draw_Slice, counts: [..]u32) {
+    if slice.render_mesh_count <= 0 return;
+    for render_mesh_index: slice.first_render_mesh .. slice.first_render_mesh + slice.render_mesh_count - 1 {
+        group_idx := group_index(*set, render_mesh_index);
+        assert(group_idx >= 0, "Missing horde draw group for render mesh %.", render_mesh_index);
+        counts[cast(s64) group_idx] += 1;
+    }
+}
+
+horde_write_slice_instances :: (
+    runtime: *Horde_Runtime,
+    set: Mesh_Draw_Set,
+    slice: Horde_Draw_Slice,
+    instances: Gpu_View(Model_Scene_Meshlet_Instance),
+    write_offsets: [..]u32,
+    world_root: Matrix4,
+    tint: Vector4,
+) {
+    if slice.render_mesh_count <= 0 return;
+    for render_mesh_index: slice.first_render_mesh .. slice.first_render_mesh + slice.render_mesh_count - 1 {
+        render_mesh := set.render_meshes[render_mesh_index];
+        group_idx := group_index(*set, render_mesh_index);
+        assert(group_idx >= 0, "Missing horde draw group for render mesh %.", render_mesh_index);
+        group_i := cast(s64) group_idx;
+        write_index := write_offsets[group_i];
+        write_offsets[group_i] += 1;
+        world := world_root * runtime.bindings.scene_geo.nodes[render_mesh.node_index].world * slice.import_basis;
+        instances.cpu[cast(s64) write_index] = .{
+            world = world,
+            tint = tint,
+        };
+        runtime.render_instance_count_debug += 1;
+    }
 }
 
 horde_mesh_max_meshlet_count :: (scene_geo: *Scene_Geo, mesh_index: u32) -> u32 {

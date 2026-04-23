@@ -30,11 +30,17 @@ Scene_Import_Settings :: struct {
     rotation_deg: Vector3;
 }
 
+Scene_Asset_Pivot_Mode :: enum {
+    MODEL_ORIGIN;
+    GEOMETRY_CENTER;
+}
+
 Scene_Asset_Desc :: struct {
     name: string;
     model_path: string;
     import_settings_path: string;
     import_settings: Scene_Import_Settings;
+    pivot_mode: Scene_Asset_Pivot_Mode;
 }
 
 Scene_Procedural_Ground_Desc :: struct {
@@ -266,6 +272,9 @@ save_scene_document :: (doc: Scene_Document) -> bool {
     for doc.assets {
         append(*builder, tprint("  asset \"%\" {\n", it.name));
         append(*builder, tprint("    model \"%\"\n", it.model_path));
+        if it.pivot_mode != .MODEL_ORIGIN {
+            append(*builder, tprint("    pivot_mode %\n", ifx it.pivot_mode == .GEOMETRY_CENTER then "geometry_center" else "model_origin"));
+        }
         append(*builder, "  }\n");
     }
     if doc.assets.count > 0 append(*builder, "\n");
@@ -393,9 +402,16 @@ parse_scene_scope_line :: (doc: *Scene_Document, stack: *[..]Scene_Parse_Frame, 
 parse_asset_scope_line :: (doc: *Scene_Document, stack: *[..]Scene_Parse_Frame, tokens: []string) {
     frame := stack.*[stack.count - 1];
     asset := *doc.assets[frame.asset_index];
-    if tokens[0] == "model" {
+    if tokens[0] == {
+    case "model";
         assert(tokens.count == 2, "Expected model path.");
         asset.model_path = copy_string(tokens[1]);
+        return;
+    case "pivot_mode";
+        assert(tokens.count == 2, "Expected pivot mode.");
+        if tokens[1] == "model_origin" asset.pivot_mode = .MODEL_ORIGIN;
+        else if tokens[1] == "geometry_center" asset.pivot_mode = .GEOMETRY_CENTER;
+        else assert(false, "Unsupported asset pivot mode '%'.", tokens[1]);
         return;
     }
     assert(false, "Unsupported asset property '%'.", tokens[0]);
@@ -860,13 +876,14 @@ compiled_scene_append_node_recursive :: (
 
 compiled_scene_add_asset :: (compiled: *Compiled_Scene, asset: Scene_Asset_Desc) -> s32 {
     for compiled.assets {
-        if it.model_path == asset.model_path return cast(s32) it_index;
+        if it.model_path == asset.model_path && it.pivot_mode == asset.pivot_mode return cast(s32) it_index;
     }
     dst := array_add(*compiled.assets);
     dst.name = copy_string(asset.name);
     dst.model_path = copy_string(asset.model_path);
     dst.import_settings_path = copy_string(asset.import_settings_path);
     dst.import_settings = asset.import_settings;
+    dst.pivot_mode = asset.pivot_mode;
     return cast(s32) compiled.assets.count - 1;
 }
 

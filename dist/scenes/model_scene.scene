@@ -38,6 +38,11 @@ scene "Model Scene" {
     model "/Users/kev/src/peel/tools/blender_exporter/rocks.blend"
   }
 
+  asset "jewel" {
+    model "./models/kenney_platformer-kit/jewel.glb"
+    pivot_mode geometry_center
+  }
+
   node "Ground" {
     position 0 0 0
     rotation_deg 0 0 0

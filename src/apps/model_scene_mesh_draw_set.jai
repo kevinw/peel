@@ -33,13 +33,13 @@ Mesh_Draw_Set_Params :: struct {
 }
 
 clear :: (using set: *Mesh_Draw_Set) {
-    gpu_delete(*meshlet_instances);
+    meshlet_instances = .{};
     array_reset(*render_meshes);
     array_reset(*groups);
 }
 
 deinit :: (using set: *Mesh_Draw_Set) {
-    gpu_delete(*meshlet_instances);
+    meshlet_instances = .{};
     array_free(render_meshes);
     array_free(groups);
     set.* = {};
