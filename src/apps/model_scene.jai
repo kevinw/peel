@@ -44,16 +44,13 @@ using shaders: struct @init_group {
     ground_shadow_shader: Shader(ground_shadow_vertex_main, ground_shadow_fragment_main);
     shadow_shader: Shader(model_scene_shadow_vertex_main, model_scene_shadow_fragment_main);
     mesh_shader: Mesh_Shader(model_scene_mesh_main, model_scene_meshlet_fragment_main, .{
-        raster_desc = .{ cull = .NONE, },
+        raster_desc = .{ cull = .CW, },
         task_threads = .[1, 1, 1],
         mesh_threads = .[1, 1, 1],
         max_total_threadgroups_per_mesh_grid = 1024,
     }, model_scene_task_main);
     mesh_shadow_shader: Mesh_Shader(model_scene_mesh_main, model_scene_meshlet_shadow_fragment_main, .{
-        raster_desc = .{
-            cull = .NONE,
-            depth_format = .D32_SFLOAT,
-        },
+        raster_desc = .{ cull = .CW, },
         task_threads = .[1, 1, 1],
         mesh_threads = .[1, 1, 1],
         max_total_threadgroups_per_mesh_grid = 1024,
