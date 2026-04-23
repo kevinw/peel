@@ -283,24 +283,22 @@ ObjC :: #import "Objective_C";
     }
 
     host_get_dimensions :: (window_ptr: *void, right_handed: bool) -> MacOS_Runtime_Dimensions {
-        result: MacOS_Runtime_Dimensions;
-        if !window_ptr return result;
+        if !window_ptr return {};
 
         view := NSWindow.contentView(cast(*NSWindow) window_ptr);
-        frame := NSView.frame(view);
-        fb := NSView.convertRectToBacking(view, frame);
+        fb := NSView.convertRectToBacking(view, NSView.frame(view));
 
-        result.success = true;
-        result.x = cast(s32) fb.origin.x;
-        result.y = ifx right_handed then cast(s32) (fb.origin.y + fb.size.height) else cast(s32) fb.origin.y;
-        result.width = cast(s32) fb.size.width;
-        result.height = cast(s32) fb.size.height;
-        return result;
+        return {
+            success = true,
+            x = cast(s32) fb.origin.x,
+            y = ifx right_handed then cast(s32) (fb.origin.y + fb.size.height) else cast(s32) fb.origin.y,
+            width = cast(s32) fb.size.width,
+            height = cast(s32) fb.size.height,
+        };
     }
 
     host_get_mouse_pointer_position :: (window_ptr: *void, right_handed: bool) -> MacOS_Runtime_Mouse_Position {
-        result: MacOS_Runtime_Mouse_Position;
-        if !window_ptr return result;
+        if !window_ptr return {};
 
         window := cast(*NSWindow) window_ptr;
         pt := NSWindow.mouseLocationOutsideOfEventStream(window);
@@ -313,10 +311,11 @@ ObjC :: #import "Objective_C";
             backing_pt.y = fb.size.height - backing_pt.y;
         }
 
-        result.success = true;
-        result.x = cast(int) backing_pt.x;
-        result.y = cast(int) backing_pt.y;
-        return result;
+        return {
+            success = true,
+            x = cast(int) backing_pt.x,
+            y = cast(int) backing_pt.y,
+        };
     }
 
     host_window_is_occluded :: (window_ptr: *void) -> bool {
@@ -429,74 +428,66 @@ ObjC :: #import "Objective_C";
         host_runtime_services = services;
     }
 
-    #scope_export
     set_window_title :: (window: *void, title: string) {
-        assert(host_runtime_services.set_window_title != null, "set_window_title: host runtime service is missing.");
-        fn := cast((*void, string) -> void) host_runtime_services.set_window_title;
+        using host_runtime_services;
+        assert(set_window_title != null);
+        fn := cast((*void, string) -> void) set_window_title;
         fn(window, title);
     }
 
-    #scope_export
     get_dimensions :: (window: Window_Type, right_handed: bool) -> (x: s32, y: s32, width: s32, height: s32, success := true) {
-        assert(host_runtime_services.get_dimensions != null, "get_dimensions: host runtime service is missing.");
-        fn := cast((*void, bool) -> MacOS_Runtime_Dimensions) host_runtime_services.get_dimensions;
+        using host_runtime_services;
+        assert(get_dimensions != null);
+        fn := cast((*void, bool) -> MacOS_Runtime_Dimensions) get_dimensions;
         dims := fn(window, right_handed);
         return dims.x, dims.y, dims.width, dims.height, dims.success;
     }
 
-    #scope_export
     get_mouse_pointer_position :: (window: *NSWindow, right_handed: bool) -> x: int, y: int, success: bool {
-        assert(host_runtime_services.get_mouse_pointer_position != null, "get_mouse_pointer_position: host runtime service is missing.");
+        assert(host_runtime_services.get_mouse_pointer_position != null);
         fn := cast((*void, bool) -> MacOS_Runtime_Mouse_Position) host_runtime_services.get_mouse_pointer_position;
         pos := fn(window, right_handed);
         return pos.x, pos.y, pos.success;
     }
 
-    #scope_export
     get_mouse_pointer_position :: inline (right_handed := false) -> x: int, y: int, success: bool {
         if !window return 0, 0, false;
         x, y, success := get_mouse_pointer_position(cast(*NSWindow) window, right_handed);
         return x, y, success;
     }
 
-    #scope_export
     window_is_occluded :: (window: *NSWindow) -> bool {
-        assert(host_runtime_services.window_is_occluded != null, "window_is_occluded: host runtime service is missing.");
+        assert(host_runtime_services.window_is_occluded != null);
         fn := cast((*void) -> bool) host_runtime_services.window_is_occluded;
         return fn(window);
     }
 
-    #scope_export
     window_has_focus :: (window: *NSWindow) -> bool {
-        assert(host_runtime_services.window_has_focus != null, "window_has_focus: host runtime service is missing.");
+        assert(host_runtime_services.window_has_focus != null);
         fn := cast((*void) -> bool) host_runtime_services.window_has_focus;
         return fn(window);
     }
 
-    #scope_export
     peel_take_quit_requested :: () -> bool {
-        assert(host_runtime_services.take_quit_requested != null, "peel_take_quit_requested: host runtime service is missing.");
+        assert(host_runtime_services.take_quit_requested != null);
         fn := cast(() -> bool) host_runtime_services.take_quit_requested;
         return fn();
     }
 
-    #scope_export
     peel_take_dropped_file :: (out_path: *string) -> bool {
-        assert(host_runtime_services.take_dropped_file != null, "peel_take_dropped_file: host runtime service is missing.");
+        assert(host_runtime_services.take_dropped_file != null);
         fn := cast((*string) -> bool) host_runtime_services.take_dropped_file;
         return fn(out_path);
     }
 
-    #scope_export
     peel_set_custom_cursor_handling :: (enabled: bool) {
-        assert(host_runtime_services.set_custom_cursor_handling != null, "peel_set_custom_cursor_handling: host runtime service is missing.");
+        assert(host_runtime_services.set_custom_cursor_handling != null);
         fn := cast((*void, bool) -> void) host_runtime_services.set_custom_cursor_handling;
         fn(window, enabled);
     }
 
-    #scope_export
     ensure_macos_window_frontmost :: (window: *NSWindow) {
-        assert(host_runtime_services.ensure_window_frontmost != null, "ensure_macos_window_frontmost: host runtime service is missing.");
+        assert(host_runtime_services.ensure_window_frontmost != null);
         fn := cast((*void) -> void) host_runtime_services.ensure_window_frontmost;
         fn(window);
     }
