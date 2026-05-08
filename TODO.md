@@ -1,4 +1,15 @@
 # TODO
+https://x.com/Aaron_Victor_/status/2047349093186601070
+https://x.com/Aaron_Victor_/status/2047349093186601070
+https://x.com/Aaron_Victor_/status/2047349093186601070
+https://x.com/SebAaltonen/status/2044707093119172765
+https://x.com/SebAaltonen/status/2044707093119172765
+- https://www.jacktollenaar.top/articles/meshblending.html
+- fix transpiler for this case:
+grass_blade_vt :: (vertex_id: u32) -> float #expand {
+    GRASS_VERTS :: float.[0, 0, 1, 0, 1, 1];
+    return GRASS_VERTS[vertex_id];
+}
 - fix compile-time-tracy
 - check out LLM or MCP interface for tracy
 - move more of Jai-Shader-Transpiler into release DLL
